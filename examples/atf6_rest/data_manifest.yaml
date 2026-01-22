@@ -1,0 +1,54 @@
+# ATF6/REST Example Data Manifest
+# This example is based on Hanbei's investigation of why REST motif
+# predicts ATF6 binding affinity
+
+finding: >
+  The REST motif is the most important feature for predicting ATF6 binding signal.
+  This is surprising because REST (NRSF) and ATF6 are different transcription factors
+  with different biological functions.
+
+context: |
+  I aim to comprehend how various transcription factors interact with one another
+  to regulate gene expression. I currently only download the ChIP-seq data from
+  ENCODE for various transcription factors in diverse cell lines. It is possible
+  to download other publicly available data to verify if needed.
+
+  My ML model suggests that for the ATF6 binding signal prediction task, the
+  occurrence of the REST motif plays the most important role.
+
+  ATF6 binds the sequence CCACG (often within an ERSE context), and the REST
+  binding site (RE1) is a large (~21bp) consensus sequence (e.g., TTCAGCACCACGGACAGCGCC).
+
+  Key observation: The RE1 consensus often contains the CCACG or TGACG sequence within it.
+
+data:
+  # ChIP-seq peak files
+  # NOTE: Replace these paths with actual data locations
+  chipseq:
+    atf6_hepg2: "/path/to/data/chipseq/ATF6_HepG2_peaks.narrowPeak"
+    atf6_k562: "/path/to/data/chipseq/ATF6_K562_peaks.narrowPeak"
+    rest_hepg2: "/path/to/data/chipseq/REST_HepG2_peaks.narrowPeak"
+    rest_k562: "/path/to/data/chipseq/REST_K562_peaks.narrowPeak"
+
+  # Position Weight Matrices
+  pwm:
+    jaspar_dir: "/path/to/data/jaspar_motifs/"
+    atf6_motif: "/path/to/data/jaspar_motifs/MA0004.1.jaspar"  # ATF6
+    rest_motif: "/path/to/data/jaspar_motifs/MA0138.2.jaspar"  # REST/NRSF
+
+  # Reference genome
+  genome:
+    fasta: "/path/to/data/genome/hg38.fa"
+    chrom_sizes: "/path/to/data/genome/hg38.chrom.sizes"
+
+  # Optional: Expression data
+  rnaseq:
+    hepg2: "/path/to/data/rnaseq/HepG2_TPM.tsv"
+    k562: "/path/to/data/rnaseq/K562_TPM.tsv"
+
+# Available bioinformatics tools
+tools:
+  - bedtools
+  - samtools
+  - meme       # MEME Suite for motif analysis
+  - fimo       # For motif scanning
