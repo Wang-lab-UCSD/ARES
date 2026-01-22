@@ -106,12 +106,37 @@ async def run_pipeline(config_path: Path, manifest_path: Path, output_dir: Path 
             "coding_model": f"{config.llm.coding_model.provider}/{config.llm.coding_model.model}",
         })
 
-        # TODO: Initialize orchestrator and run pipeline
-        # from src.orchestrator import Orchestrator
-        # orchestrator = Orchestrator(config, manifest)
-        # result = await orchestrator.run()
+        # Initialize and run orchestrator
+        from src.orchestrator import Orchestrator
 
-        logger.warning("Pipeline execution not yet implemented")
+        orchestrator = Orchestrator(config, manifest, output_dir)
+
+        # Register shutdown handler with orchestrator
+        def shutdown_handler(signum, frame):
+            orchestrator.request_shutdown()
+
+        signal.signal(signal.SIGINT, shutdown_handler)
+        signal.signal(signal.SIGTERM, shutdown_handler)
+
+        result = await orchestrator.run()
+
+        logger.info("Pipeline completed", {
+            "converged": result.get("converged"),
+            "iterations": result.get("iterations"),
+            "conclusion": result.get("conclusion", "")[:200],
+        })
+
+        # Print summary to console
+        print("\n" + "=" * 60)
+        print("PIPELINE COMPLETE")
+        print("=" * 60)
+        print(f"Converged: {result.get('converged')}")
+        print(f"Iterations: {result.get('iterations')}")
+        print(f"Confidence: {result.get('confidence', 0):.2f}")
+        print(f"\nConclusion:\n{result.get('conclusion', 'N/A')}")
+        print(f"\nFull report: {result.get('report_file')}")
+        print("=" * 60)
+
         return 0
 
     except Exception as e:
