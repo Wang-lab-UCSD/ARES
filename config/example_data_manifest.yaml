@@ -1,0 +1,39 @@
+# Example Data Manifest for ATF6/REST Analysis
+# User should create their own manifest with actual data paths
+
+finding: "REST motif is the most important feature for predicting ATF6 binding"
+
+context: |
+  I aim to comprehend how various transcription factors interact with one another
+  to regulate gene expression. My ML model suggests that for the ATF6 binding signal
+  prediction task, the occurrence of the REST motif plays the most important role.
+
+data:
+  # ChIP-seq peak files (BED format)
+  chipseq:
+    atf6_hepg2: "/path/to/data/chipseq/ATF6_HepG2_peaks.bed"
+    atf6_k562: "/path/to/data/chipseq/ATF6_K562_peaks.bed"
+    rest_hepg2: "/path/to/data/chipseq/REST_HepG2_peaks.bed"
+    rest_k562: "/path/to/data/chipseq/REST_K562_peaks.bed"
+
+  # Position Weight Matrices for motif analysis
+  pwm:
+    jaspar_dir: "/path/to/data/jaspar_motifs/"
+    atf6_pwm: "/path/to/data/jaspar_motifs/ATF6.pwm"
+    rest_pwm: "/path/to/data/jaspar_motifs/REST.pwm"
+
+  # RNA-seq expression data (optional)
+  rnaseq:
+    hepg2: "/path/to/data/rnaseq/HepG2_expression.tsv"
+    k562: "/path/to/data/rnaseq/K562_expression.tsv"
+
+  # Reference genome (optional)
+  genome:
+    fasta: "/path/to/data/genome/hg38.fa"
+    chrom_sizes: "/path/to/data/genome/hg38.chrom.sizes"
+
+# Available bioinformatics tools (installed on system)
+tools:
+  - bedtools
+  - samtools
+  - meme  # MEME Suite for motif analysis
