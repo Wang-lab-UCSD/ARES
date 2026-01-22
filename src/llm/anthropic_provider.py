@@ -12,8 +12,7 @@ from src.utils.logging import get_logger
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude API provider.
 
-    Note: This is a stub implementation. Full implementation requires
-    the anthropic package and API access.
+    Requires the anthropic package: pip install anthropic
     """
 
     def __init__(self, model: str, api_key: str, **kwargs: Any):

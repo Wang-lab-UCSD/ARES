@@ -12,8 +12,7 @@ from src.utils.logging import get_logger
 class GeminiProvider(LLMProvider):
     """Google Gemini API provider.
 
-    Note: This is a stub implementation. Full implementation requires
-    the google-generativeai package and API access.
+    Requires the google-generativeai package: pip install google-generativeai
     """
 
     def __init__(self, model: str, api_key: str, **kwargs: Any):

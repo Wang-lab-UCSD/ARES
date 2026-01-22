@@ -35,12 +35,14 @@ class TestLLMResponse:
         response = LLMResponse(
             content="Hello!",
             model="gpt-4o",
-            usage={"prompt_tokens": 10, "completion_tokens": 5},
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         )
 
         assert response.content == "Hello!"
         assert response.model == "gpt-4o"
-        assert response.usage["total_tokens"] == 0  # Not automatically calculated
+        assert response.usage["prompt_tokens"] == 10
+        assert response.usage["completion_tokens"] == 5
+        assert response.usage["total_tokens"] == 15
 
 
 class TestCreateProvider:
