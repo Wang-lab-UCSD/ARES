@@ -8,8 +8,9 @@ import signal
 import sys
 from pathlib import Path
 
-from src.utils.config import load_config, load_data_manifest
+from src.utils.config import load_config, load_data_manifest, Config
 from src.utils.logging import setup_logging, get_logger
+from src.utils.model_selector import interactive_model_selection, selections_to_config
 
 
 # Global flag for graceful shutdown
@@ -44,8 +45,14 @@ Examples:
     parser.add_argument(
         "-c", "--config",
         type=Path,
-        default=Path("config/config.yaml"),
-        help="Path to configuration file (default: config/config.yaml)",
+        default=None,
+        help="Path to configuration file. If not provided, interactive model selection is used.",
+    )
+
+    parser.add_argument(
+        "-i", "--interactive",
+        action="store_true",
+        help="Force interactive model selection even if config file exists",
     )
 
     parser.add_argument(
@@ -77,11 +84,11 @@ Examples:
     return parser.parse_args()
 
 
-async def run_pipeline(config_path: Path, manifest_path: Path, output_dir: Path | None = None) -> int:
-    """Run the hypothesis generation pipeline.
+async def run_pipeline_with_config(config: Config, manifest_path: Path, output_dir: Path | None = None) -> int:
+    """Run the hypothesis generation pipeline with a pre-loaded config.
 
     Args:
-        config_path: Path to configuration file
+        config: Configuration object
         manifest_path: Path to data manifest file
         output_dir: Optional output directory override
 
@@ -91,10 +98,6 @@ async def run_pipeline(config_path: Path, manifest_path: Path, output_dir: Path 
     logger = get_logger("main")
 
     try:
-        # Load configuration
-        logger.info("Loading configuration", {"config": str(config_path)})
-        config = load_config(config_path)
-
         # Load data manifest
         logger.info("Loading data manifest", {"manifest": str(manifest_path)})
         manifest = load_data_manifest(manifest_path)
@@ -160,19 +163,41 @@ def main() -> int:
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Validate inputs
-    if not args.config.exists():
-        logger.error("Config file not found", {"path": str(args.config)})
-        return 1
-
+    # Validate manifest
     if not args.manifest.exists():
         logger.error("Data manifest not found", {"path": str(args.manifest)})
         return 1
 
+    # Determine if we should use interactive model selection
+    use_interactive = args.interactive or args.config is None
+
+    if not use_interactive and args.config is not None and not args.config.exists():
+        logger.warning("Config file not found, switching to interactive mode", {"path": str(args.config)})
+        use_interactive = True
+
+    # Load or create configuration
+    if use_interactive:
+        logger.info("Starting interactive model selection")
+        try:
+            selections = interactive_model_selection()
+            config_dict = selections_to_config(selections)
+            config = Config(**config_dict)
+        except SystemExit:
+            return 1
+        except Exception as e:
+            logger.error("Model selection failed", {"error": str(e)})
+            return 1
+    else:
+        try:
+            config = load_config(args.config)
+        except Exception as e:
+            logger.error("Failed to load config", {"error": str(e)})
+            return 1
+
+    # Dry run mode
     if args.dry_run:
         logger.info("Dry run mode - validating configuration only")
         try:
-            config = load_config(args.config)
             manifest = load_data_manifest(args.manifest)
             logger.info("Configuration is valid", {
                 "finding": manifest.finding,
@@ -185,7 +210,7 @@ def main() -> int:
 
     # Run pipeline
     try:
-        return asyncio.run(run_pipeline(args.config, args.manifest, args.output))
+        return asyncio.run(run_pipeline_with_config(config, args.manifest, args.output))
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user")
         return 130
