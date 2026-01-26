@@ -58,7 +58,7 @@ class CodingAgent:
                     Message.system(CODING_SYSTEM_PROMPT),
                     Message.user(prompt),
                 ],
-                temperature=0.2,  # Low temperature for more deterministic code
+                # temperature removed for gpt-5-mini compatibility  # Low temperature for more deterministic code
             )
 
             code = self._extract_code(response.content)
@@ -76,6 +76,8 @@ class CodingAgent:
         error_message: str,
         error_traceback: str,
         data_manifest: dict[str, Any],
+        stdout: str = "",
+        stderr: str = "",
     ) -> str:
         """Fix code that resulted in an error.
 
@@ -84,6 +86,8 @@ class CodingAgent:
             error_message: The error message
             error_traceback: Full traceback
             data_manifest: Available data paths
+            stdout: Standard output from execution (may contain debug info)
+            stderr: Standard error from execution (may contain warnings/errors)
 
         Returns:
             Fixed Python code as a string
@@ -91,7 +95,8 @@ class CodingAgent:
         self.logger.info("Fixing code error", {"error": error_message[:100]})
 
         prompt = build_error_fix_prompt(
-            original_code, error_message, error_traceback, data_manifest
+            original_code, error_message, error_traceback, data_manifest,
+            stdout=stdout, stderr=stderr,
         )
 
         try:
@@ -100,7 +105,7 @@ class CodingAgent:
                     Message.system(CODING_SYSTEM_PROMPT),
                     Message.user(prompt),
                 ],
-                temperature=0.2,
+                # temperature removed for gpt-5-mini compatibility
             )
 
             code = self._extract_code(response.content)
@@ -118,6 +123,8 @@ class CodingAgent:
         data_manifest: dict[str, Any],
         previous_code: str | None = None,
         previous_error: str | None = None,
+        previous_stdout: str = "",
+        previous_stderr: str = "",
     ) -> str:
         """Generate code with context from previous attempts.
 
@@ -126,6 +133,8 @@ class CodingAgent:
             data_manifest: Available data paths
             previous_code: Code from previous attempt
             previous_error: Error from previous attempt
+            previous_stdout: Stdout from previous attempt (for debugging)
+            previous_stderr: Stderr from previous attempt (for debugging)
 
         Returns:
             Python code as a string
@@ -136,6 +145,8 @@ class CodingAgent:
                 previous_error,
                 previous_error,  # Using same for both
                 data_manifest,
+                stdout=previous_stdout,
+                stderr=previous_stderr,
             )
         else:
             return await self.generate_verification_code(hypothesis, data_manifest)
@@ -153,17 +164,34 @@ class CodingAgent:
         """
         response = response.strip()
 
-        # Check for markdown code blocks
-        # Pattern: ```python ... ``` or ``` ... ```
-        code_block_pattern = r"```(?:python)?\s*\n(.*?)```"
-        matches = re.findall(code_block_pattern, response, re.DOTALL)
+        # Try multiple patterns for code block extraction
+        # Pattern 1: ```python ... ``` with optional newline
+        # Pattern 2: ``` ... ``` generic code block
+        patterns = [
+            r"```python\s*(.*?)```",  # ```python followed by optional whitespace
+            r"```py\s*(.*?)```",       # ```py variant
+            r"```\s*(.*?)```",         # Generic code block
+        ]
 
-        if matches:
-            # Return the first (or combined) code block(s)
-            return "\n\n".join(matches).strip()
+        for pattern in patterns:
+            matches = re.findall(pattern, response, re.DOTALL)
+            if matches:
+                code = "\n\n".join(matches).strip()
+                if code:  # Only return if we got non-empty code
+                    return code
 
-        # If no code blocks, return the entire response
-        # (assuming the LLM followed instructions)
+        # If no code blocks found, check if response looks like raw code
+        # (starts with import, def, class, #, or common Python patterns)
+        if response and any(
+            response.lstrip().startswith(prefix)
+            for prefix in ("import ", "from ", "def ", "class ", "#", "\"\"\"", "'''")
+        ):
+            return response
+
+        # Last resort: return response as-is (might be empty)
+        self.logger.warning("Could not extract code block from response", {
+            "response_preview": response[:200] if response else "(empty)",
+        })
         return response
 
     def validate_code(self, code: str) -> tuple[bool, str | None]:

@@ -186,7 +186,9 @@ class JupyterExecutor:
         try:
             while True:
                 try:
-                    msg = self._kc.get_iopub_msg(timeout=self.timeout_seconds)
+                    # timeout=None means wait forever; 0 is treated as no timeout
+                    timeout = None if self.timeout_seconds == 0 else self.timeout_seconds
+                    msg = self._kc.get_iopub_msg(timeout=timeout)
                 except queue.Empty:
                     self.logger.error("Execution timed out")
                     return ExecutionResult(

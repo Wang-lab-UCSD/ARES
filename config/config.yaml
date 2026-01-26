@@ -4,30 +4,30 @@ llm:
   # Model for generating and refining hypotheses
   hypothesis_model:
     provider: "openai"  # Options: openai, anthropic, gemini
-    model: "gpt-5-2"
+    model: "gpt-5-mini"
     api_key_env: "OPENAI_API_KEY"
-    temperature: 0.7
-    max_tokens: 4096
+    # Note: gpt-5-mini only supports temperature=1 (default), so omit temperature
+    # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
 
   # Model for writing verification code
   coding_model:
     provider: "openai"
-    model: "gpt-5-2-codex"
+    model: "gpt-5-mini"
     api_key_env: "OPENAI_API_KEY"
-    temperature: 0.2  # Lower temperature for more deterministic code
-    max_tokens: 4096
+    # Note: gpt-5-mini only supports temperature=1 (default), so omit temperature
+    # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
 
   # Model for summarizing results
   summary_model:
     provider: "openai"
-    model: "gpt-5-2"
+    model: "gpt-5-mini"
     api_key_env: "OPENAI_API_KEY"
-    temperature: 0.3
-    max_tokens: 2048
+    # Note: gpt-5-mini only supports temperature=1 (default), so omit temperature
+    # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
 
 execution:
   type: "jupyter"
-  timeout_seconds: 300  # 5 minutes max per code execution
+  timeout_seconds: 0  # No timeout - bioinformatics analyses can take significant time
   max_retries: 3  # Retry code execution on failure
 
 pipeline:

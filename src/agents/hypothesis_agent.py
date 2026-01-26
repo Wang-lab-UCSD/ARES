@@ -59,7 +59,6 @@ class HypothesisAgent:
         try:
             result = await self.llm.complete_json(
                 self.memory.get_messages(),
-                temperature=0.7,
             )
 
             self.memory.add_assistant_message(
@@ -119,7 +118,6 @@ class HypothesisAgent:
         try:
             result = await self.llm.complete_json(
                 self.memory.get_messages(),
-                temperature=0.7,
             )
 
             self.memory.add_assistant_message(
@@ -169,7 +167,6 @@ class HypothesisAgent:
                     Message.system(HYPOTHESIS_SYSTEM_PROMPT),
                     Message.user(prompt),
                 ],
-                temperature=0.3,
             )
 
             self.logger.info("Convergence check result", {

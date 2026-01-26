@@ -81,6 +81,36 @@ Examples:
         help="Validate configuration without running pipeline",
     )
 
+    # Cost control arguments
+    parser.add_argument(
+        "--per-call-limit",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Maximum cost for a single API call in USD (default: 10.0, prevents runaway token usage)",
+    )
+
+    parser.add_argument(
+        "--session-limit",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Maximum total cost for the session in USD (default: 50.0)",
+    )
+
+    parser.add_argument(
+        "--no-cost-limit",
+        action="store_true",
+        help="Disable cost blocking (not recommended)",
+    )
+
+    # Interactive approval mode
+    parser.add_argument(
+        "-I", "--interactive-approval",
+        action="store_true",
+        help="Enable interactive approval mode for hypotheses and code",
+    )
+
     return parser.parse_args()
 
 
@@ -193,6 +223,25 @@ def main() -> int:
         except Exception as e:
             logger.error("Failed to load config", {"error": str(e)})
             return 1
+
+    # Apply CLI overrides for cost tracking
+    if args.no_cost_limit:
+        config.cost.enabled = False
+        logger.warning("Cost blocking disabled via --no-cost-limit")
+    else:
+        if args.per_call_limit is not None:
+            config.cost.per_call_limit_usd = args.per_call_limit
+            config.cost.enabled = True
+            logger.info(f"Per-call cost limit set to ${args.per_call_limit:.2f}")
+        if args.session_limit is not None:
+            config.cost.session_limit_usd = args.session_limit
+            config.cost.enabled = True
+            logger.info(f"Session cost limit set to ${args.session_limit:.2f}")
+
+    # Apply CLI override for interactive approval
+    if args.interactive_approval:
+        config.interactive.enabled = True
+        logger.info("Interactive approval mode enabled")
 
     # Dry run mode
     if args.dry_run:

@@ -1,0 +1,41 @@
+Genome file path for hg38.fa :
+https://www.google.com/url?sa=E&source=gmail&q=https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz
+
+in codebase: hg38.fa
+
+ChIP-seq Peak file path for ATF6 in K562:
+https://www.encodeproject.org/files/ENCFF863ZFH/@@download/ENCFF863ZFH.bed.gz
+
+in codebase: ENCFF863ZFH.bed
+
+ChIP-seq Genome track signal file path for ATF6 in K562:
+https://www.encodeproject.org/files/ENCFF208TJQ/@@download/ENCFF208TJQ.bigWig
+
+in codebase: ENCFF208TJQ.bigWig
+
+ChIP-seq Peak file path for REST in K562:
+https://www.encodeproject.org/files/ENCFF761YYL/@@download/ENCFF761YYL.bed.gz
+
+in codebase: ENCFF761YYL.bed
+
+ChIP-seq Genome track signal file path for REST in K562:
+https://www.encodeproject.org/files/ENCFF286HLX/@@download/ENCFF286HLX.bigWig
+
+in codebase: ENCFF286HLX.bigWig
+
+JASPAR motif file path (Including 841 non-redundant motifs):
+https://jaspar2022.genereg.net/download/data/2022/CORE/JASPAR2022_CORE_non-redundant_pfms_meme.txt
+
+in codebase: JASPAR2022_CORE_non-redundant_pfms_meme.txt
+
+You can try using the above files to test first. If everything works correctly, further verification might require the files below.
+
+Total RNA-seq gene quantification file path for K562:
+https://www.encodeproject.org/files/ENCFF928NYA/@@download/ENCFF928NYA.tsv
+
+in codebase: ENCFF928NYA.tsv
+
+GENCODE annotation file path for K562:
+https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_24/gencode.v24.primary_assembly.annotation.gtf.gz
+
+in codebase: gencode.v24.primary_assembly.annotation.gtf

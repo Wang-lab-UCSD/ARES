@@ -12,24 +12,47 @@ User provides a finding (X predicts Y) + data paths, pipeline runs until converg
 - `src/memory/` - Conversation history management
 - `src/prompts/` - Prompt templates
 
-## Code Style
-- Python 3.10+
-- Type hints required (use `from __future__ import annotations`)
-- Async/await for LLM calls
-- Pydantic for config and data models
-- Keep functions focused and small
+## Available Models (January 2026)
+- **OpenAI**: `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.2-pro`, `gpt-5-mini`
+- **Anthropic**: `claude-sonnet-4`, `claude-opus-4`
+- **Google**: `gemini-2.5-pro`, `gemini-2.5-flash`
+
+## OpenAI Model Quirks
+- **Do NOT set `max_tokens` for OpenAI models**: GPT-5.2 and newer models use internal reasoning tokens that count against the `max_completion_tokens` budget. Setting a limit (e.g., 4096) can cause the model to exhaust tokens on "thinking" before producing any visible output, resulting in empty responses.
+- **gpt-5.2-codex uses completions API**: This model requires the `/v1/completions` endpoint, not `/v1/chat/completions`. Use `gpt-5.2` for chat-based tasks.
+- **gpt-5-mini only supports temperature=1**: Do not set custom temperature values for this model.
+
+## API Keys
+- **OpenAI API key**: `api_key.txt` (in project root, gitignored)
+- To run the pipeline: `export OPENAI_API_KEY=$(cat api_key.txt)`
+
+## Environment Setup
+Use conda for environment management (includes bioinformatics tools):
+```bash
+# Activate environment
+conda activate pipeline
+
+# Run pipeline
+python -m src.main --config config/config.yaml --manifest examples/atf6_rest/data_manifest.yaml
+```
+
+Required conda packages: `meme`, `ucsc-bigwigaverageoverbed`, `bedtools`
 
 ## Running the Pipeline
 ```bash
 # Set API key
 export OPENAI_API_KEY="sk-..."
 
-# Run pipeline
+# Run with config file
 python -m src.main --config config/config.yaml --manifest examples/atf6_rest/data_manifest.yaml
+
+# Run with interactive model selection
+python -m src.main --manifest examples/atf6_rest/data_manifest.yaml
 ```
 
 ## Testing
 ```bash
+conda activate pipeline
 pytest tests/ -v
 ```
 
@@ -40,6 +63,120 @@ pytest tests/ -v
 - JSON schema validation for LLM outputs
 - Graceful shutdown on SIGINT (Ctrl+C)
 
+## Code Style
+- Python 3.10+
+- Type hints required (use `from __future__ import annotations`)
+- Async/await for LLM calls
+- Pydantic for config and data models
+- Keep functions focused and small
+
 ## File Naming
 - Use snake_case for all Python files
 - Use descriptive names that indicate purpose
+
+## TODO (Hanbei's Requests)
+- [ ] **Multi-hypothesis generation**: HypothesisAgent should generate multiple candidate hypotheses per iteration
+- [ ] **ReviewerAgent**: New agent to evaluate and rank hypotheses, selecting the most promising one to test
+- [ ] **Hypothesis scoring**: Criteria for ranking hypotheses (novelty, testability, relevance to finding)
+
+## Known Issues & Lessons Learned (Jan 2026 ATF6/REST Run)
+
+### Problems Encountered
+
+1. **Technical failures trigger new iterations instead of retries**
+   - Pipeline treats "code crashed" the same as "need more evidence"
+   - A pandas visualization bug caused 4 failed attempts in iteration 2, each wasting ~55 min of computation
+   - Instead of fixing the bug and retrying, pipeline moved to iteration 3, 4, etc.
+
+2. **LLM generates overly complex code with fragile visualizations**
+   - Code kept failing on: `df['label'] = df.apply(lambda r: ..., axis=1)` pattern
+   - LLM's "fixes" were superficial (adding `.astype(int)`) instead of addressing root cause
+   - Visualization code is not essential for scientific conclusions but causes most crashes
+
+3. **Excessive computation when evidence is already conclusive**
+   - Iteration 1 found p=0.01 with 100 shuffles (conclusive)
+   - LLM requested 1000 shuffles for "more robust" confirmation
+   - Result: 4 × 55 min wasted on a stricter test that wasn't needed
+
+4. **Full JASPAR motif scans are slow and often unnecessary**
+   - Scanning all 800+ motifs takes 1-2 hours
+   - Most hypotheses only need targeted scans (2-3 specific motifs)
+
+### TODO: Pipeline Robustness Improvements
+
+- [ ] **Separate technical vs scientific failures**
+  ```python
+  class FailureType(Enum):
+      TECHNICAL_ERROR = "technical"  # Code bug → retry same hypothesis
+      INSUFFICIENT_EVIDENCE = "insufficient"  # Need different approach
+      CONCLUSIVE = "conclusive"  # Done
+  ```
+
+- [ ] **Add early convergence check**
+  ```python
+  def is_evidence_sufficient(p_value, effect_size):
+      """If p < 0.01 and effect size > 2x, don't need more samples"""
+      return p_value < 0.01 and effect_size > 2.0
+  ```
+
+- [ ] **Disable visualizations in generated code**
+  - Add to coding prompt: "Focus on statistics only. No matplotlib/seaborn. Save results as JSON/CSV."
+  - Visualization should be a separate, optional post-processing step
+
+- [ ] **Add code validation before execution**
+  ```python
+  def validate_code(code: str) -> list[str]:
+      issues = []
+      if "df.apply(" in code and "axis=1" in code:
+          issues.append("df.apply with axis=1 can cause issues")
+      return issues
+  ```
+
+- [ ] **Limit default computation scale**
+  ```yaml
+  # In config
+  max_shuffles_quick: 100
+  max_shuffles_confirm: 500  # Only if borderline
+  max_fimo_motifs: 10  # Don't scan all 800+
+  ```
+
+- [ ] **Add checkpointing for long computations**
+  - Save intermediate results every N iterations
+  - Resume from checkpoint on crash
+
+### TODO: Better Logging
+
+- [ ] **Structured results after each successful execution**
+  ```python
+  results = {
+      "iteration": iter_num,
+      "hypothesis": hypothesis_name,
+      "status": "supported/rejected/inconclusive",
+      "key_statistics": {
+          "observed": 0.524,
+          "background": 0.174,
+          "p_value": 0.0099,
+          "effect_size": 3.01
+      },
+      "timestamp": datetime.now().isoformat()
+  }
+  save_json(f"results_iter_{iter_num}.json", results)
+  ```
+
+- [ ] **Execution summary log** (append-only)
+  ```
+  [14:25] iter=1 attempt=1 status=SUCCESS hypothesis="Direct motif overlap" p=0.0099
+  [15:27] iter=2 attempt=0 status=TECHNICAL_ERROR error="DataFrame assignment"
+  [16:28] iter=2 attempt=1 status=TECHNICAL_ERROR error="DataFrame assignment"
+  ```
+
+- [ ] **Cost tracking in state files**
+  - Record tokens used and estimated cost per API call
+  - Include running total in state JSON
+
+### Reference: ATF6/REST Run Results (outputs/20260126_135214/)
+
+Key finding from iteration 1 (conclusive but pipeline didn't converge):
+- **CCACG pentamer**: 52.4% in ATF6 peaks vs 17.4% background (p=0.0099) ✅
+- **REST full motif**: 0.29% in both observed and background (p=0.95) ❌
+- **Conclusion**: Short pentamer CCACG (not full REST motif) explains the ML prediction

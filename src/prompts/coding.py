@@ -104,6 +104,8 @@ def build_error_fix_prompt(
     error_message: str,
     error_traceback: str,
     data_manifest: dict[str, Any],
+    stdout: str = "",
+    stderr: str = "",
 ) -> str:
     """Build prompt for fixing code errors.
 
@@ -112,11 +114,29 @@ def build_error_fix_prompt(
         error_message: The error message
         error_traceback: Full traceback
         data_manifest: Available data paths
+        stdout: Standard output (may contain debug info)
+        stderr: Standard error (may contain warnings)
 
     Returns:
         Formatted prompt string
     """
     data_section = _format_data_for_coding(data_manifest)
+
+    # Build execution output section
+    output_section = ""
+    if stdout or stderr:
+        output_section = "\n# Execution Output (before error)\n\n"
+        if stdout:
+            # Truncate if too long
+            stdout_truncated = stdout[-3000:] if len(stdout) > 3000 else stdout
+            if len(stdout) > 3000:
+                stdout_truncated = "...(truncated)...\n" + stdout_truncated
+            output_section += f"**stdout**:\n```\n{stdout_truncated}\n```\n\n"
+        if stderr:
+            stderr_truncated = stderr[-1500:] if len(stderr) > 1500 else stderr
+            if len(stderr) > 1500:
+                stderr_truncated = "...(truncated)...\n" + stderr_truncated
+            output_section += f"**stderr**:\n```\n{stderr_truncated}\n```\n\n"
 
     prompt = f"""# Code That Failed
 
@@ -132,7 +152,7 @@ def build_error_fix_prompt(
 ```
 {error_traceback}
 ```
-
+{output_section}
 # Available Data
 
 {data_section}
@@ -141,9 +161,10 @@ def build_error_fix_prompt(
 
 Fix the error in the code above. Common issues to check:
 - Incorrect file paths
-- Missing imports
-- Wrong data types
+- Missing imports (use `!pip install package` if needed)
+- Wrong data types or column names
 - API/library usage errors
+- Check stdout above for clues about what went wrong
 
 Respond with ONLY the corrected Python code, no explanations.
 """

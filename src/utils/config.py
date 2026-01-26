@@ -47,7 +47,7 @@ class ExecutionConfig(BaseModel):
     """Configuration for code execution."""
 
     type: str = Field(default="jupyter", description="Execution type: jupyter")
-    timeout_seconds: int = Field(default=300, gt=0)
+    timeout_seconds: int = Field(default=300, ge=0)  # 0 means no timeout
     max_retries: int = Field(default=3, ge=0)
 
 
@@ -60,12 +60,45 @@ class PipelineConfig(BaseModel):
     save_intermediate: bool = Field(default=True)
 
 
+class CostConfig(BaseModel):
+    """Configuration for cost tracking and limiting."""
+
+    enabled: bool = Field(default=True, description="Enable cost tracking and blocking")
+    per_call_limit_usd: float = Field(
+        default=10.0, gt=0,
+        description="Maximum cost for a single API call in USD (prevents runaway token usage)"
+    )
+    session_limit_usd: float = Field(
+        default=50.0, gt=0,
+        description="Maximum total cost for the entire session in USD"
+    )
+    warn_threshold: float = Field(
+        default=0.8, ge=0.0, le=1.0,
+        description="Fraction of session limit at which to warn (0.8 = 80%)"
+    )
+
+
+class InteractiveConfig(BaseModel):
+    """Configuration for interactive approval mode."""
+
+    enabled: bool = Field(default=False, description="Enable interactive approval")
+    approve_hypotheses: bool = Field(default=True, description="Require approval for hypotheses")
+    approve_code: bool = Field(default=True, description="Require approval for code")
+    use_rich: bool = Field(default=True, description="Use rich library for enhanced UI")
+    max_regeneration_attempts: int = Field(
+        default=3, ge=1,
+        description="Maximum attempts after rejection before skipping"
+    )
+
+
 class Config(BaseModel):
     """Root configuration object."""
 
     llm: LLMConfig
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    cost: CostConfig = Field(default_factory=CostConfig)
+    interactive: InteractiveConfig = Field(default_factory=InteractiveConfig)
 
 
 class DataManifest(BaseModel):

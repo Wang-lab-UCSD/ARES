@@ -17,55 +17,71 @@ class ModelOption:
     recommended_for: list[str]  # e.g., ["hypothesis", "coding", "summary"]
 
 
-# Available models as of January 2026
+# Available models (updated January 2026)
 AVAILABLE_MODELS: list[ModelOption] = [
     # OpenAI models
     ModelOption(
         provider="openai",
-        model_id="gpt-5-2",
+        model_id="gpt-5.2",
         display_name="GPT-5.2",
         api_key_env="OPENAI_API_KEY",
-        description="Latest flagship model for professional work",
+        description="Latest flagship model for complex tasks",
         recommended_for=["hypothesis", "summary"],
     ),
     ModelOption(
         provider="openai",
-        model_id="gpt-5-2-codex",
+        model_id="gpt-5.2-codex",
         display_name="GPT-5.2 Codex",
         api_key_env="OPENAI_API_KEY",
         description="Optimized for agentic coding tasks",
         recommended_for=["coding"],
     ),
+    ModelOption(
+        provider="openai",
+        model_id="gpt-5.2-pro",
+        display_name="GPT-5.2 Pro",
+        api_key_env="OPENAI_API_KEY",
+        description="More compute for consistently better answers",
+        recommended_for=["hypothesis"],
+    ),
+    ModelOption(
+        provider="openai",
+        model_id="gpt-5-mini",
+        display_name="GPT-5 Mini",
+        api_key_env="OPENAI_API_KEY",
+        description="Smaller, cost-effective model",
+        recommended_for=["summary"],
+    ),
     # Anthropic models
     ModelOption(
         provider="anthropic",
-        model_id="claude-opus-4-5-20251101",
-        display_name="Claude Opus 4.5",
+        model_id="claude-sonnet-4-20250514",
+        display_name="Claude Sonnet 4",
         api_key_env="ANTHROPIC_API_KEY",
-        description="Most capable Claude model for complex tasks",
-        recommended_for=["hypothesis", "coding"],
+        description="Latest Claude model, excellent for coding",
+        recommended_for=["hypothesis", "coding", "summary"],
     ),
     ModelOption(
         provider="anthropic",
-        model_id="claude-sonnet-4-5-20251101",
-        display_name="Claude Sonnet 4.5",
+        model_id="claude-opus-4-20250514",
+        display_name="Claude Opus 4",
         api_key_env="ANTHROPIC_API_KEY",
-        description="Balanced performance and speed",
-        recommended_for=["summary"],
+        description="Most capable Claude model",
+        recommended_for=["hypothesis", "coding"],
     ),
     # Google models
     ModelOption(
         provider="gemini",
-        model_id="gemini-3-pro-preview",
-        display_name="Gemini 3 Pro",
+        model_id="gemini-2.5-pro",
+        display_name="Gemini 2.5 Pro",
         api_key_env="GEMINI_API_KEY",
-        description="State-of-the-art reasoning and multimodal",
+        description="Latest Gemini for reasoning",
         recommended_for=["hypothesis"],
     ),
     ModelOption(
         provider="gemini",
-        model_id="gemini-3-flash-preview",
-        display_name="Gemini 3 Flash",
+        model_id="gemini-2.5-flash",
+        display_name="Gemini 2.5 Flash",
         api_key_env="GEMINI_API_KEY",
         description="Fast and cost-effective",
         recommended_for=["summary"],

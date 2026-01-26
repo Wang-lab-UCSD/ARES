@@ -22,29 +22,37 @@ context: |
   Key observation: The RE1 consensus often contains the CCACG or TGACG sequence within it.
 
 data:
-  # ChIP-seq peak files
-  # NOTE: Replace these paths with actual data locations
+  # ChIP-seq peak files (K562 cell line)
+  # IMPORTANT: Use absolute paths for Jupyter kernel compatibility
   chipseq:
-    atf6_hepg2: "/path/to/data/chipseq/ATF6_HepG2_peaks.narrowPeak"
-    atf6_k562: "/path/to/data/chipseq/ATF6_K562_peaks.narrowPeak"
-    rest_hepg2: "/path/to/data/chipseq/REST_HepG2_peaks.narrowPeak"
-    rest_k562: "/path/to/data/chipseq/REST_K562_peaks.narrowPeak"
+    atf6_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF863ZFH.bed"
+    atf6_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF208TJQ.bigWig"
+    rest_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF761YYL.bed"
+    rest_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF286HLX.bigWig"
 
-  # Position Weight Matrices
+  # Position Weight Matrices (JASPAR 2022)
   pwm:
-    jaspar_dir: "/path/to/data/jaspar_motifs/"
-    atf6_motif: "/path/to/data/jaspar_motifs/MA0004.1.jaspar"  # ATF6
-    rest_motif: "/path/to/data/jaspar_motifs/MA0138.2.jaspar"  # REST/NRSF
+    jaspar_meme: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/JASPAR2022_CORE_non-redundant_pfms_meme.txt"
+    atf6_motif_id: "MA1466.1"
+    rest_motif_id: "MA0138.2"
 
   # Reference genome
   genome:
-    fasta: "/path/to/data/genome/hg38.fa"
-    chrom_sizes: "/path/to/data/genome/hg38.chrom.sizes"
+    fasta: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/hg38.fa"
 
-  # Optional: Expression data
+  # Gene expression data (K562)
   rnaseq:
-    hepg2: "/path/to/data/rnaseq/HepG2_TPM.tsv"
-    k562: "/path/to/data/rnaseq/K562_TPM.tsv"
+    k562_expression: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF928NYA.tsv"
+
+  # Gene annotations
+  annotations:
+    gencode: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/gencode.v24.primary_assembly.annotation.gtf"
+
+# Data statistics
+stats:
+  atf6_peak_count: 7906
+  rest_peak_count: 46684
+  jaspar_motif_count: 841
 
 # Available bioinformatics tools
 tools:

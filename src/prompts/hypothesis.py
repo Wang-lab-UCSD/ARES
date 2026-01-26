@@ -138,18 +138,22 @@ def build_refinement_prompt(
 
 Based on these results, decide how to proceed:
 
-1. **CONVERGED**: If you are confident in the explanation for the finding
+1. **CONVERGED**: If you are confident in the explanation for the finding (high confidence biological conclusion)
 2. **REFINE**: If results partially support the hypothesis but need refinement
 3. **NEW_HYPOTHESIS**: If results refute the hypothesis and a new one is needed
-4. **INSUFFICIENT_DATA**: If available data cannot conclusively test hypotheses
+4. **TECHNICAL_ERROR**: If the code had bugs, parsing errors, or technical failures that prevented proper analysis. This is NOT convergence - we need to fix the code and retry.
+5. **INSUFFICIENT_DATA**: If the biological data truly cannot test the hypotheses (missing data files, wrong data type, etc.)
+
+IMPORTANT: Do NOT choose CONVERGED or INSUFFICIENT_DATA if there were technical errors in the code execution. Technical failures (parsing errors, wrong column names, file format issues, etc.) should be marked as TECHNICAL_ERROR so the code can be fixed and re-run.
 
 Respond in JSON format:
 {{
-    "decision": "CONVERGED" | "REFINE" | "NEW_HYPOTHESIS" | "INSUFFICIENT_DATA",
+    "decision": "CONVERGED" | "REFINE" | "NEW_HYPOTHESIS" | "TECHNICAL_ERROR" | "INSUFFICIENT_DATA",
     "confidence": 0.0-1.0,
     "reasoning": "Explanation for the decision",
+    "technical_issues": ["List of specific technical issues to fix, if TECHNICAL_ERROR"],
     "hypotheses": [
-        // If REFINE or NEW_HYPOTHESIS, provide updated/new hypotheses
+        // If REFINE, NEW_HYPOTHESIS, or TECHNICAL_ERROR, provide updated/new hypotheses with fixed verification plans
         {{
             "name": "Hypothesis name",
             "rationale": "Biological reasoning",

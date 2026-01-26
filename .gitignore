@@ -53,3 +53,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+api_key.txt
+
+slides/data/

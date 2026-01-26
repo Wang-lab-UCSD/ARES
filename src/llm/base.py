@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from src.utils.cost_tracker import CostTracker
 
 
 class Role(str, Enum):
@@ -60,6 +63,34 @@ class LLMProvider(ABC):
         self.api_key = api_key
         self.default_temperature = kwargs.get("temperature", 0.7)
         self.default_max_tokens = kwargs.get("max_tokens", 4096)
+        self._cost_tracker: CostTracker | None = None
+
+    def set_cost_tracker(self, tracker: CostTracker) -> None:
+        """Set the cost tracker for this provider.
+
+        Args:
+            tracker: CostTracker instance to use for cost estimation and recording
+        """
+        self._cost_tracker = tracker
+
+    def _check_cost(self, messages: list[Message]) -> None:
+        """Check if the estimated cost is within budget.
+
+        Raises:
+            CostLimitExceeded: If estimated cost would exceed limit
+        """
+        if self._cost_tracker is not None:
+            self._cost_tracker.check_and_record(messages, self.model)
+
+    def _record_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Record actual token usage after API call.
+
+        Args:
+            input_tokens: Number of input tokens used
+            output_tokens: Number of output tokens generated
+        """
+        if self._cost_tracker is not None:
+            self._cost_tracker.record_actual_usage(self.model, input_tokens, output_tokens)
 
     @abstractmethod
     async def complete(

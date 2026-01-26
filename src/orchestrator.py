@@ -14,7 +14,9 @@ from src.agents.summary_agent import SummaryAgent
 from src.execution.jupyter_executor import JupyterExecutor
 from src.llm.base import create_provider
 from src.memory.conversation import PipelineState
+from src.ui.approval import ApprovalUI, ApprovalDecision, ApprovalResult
 from src.utils.config import Config, DataManifest
+from src.utils.cost_tracker import CostTracker, CostLimitExceeded, SessionBudgetExceeded
 from src.utils.logging import get_logger
 
 
@@ -56,6 +58,25 @@ class Orchestrator:
             max_iterations=config.pipeline.max_iterations,
         )
 
+        # Initialize cost tracker if enabled
+        self.cost_tracker: CostTracker | None = None
+        if config.cost.enabled:
+            self.cost_tracker = CostTracker(
+                per_call_limit=config.cost.per_call_limit_usd,
+                session_limit=config.cost.session_limit_usd,
+                warn_threshold=config.cost.warn_threshold,
+            )
+            self.logger.info("Cost tracking enabled", {
+                "per_call_limit_usd": config.cost.per_call_limit_usd,
+                "session_limit_usd": config.cost.session_limit_usd,
+            })
+
+        # Initialize approval UI if interactive mode enabled
+        self.approval_ui: ApprovalUI | None = None
+        if config.interactive.enabled:
+            self.approval_ui = ApprovalUI(use_rich=config.interactive.use_rich)
+            self.logger.info("Interactive approval mode enabled")
+
         # Initialize LLM providers
         self._init_providers()
 
@@ -95,6 +116,12 @@ class Orchestrator:
             max_tokens=llm_config.summary_model.max_tokens,
         )
 
+        # Inject cost tracker into all providers
+        if self.cost_tracker is not None:
+            self.hypothesis_llm.set_cost_tracker(self.cost_tracker)
+            self.coding_llm.set_cost_tracker(self.cost_tracker)
+            self.summary_llm.set_cost_tracker(self.cost_tracker)
+
     def _init_agents(self) -> None:
         """Initialize agents with their respective LLM providers."""
         self.logger.info("Initializing agents")
@@ -102,6 +129,72 @@ class Orchestrator:
         self.hypothesis_agent = HypothesisAgent(self.hypothesis_llm)
         self.coding_agent = CodingAgent(self.coding_llm)
         self.summary_agent = SummaryAgent(self.summary_llm)
+
+    async def _approve_hypothesis(
+        self,
+        hypothesis: dict[str, Any],
+        iteration: int,
+    ) -> ApprovalResult:
+        """Request approval for a hypothesis.
+
+        Args:
+            hypothesis: The hypothesis to approve
+            iteration: Current iteration number
+
+        Returns:
+            ApprovalResult with decision and optional feedback
+        """
+        if self.approval_ui is None:
+            return ApprovalResult(ApprovalDecision.APPROVE)
+
+        if not self.config.interactive.approve_hypotheses:
+            return ApprovalResult(ApprovalDecision.APPROVE)
+
+        # Display cost summary if tracking
+        if self.cost_tracker is not None:
+            self.approval_ui.display_cost_summary(self.cost_tracker.get_summary())
+
+        self.approval_ui.display_hypothesis(hypothesis, iteration)
+        return self.approval_ui.request_approval("hypothesis")
+
+    async def _approve_code(
+        self,
+        code: str,
+        hypothesis_name: str,
+    ) -> ApprovalResult:
+        """Request approval for generated code.
+
+        Args:
+            code: The generated code to approve
+            hypothesis_name: Name of the hypothesis being tested
+
+        Returns:
+            ApprovalResult with decision and optional feedback
+        """
+        if self.approval_ui is None:
+            return ApprovalResult(ApprovalDecision.APPROVE)
+
+        if not self.config.interactive.approve_code:
+            return ApprovalResult(ApprovalDecision.APPROVE)
+
+        # Display cost summary if tracking
+        if self.cost_tracker is not None:
+            self.approval_ui.display_cost_summary(self.cost_tracker.get_summary())
+
+        self.approval_ui.display_code(code, hypothesis_name)
+        return self.approval_ui.request_approval("code")
+
+    def _display_message(self, message: str, style: str = "info") -> None:
+        """Display a message to the user.
+
+        Args:
+            message: Message to display
+            style: Style hint (info, warning, error, success)
+        """
+        if self.approval_ui is not None:
+            self.approval_ui.display_message(message, style)
+        else:
+            self.logger.info(message)
 
     def request_shutdown(self) -> None:
         """Request graceful shutdown of the pipeline."""
@@ -174,6 +267,28 @@ class Orchestrator:
                 tested_ids.add(hypo_id)
                 self.state.current_hypothesis_index = hypo_id
 
+                # Request approval for hypothesis if interactive mode
+                approval = await self._approve_hypothesis(
+                    hypothesis, self.state.current_iteration
+                )
+
+                if approval.decision == ApprovalDecision.ABORT:
+                    self._display_message("Pipeline aborted by user", "warning")
+                    break
+                elif approval.decision == ApprovalDecision.SKIP:
+                    self._display_message(
+                        f"Skipping hypothesis: {hypothesis.get('name', 'N/A')}",
+                        "info"
+                    )
+                    continue
+                elif approval.decision == ApprovalDecision.REJECT:
+                    # TODO: Regenerate hypothesis with feedback
+                    self._display_message(
+                        f"Hypothesis rejected, feedback: {approval.feedback}",
+                        "warning"
+                    )
+                    continue
+
                 # Run verification cycle
                 result = await self._run_verification_cycle(
                     hypothesis, run_dir
@@ -210,6 +325,32 @@ class Orchestrator:
 
             return final_result
 
+        except CostLimitExceeded as e:
+            self.logger.error("Per-call cost limit exceeded", {
+                "estimated_cost": e.estimate.total_cost,
+                "per_call_limit": e.per_call_limit,
+                "input_tokens": e.estimate.input_tokens,
+            })
+            self._display_message(
+                f"Single API call too expensive! Estimated: ${e.estimate.total_cost:.4f} "
+                f"(input: {e.estimate.input_tokens} tokens), Limit: ${e.per_call_limit:.2f}",
+                "error"
+            )
+            raise
+
+        except SessionBudgetExceeded as e:
+            self.logger.error("Session budget exceeded", {
+                "estimated_cost": e.estimate.total_cost,
+                "session_total": e.session_total,
+                "session_limit": e.session_limit,
+            })
+            self._display_message(
+                f"Session budget exceeded! Current: ${e.session_total:.4f}, "
+                f"Next call: ${e.estimate.total_cost:.4f}, Limit: ${e.session_limit:.2f}",
+                "error"
+            )
+            raise
+
         except Exception as e:
             self.logger.error("Pipeline failed", {"error": str(e)})
             raise
@@ -240,6 +381,8 @@ class Orchestrator:
         max_retries = self.config.execution.max_retries
         last_code = None
         last_error = None
+        last_stdout = ""
+        last_stderr = ""
 
         for attempt in range(max_retries + 1):
             # Generate code
@@ -248,6 +391,8 @@ class Orchestrator:
                 data_manifest=self.manifest.model_dump(),
                 previous_code=last_code,
                 previous_error=last_error,
+                previous_stdout=last_stdout,
+                previous_stderr=last_stderr,
             )
 
             # Validate code
@@ -259,6 +404,42 @@ class Orchestrator:
                 })
                 last_code = code
                 last_error = validation_error
+                continue
+
+            # Request approval for code if interactive mode
+            code_approval = await self._approve_code(
+                code, hypothesis.get("name", "")
+            )
+
+            if code_approval.decision == ApprovalDecision.ABORT:
+                self._display_message("Pipeline aborted by user", "warning")
+                return {
+                    "execution_success": False,
+                    "findings": [],
+                    "support_level": "ABORTED",
+                    "confidence": 0.0,
+                    "reasoning": "User aborted pipeline",
+                    "issues": [],
+                    "summary": "Pipeline aborted by user during code review",
+                }
+            elif code_approval.decision == ApprovalDecision.SKIP:
+                self._display_message("Code execution skipped by user", "info")
+                return {
+                    "execution_success": False,
+                    "findings": [],
+                    "support_level": "SKIPPED",
+                    "confidence": 0.0,
+                    "reasoning": "User skipped code execution",
+                    "issues": [],
+                    "summary": "Code execution skipped by user",
+                }
+            elif code_approval.decision == ApprovalDecision.REJECT:
+                self._display_message(
+                    f"Code rejected, regenerating with feedback: {code_approval.feedback}",
+                    "warning"
+                )
+                last_code = code
+                last_error = f"User feedback: {code_approval.feedback}"
                 continue
 
             # Save code
@@ -298,6 +479,8 @@ class Orchestrator:
                 })
                 last_code = code
                 last_error = result.error or "Unknown error"
+                last_stdout = result.stdout
+                last_stderr = result.stderr
 
         # All retries failed
         return {
@@ -339,11 +522,37 @@ class Orchestrator:
                 conclusion=refinement.get("conclusion", ""),
             )
         elif decision == "INSUFFICIENT_DATA":
-            self.state.mark_converged(
-                reason="Insufficient data to continue",
-                confidence=refinement.get("confidence", 0.3),
-                conclusion=refinement.get("conclusion", ""),
+            # Only converge if confidence is high that data truly can't answer the question
+            # Low confidence suggests we should keep trying
+            if refinement.get("confidence", 0.0) >= 0.7:
+                self.state.mark_converged(
+                    reason="Insufficient data to continue",
+                    confidence=refinement.get("confidence", 0.3),
+                    conclusion=refinement.get("conclusion", ""),
+                )
+            else:
+                self.logger.warning(
+                    "INSUFFICIENT_DATA with low confidence - continuing iteration",
+                    {"confidence": refinement.get("confidence", 0.0)}
+                )
+                # Add any new hypotheses for retry
+                for hypo in refinement.get("hypotheses", []):
+                    self.state.add_hypothesis(hypo)
+        elif decision == "TECHNICAL_ERROR":
+            # Technical errors should NOT cause convergence
+            # Log the issues and add hypotheses with fixed verification plans
+            technical_issues = refinement.get("technical_issues", [])
+            self.logger.warning(
+                "Technical error detected - will retry with fixes",
+                {"issues": technical_issues}
             )
+            self._display_message(
+                f"Technical issues detected: {', '.join(technical_issues[:3])}",
+                "warning"
+            )
+            # Add hypotheses with hopefully fixed verification plans
+            for hypo in refinement.get("hypotheses", []):
+                self.state.add_hypothesis(hypo)
         elif decision in ("REFINE", "NEW_HYPOTHESIS"):
             # Add new hypotheses
             for hypo in refinement.get("hypotheses", []):

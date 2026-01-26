@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 from src.llm.base import LLMProvider, LLMResponse, Message, Role
 from src.utils.logging import get_logger
+
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY_BASE = 2.0  # seconds, will be multiplied by attempt number
 
 
 class GeminiProvider(LLMProvider):
@@ -15,10 +21,60 @@ class GeminiProvider(LLMProvider):
     Requires the google-generativeai package: pip install google-generativeai
     """
 
+    # Errors that should trigger a retry
+    RETRYABLE_ERRORS = (ConnectionError, TimeoutError)
+
     def __init__(self, model: str, api_key: str, **kwargs: Any):
         super().__init__(model, api_key, **kwargs)
         self.logger = get_logger("gemini")
         self._client = None
+        self._setup_retryable_errors()
+
+    def _setup_retryable_errors(self):
+        """Set up retryable error types after google-generativeai is imported."""
+        try:
+            from google.api_core.exceptions import (
+                ServiceUnavailable, DeadlineExceeded, ResourceExhausted
+            )
+            GeminiProvider.RETRYABLE_ERRORS = (
+                ServiceUnavailable, DeadlineExceeded, ResourceExhausted,
+                ConnectionError, TimeoutError
+            )
+        except ImportError:
+            pass  # Will use default errors only
+
+    async def _retry_with_backoff(self, operation, operation_name: str):
+        """Execute an operation with exponential backoff retry on transient errors.
+
+        Args:
+            operation: Async callable to execute
+            operation_name: Name for logging purposes
+
+        Returns:
+            Result of the operation
+
+        Raises:
+            The last exception if all retries fail
+        """
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                return await operation()
+            except self.RETRYABLE_ERRORS as e:
+                last_error = e
+                if attempt < MAX_RETRIES:
+                    delay = RETRY_DELAY_BASE * (attempt + 1)
+                    self.logger.warning(
+                        f"{operation_name} failed, retrying in {delay}s",
+                        {"error": str(e), "attempt": attempt + 1, "max_retries": MAX_RETRIES}
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    self.logger.error(
+                        f"{operation_name} failed after {MAX_RETRIES + 1} attempts",
+                        {"error": str(e)}
+                    )
+        raise last_error
 
     def _get_client(self):
         """Lazy initialization of Gemini client."""
@@ -66,6 +122,9 @@ class GeminiProvider(LLMProvider):
             "message_count": len(messages),
         })
 
+        # Check cost before making API call
+        self._check_cost(messages)
+
         try:
             import google.generativeai as genai
 
@@ -89,21 +148,35 @@ class GeminiProvider(LLMProvider):
             # Start chat with history (excluding the last user message)
             chat = model.start_chat(history=history[:-1] if len(history) > 1 else [])
 
-            # Send the last message
+            # Send the last message with retry
             last_message = history[-1]["parts"][0] if history else ""
-            response = await chat.send_message_async(
-                last_message,
-                generation_config=generation_config,
-            )
+
+            async def _make_request():
+                return await chat.send_message_async(
+                    last_message,
+                    generation_config=generation_config,
+                )
+
+            response = await self._retry_with_backoff(_make_request, "Completion")
 
             content = response.text or ""
 
             # Gemini doesn't provide detailed token usage in the same way
+            # Try to get usage metadata if available
+            prompt_tokens = 0
+            completion_tokens = 0
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+
             usage = {
-                "prompt_tokens": 0,  # Not provided by Gemini
-                "completion_tokens": 0,
-                "total_tokens": 0,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
             }
+
+            # Record actual usage for cost tracking (may be 0 if not provided)
+            self._record_usage(prompt_tokens, completion_tokens)
 
             self.logger.debug("Received completion")
 

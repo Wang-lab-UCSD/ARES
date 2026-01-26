@@ -17,3 +17,15 @@ pytest-asyncio>=0.21.0
 
 # Utilities
 python-dotenv>=1.0.0
+tiktoken>=0.5.0  # Token counting for OpenAI cost estimation
+rich>=13.0.0  # Enhanced terminal UI for interactive mode
+
+# Bioinformatics (for code execution)
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+biopython>=1.81
+pyBigWig>=0.3.18
+pyfaidx>=0.7.0
+pybedtools>=0.10.0
+matplotlib>=3.7.0

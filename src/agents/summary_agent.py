@@ -69,7 +69,7 @@ class SummaryAgent:
                     Message.system(SUMMARY_SYSTEM_PROMPT),
                     Message.user(prompt),
                 ],
-                temperature=0.3,
+                # temperature removed for gpt-5-mini compatibility
             )
 
             self.logger.info("Result summary", {
@@ -129,7 +129,7 @@ class SummaryAgent:
                     Message.system(SUMMARY_SYSTEM_PROMPT),
                     Message.user(prompt),
                 ],
-                temperature=0.5,
+                # temperature removed for gpt-5-mini compatibility
             )
 
             self.logger.info("Generated final report", {
