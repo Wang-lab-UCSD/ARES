@@ -55,4 +55,7 @@ htmlcov/
 Thumbs.db
 api_key.txt
 
-slides/data/
+slides/
+
+# Large data files
+data/
