@@ -17,7 +17,52 @@ Be objective and precise in your interpretations. Clearly distinguish between:
 - Weak evidence (trends that may not be significant)
 - Inconclusive results (high variance, conflicting signals)
 - Technical failures (errors, missing data)
+
+When a result is statistically significant (p < 0.05) with a clear effect:
+- Rate confidence >= 0.8
+- Note caveats but do NOT downgrade the support level just because additional
+  controls could theoretically be added
+- The support_level should reflect the strength of the current evidence, not
+  hypothetical improvements
+
+IMPORTANT: When support_level is SUPPORTS with confidence >= 0.8, do NOT include
+phrases like "additional analyses are required", "more controls needed", "further
+validation required", or "should be addressed in follow-up" in your summary. These
+phrases cause the pipeline to keep iterating unnecessarily. If you want to note
+limitations, state them as observations (e.g., "GC content was not controlled for")
+rather than action items (e.g., "GC content controls should be added").
 """
+
+
+def _truncate_output(text: str, max_chars: int = 50000) -> str:
+    """Truncate large output while preserving useful information.
+
+    Keeps the beginning (usually setup/imports) and end (usually results/conclusions).
+
+    Args:
+        text: The text to truncate
+        max_chars: Maximum characters to keep
+
+    Returns:
+        Truncated text with indicator if truncation occurred
+    """
+    if len(text) <= max_chars:
+        return text
+
+    # Keep first 30% and last 70% (results are usually at the end)
+    head_chars = int(max_chars * 0.3)
+    tail_chars = int(max_chars * 0.7)
+
+    head = text[:head_chars]
+    tail = text[-tail_chars:]
+
+    truncated_chars = len(text) - max_chars
+    return (
+        f"{head}\n\n"
+        f"[... TRUNCATED {truncated_chars:,} characters ({truncated_chars // 4:,} tokens approx) ...]\n"
+        f"[... Showing last {tail_chars:,} characters which typically contain results ...]\n\n"
+        f"{tail}"
+    )
 
 
 def build_result_summary_prompt(
@@ -25,6 +70,7 @@ def build_result_summary_prompt(
     code: str,
     execution_result: str,
     outputs: list[dict[str, Any]] | None = None,
+    max_output_chars: int = 50000,
 ) -> str:
     """Build prompt for summarizing execution results.
 
@@ -33,10 +79,14 @@ def build_result_summary_prompt(
         code: The code that was executed
         execution_result: Combined stdout/stderr from execution
         outputs: Additional outputs (data frames, etc.)
+        max_output_chars: Maximum characters of execution output to include
 
     Returns:
         Formatted prompt string
     """
+    # Truncate execution result if too large
+    truncated_result = _truncate_output(execution_result, max_output_chars)
+
     outputs_section = ""
     if outputs:
         outputs_section = "\n## Additional Outputs\n"
@@ -59,7 +109,7 @@ def build_result_summary_prompt(
 # Execution Output
 
 ```
-{execution_result}
+{truncated_result}
 ```
 {outputs_section}
 

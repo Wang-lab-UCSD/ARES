@@ -18,21 +18,23 @@ class ModelPricing:
     output_price: float  # USD per 1M output tokens
     provider: str = ""
     model_id: str = ""
+    context_limit: int = 128000  # Default context window size in tokens
 
 
 # Pricing table (January 2026 rates - update as needed)
+# Context limits are the maximum input tokens the model can accept
 MODEL_PRICING: dict[str, ModelPricing] = {
     # OpenAI
-    "gpt-5.2": ModelPricing(15.0, 60.0, "openai", "gpt-5.2"),
-    "gpt-5.2-codex": ModelPricing(12.0, 48.0, "openai", "gpt-5.2-codex"),
-    "gpt-5.2-pro": ModelPricing(25.0, 100.0, "openai", "gpt-5.2-pro"),
-    "gpt-5-mini": ModelPricing(0.60, 2.40, "openai", "gpt-5-mini"),
+    "gpt-5.2": ModelPricing(15.0, 60.0, "openai", "gpt-5.2", context_limit=256000),
+    "gpt-5.2-codex": ModelPricing(12.0, 48.0, "openai", "gpt-5.2-codex", context_limit=256000),
+    "gpt-5.2-pro": ModelPricing(25.0, 100.0, "openai", "gpt-5.2-pro", context_limit=256000),
+    "gpt-5-mini": ModelPricing(0.60, 2.40, "openai", "gpt-5-mini", context_limit=128000),
     # Anthropic
-    "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4"),
-    "claude-opus-4-20250514": ModelPricing(15.0, 75.0, "anthropic", "claude-opus-4"),
+    "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4", context_limit=200000),
+    "claude-opus-4-20250514": ModelPricing(15.0, 75.0, "anthropic", "claude-opus-4", context_limit=200000),
     # Google (Gemini doesn't report tokens, use estimates)
-    "gemini-2.5-pro": ModelPricing(1.25, 5.0, "gemini", "gemini-2.5-pro"),
-    "gemini-2.5-flash": ModelPricing(0.075, 0.30, "gemini", "gemini-2.5-flash"),
+    "gemini-2.5-pro": ModelPricing(1.25, 5.0, "gemini", "gemini-2.5-pro", context_limit=1000000),
+    "gemini-2.5-flash": ModelPricing(0.075, 0.30, "gemini", "gemini-2.5-flash", context_limit=1000000),
 }
 
 
@@ -57,6 +59,19 @@ class CostLimitExceeded(Exception):
             f"Single API call estimated cost ${estimate.total_cost:.4f} "
             f"(input: {estimate.input_tokens} tokens) exceeds per-call limit ${per_call_limit:.2f}. "
             f"This prevents runaway token usage."
+        )
+
+
+class TokenLimitExceeded(Exception):
+    """Raised when input tokens exceed the model's context window limit."""
+
+    def __init__(self, estimate: CostEstimate, context_limit: int):
+        self.estimate = estimate
+        self.context_limit = context_limit
+        super().__init__(
+            f"Input tokens ({estimate.input_tokens:,}) exceed model context limit ({context_limit:,}). "
+            f"The message is too large for the model to process. "
+            f"Consider truncating the input or using a model with a larger context window."
         )
 
 
@@ -185,6 +200,7 @@ class CostTracker:
         """Check if call is within budget and record estimate.
 
         Raises:
+            TokenLimitExceeded: If input tokens exceed model's context window
             CostLimitExceeded: If single call cost exceeds per-call limit
             SessionBudgetExceeded: If session total would exceed session limit
 
@@ -192,6 +208,25 @@ class CostTracker:
             CostEstimate if within budget
         """
         estimate = self.estimate_cost(messages, model, expected_output_tokens)
+        pricing = self.get_pricing(model)
+
+        # Check if input tokens exceed model's context window limit
+        # This is checked FIRST because it's a hard limit from the API
+        context_limit = pricing.context_limit if pricing else 128000  # Default fallback
+        # Use 90% of context limit to leave room for output tokens
+        safe_input_limit = int(context_limit * 0.9)
+
+        if estimate.input_tokens > safe_input_limit:
+            self.logger.error(
+                "Input tokens exceed model context limit",
+                {
+                    "input_tokens": estimate.input_tokens,
+                    "context_limit": context_limit,
+                    "safe_input_limit": safe_input_limit,
+                    "model": model,
+                }
+            )
+            raise TokenLimitExceeded(estimate, context_limit)
 
         # Check if this single call exceeds per-call limit (prevents runaway token usage)
         if estimate.total_cost > self.per_call_limit:
@@ -223,6 +258,7 @@ class CostTracker:
             {
                 "estimated_cost": estimate.total_cost,
                 "input_tokens": estimate.input_tokens,
+                "context_limit": context_limit,
                 "remaining_budget": self.session_limit - self.session_cost - estimate.total_cost,
             }
         )

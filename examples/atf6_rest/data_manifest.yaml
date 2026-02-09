@@ -5,7 +5,9 @@
 finding: >
   The REST motif is the most important feature for predicting ATF6 binding signal.
   This is surprising because REST (NRSF) and ATF6 are different transcription factors
-  with different biological functions.
+  with different biological functions. The goal is to explain the biological mechanism
+  behind this relationship — confirming that they co-occur is a necessary first step
+  but not the end goal.
 
 context: |
   I aim to comprehend how various transcription factors interact with one another

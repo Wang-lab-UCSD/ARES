@@ -153,7 +153,12 @@ class PipelineState(BaseModel):
     conclusion: str | None = None
 
     def add_hypothesis(self, hypothesis: dict[str, Any]) -> None:
-        """Add a new hypothesis."""
+        """Add a new hypothesis, skipping duplicates by name."""
+        name = hypothesis.get("name", "")
+        if name:
+            existing_names = {h.get("name", "") for h in self.hypotheses}
+            if name in existing_names:
+                return
         hypothesis["id"] = len(self.hypotheses)
         hypothesis["iteration"] = self.current_iteration
         self.hypotheses.append(hypothesis)

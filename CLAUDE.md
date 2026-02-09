@@ -4,6 +4,11 @@
 Multi-agent pipeline for automated hypothesis generation and verification in bioinformatics.
 User provides a finding (X predicts Y) + data paths, pipeline runs until convergence.
 
+## Design Principles
+- **General-purpose**: Pipeline must work for any TF pair, not just ATF6/REST. Avoid problem-specific prompts or hardcoded assumptions.
+- **Scalable**: Dr. Wang plans to run on 1,700+ TF pairs - robustness is critical.
+- **Tool-agnostic output inspection**: When LLM uses external tools (FIMO, bedtools, etc.), it should inspect output before continuing - but this must be generic, not tool-specific prompting.
+
 ## Architecture
 - `src/orchestrator.py` - Main loop coordinator
 - `src/llm/` - LLM provider abstraction (OpenAI, Claude, Gemini)
@@ -176,7 +181,35 @@ pytest tests/ -v
 
 ### Reference: ATF6/REST Run Results (outputs/20260126_135214/)
 
-Key finding from iteration 1 (conclusive but pipeline didn't converge):
+Key finding from iteration 1 (after manual bug fix):
 - **CCACG pentamer**: 52.4% in ATF6 peaks vs 17.4% background (p=0.0099) ✅
-- **REST full motif**: 0.29% in both observed and background (p=0.95) ❌
-- **Conclusion**: Short pentamer CCACG (not full REST motif) explains the ML prediction
+- **REST full motif**: 31.7% in ATF6 peaks (2,509 of 7,906) - ENRICHED ✅
+- **Conclusion**: Both REST motif and CCACG pentamer are enriched; supports "Trojan Horse" hypothesis
+
+### Critical Bug Discovered (LLM-generated code)
+
+The pipeline reported "REST motif in 0.29% of peaks" - this was **wrong**.
+
+**The bug**: Code counted unique `sequence_name` values from FIMO output:
+```python
+seqs = set(fimo_df["sequence_name"].unique())  # Returns 23 (chromosomes!)
+```
+
+**The problem**: FIMO's `sequence_name` contains chromosome names (chr1, chr2...), not peak IDs.
+bedtools getfasta creates headers like `>chr1:12345-67890`, but FIMO parses only `chr1`.
+
+**Correct method**: Use `bedtools intersect` to match FIMO coordinates back to original peaks.
+
+**Why LLM missed it**: No data inspection, no sanity check (23 values for 7,906 peaks should be suspicious), code ran without errors.
+
+### Reference: Hanbei's Workflow (doc/hanbei_results.pdf)
+
+Hanbei's approach differs fundamentally from our pipeline:
+- **No data upload**: Described the problem verbally to LLM, no files shared
+- **Human-in-the-loop**: LLM generates hypotheses, Hanbei executes verification himself
+- **Iterative feedback**: Hanbei provides results back to LLM for hypothesis refinement
+
+Key hypothesis from Hanbei's session: **"Trojan Horse" (Nested Motif)**
+- REST motif (~21bp) contains CCACG/TGACG (ATF6's core binding sequence)
+- ML model flags REST as important because it's a "super-ATF6" motif
+- The motif predicts ATF6 binding not because REST protein is involved, but because it contains ATF6's recognition sequence

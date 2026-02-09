@@ -16,7 +16,7 @@ from src.llm.base import create_provider
 from src.memory.conversation import PipelineState
 from src.ui.approval import ApprovalUI, ApprovalDecision, ApprovalResult
 from src.utils.config import Config, DataManifest
-from src.utils.cost_tracker import CostTracker, CostLimitExceeded, SessionBudgetExceeded
+from src.utils.cost_tracker import CostTracker, CostLimitExceeded, SessionBudgetExceeded, TokenLimitExceeded
 from src.utils.logging import get_logger
 
 
@@ -318,12 +318,37 @@ class Orchestrator:
 
                 # Check for convergence or refinement
                 if not self._check_shutdown():
-                    await self._check_and_refine(hypothesis, result)
+                    # If all retries failed, stop the pipeline
+                    if result.get("support_level") == "ERROR":
+                        self.state.mark_converged(
+                            reason="Max retries exceeded - execution failed",
+                            confidence=0.0,
+                            conclusion=f"Pipeline stopped: {result.get('reasoning', 'Unknown error')}",
+                        )
+                        self._display_message(
+                            f"Stopping pipeline: max retries ({self.config.execution.max_retries}) exceeded",
+                            "error"
+                        )
+                    else:
+                        await self._check_and_refine(hypothesis, result)
 
             # Generate final report
             final_result = await self._generate_final_output(run_dir)
 
             return final_result
+
+        except TokenLimitExceeded as e:
+            self.logger.error("Input tokens exceed model context limit", {
+                "input_tokens": e.estimate.input_tokens,
+                "context_limit": e.context_limit,
+            })
+            self._display_message(
+                f"Input too large for model! Tokens: {e.estimate.input_tokens:,}, "
+                f"Limit: {e.context_limit:,}. The execution output may be too large - "
+                f"consider truncating or using a model with larger context.",
+                "error"
+            )
+            raise
 
         except CostLimitExceeded as e:
             self.logger.error("Per-call cost limit exceeded", {
@@ -540,7 +565,7 @@ class Orchestrator:
                     self.state.add_hypothesis(hypo)
         elif decision == "TECHNICAL_ERROR":
             # Technical errors should NOT cause convergence
-            # Log the issues and add hypotheses with fixed verification plans
+            # But limit retries to avoid infinite loops on the same hypothesis
             technical_issues = refinement.get("technical_issues", [])
             self.logger.warning(
                 "Technical error detected - will retry with fixes",
@@ -550,9 +575,25 @@ class Orchestrator:
                 f"Technical issues detected: {', '.join(technical_issues[:3])}",
                 "warning"
             )
-            # Add hypotheses with hopefully fixed verification plans
-            for hypo in refinement.get("hypotheses", []):
-                self.state.add_hypothesis(hypo)
+            # Count how many times this hypothesis has already been tested
+            hypothesis_name = last_hypothesis.get("name", "")
+            times_tested = sum(
+                1 for h in self.state.tested_hypotheses
+                if h.get("name", "") == hypothesis_name
+            )
+            if times_tested >= 2:
+                self.logger.warning(
+                    "Hypothesis has failed technically too many times, skipping",
+                    {"hypothesis": hypothesis_name, "times_tested": times_tested}
+                )
+                self._display_message(
+                    f"Skipping hypothesis after {times_tested} technical failures: {hypothesis_name}",
+                    "warning"
+                )
+            else:
+                # Add hypotheses with hopefully fixed verification plans
+                for hypo in refinement.get("hypotheses", []):
+                    self.state.add_hypothesis(hypo)
         elif decision in ("REFINE", "NEW_HYPOTHESIS"):
             # Add new hypotheses
             for hypo in refinement.get("hypotheses", []):

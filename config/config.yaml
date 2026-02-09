@@ -28,7 +28,7 @@ llm:
 execution:
   type: "jupyter"
   timeout_seconds: 0  # No timeout - bioinformatics analyses can take significant time
-  max_retries: 3  # Retry code execution on failure
+  max_retries: 5  # Retry code execution on failure
 
 pipeline:
   max_iterations: 10  # Maximum hypothesis-verification loops

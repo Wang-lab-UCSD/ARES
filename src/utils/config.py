@@ -48,7 +48,7 @@ class ExecutionConfig(BaseModel):
 
     type: str = Field(default="jupyter", description="Execution type: jupyter")
     timeout_seconds: int = Field(default=300, ge=0)  # 0 means no timeout
-    max_retries: int = Field(default=3, ge=0)
+    max_retries: int = Field(default=5, ge=0)
 
 
 class PipelineConfig(BaseModel):
