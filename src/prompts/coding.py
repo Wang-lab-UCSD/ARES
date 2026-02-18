@@ -55,7 +55,10 @@ print("=" * 50)
    subprocess.run(['bedtools', 'intersect', '-a', peaks, '-b', regions, '-wa'], ...)
    ```
 
-3. **Avoid loading entire genome FASTA** - use bedtools getfasta for specific regions
+3. **NEVER scan the whole genome**: Do NOT run FIMO (or any motif scanner) on the
+   full genome FASTA (~3GB, takes hours). Instead, extract only the regions you need
+   with `bedtools getfasta`, then run the scanner on that small FASTA. Scanning a
+   few thousand peak sequences takes seconds; scanning the whole genome takes hours.
 
 === CODE STRUCTURE ===
 
@@ -94,31 +97,49 @@ Before reporting ANY count or statistic:
 
 ***These rules are mandatory. Ignoring them will cause the pipeline to hang for hours.***
 
-1. **Permutation/shuffle tests**: Use at most 200 replicates. Do NOT exceed this.
-   - Use `bedtools shuffle` for randomization — it is fast and handles chromosome/size matching
-   - NEVER write custom shuffle loops that call samtools/bedtools per-iteration per-peak
-   - NEVER fetch sequences (samtools faidx, bedtools getfasta) inside a loop over replicates
+1. **NEVER put expensive operations inside loops**. The following are BANNED inside
+   any `for`/`while` loop:
+   - `bedtools getfasta` (reads entire genome ~3GB per call)
+   - `fimo` (scans all sequences per call)
+   - `pyBigWig` / `bigWigAverageOverBed` signal extraction over full peak sets
+   - Any operation that processes a large file (>50MB)
 
-2. **Prefer CLI tools over Python loops**: bedtools, FIMO, and samtools are optimized in C.
-   Running `bedtools intersect` once is always faster than iterating in Python.
+   These operations MUST be called ONCE, outside any loop. If you need to compare
+   against a null distribution, use analytical tests (see rule 2) or permute labels
+   in memory instead of reprocessing files.
 
-3. **One question per script**: Each script should answer ONE specific question with ONE
-   statistical test. Do not run multiple redundant permutation tests in the same script.
+2. **You MUST use analytical statistical tests, NOT permutations**, for these comparisons:
+   - Signal comparison between two groups → Mann-Whitney U test (instant)
+   - Overlap significance → Fisher's exact test on a 2×2 table (instant)
+   - Motif enrichment → Fisher's exact test on presence/absence counts (instant)
+   - Proportion comparison → Chi-square or Fisher's exact test (instant)
 
-   BAD (3 permutation tests answering the same question):
-   - 200 shuffles to test overlap significance
-   - 100 shuffles to test signal enrichment
-   - 200 shuffles to test distance significance
-   → 500 total shuffles, all testing "do X and Y co-occur?"
+   Permutation tests (bedtools shuffle) are ONLY allowed when you need to control for
+   genomic biases (GC content, chromosome distribution) that analytical tests cannot
+   handle. If you use a permutation test, you may have AT MOST one per script, with
+   at most 100 replicates, and it may ONLY involve `bedtools shuffle` + `bedtools intersect`
+   (counting overlaps). NEVER extract signals or run FIMO inside a permutation loop.
+   **Even if the hypothesis specifies more than 100 replicates, cap at 100.** This is a
+   hard pipeline limit that overrides the hypothesis.
 
-   GOOD (1 test, clear answer):
-   - 200 shuffles to test overlap significance
-   → Done. If you need signal or distance tests, do them in a follow-up iteration.
+3. **One statistical test per script**. Your script should answer ONE specific question
+   with ONE primary statistical test. Additional analyses belong in follow-up iterations.
 
-4. **Keep code focused**: If the verification plan has 5+ steps, pick the 2-3 most
-   critical. Additional analyses can be done in follow-up iterations.
+   BAD (script does 5 things):
+   - Permutation test for overlap
+   - BigWig signal extraction + comparison
+   - FIMO motif scan + enrichment
+   - Nearest-gene expression analysis
+   - Motif-stratified signal comparison
+   → 650 lines, runs for 45 minutes
 
-5. **No downloading external files**: Do not download blacklists, annotations, or other
+   GOOD (script does 1 thing):
+   - Compute overlap between ATF6 and REST peaks
+   - Fisher's exact test for significance
+   - Print result
+   → 80 lines, runs in 2 minutes. Other analyses go in the next iteration.
+
+4. **No downloading external files**: Do not download blacklists, annotations, or other
    files from the internet. Use only the data files provided in the manifest.
 
 === OUTPUT FORMAT ===
@@ -159,11 +180,38 @@ def build_coding_system_prompt(tools: list[str] | None = None) -> str:
 CODING_SYSTEM_PROMPT = build_coding_system_prompt()
 
 
+def _format_prior_evidence(prior_evidence: list[dict[str, Any]]) -> str:
+    """Format previously supported hypotheses as confounders for the coding prompt."""
+    if not prior_evidence:
+        return ""
+
+    supported = [e for e in prior_evidence if e.get("support_level") in ("SUPPORTS", "INCONCLUSIVE")]
+    if not supported:
+        return ""
+
+    parts = [
+        "# Previously Supported Findings (you MUST control for these)",
+        "",
+        "The following hypotheses were already supported in earlier iterations.",
+        "Your test MUST show that the current hypothesis explains something these",
+        "prior findings cannot. If the current effect disappears after controlling",
+        "for a prior finding, that means the current hypothesis is NOT independently supported.",
+        "",
+    ]
+    for e in supported:
+        parts.append(f"**{e.get('hypothesis_name', 'N/A')}** ({e.get('support_level')}, confidence {e.get('confidence', '?')}):")
+        parts.append(f"  {e.get('summary', 'No summary')[:300]}")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 def build_verification_code_prompt(
     hypothesis: dict[str, Any],
     data_manifest: dict[str, Any],
     previous_code: str | None = None,
     previous_error: str | None = None,
+    prior_evidence: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build prompt for generating verification code.
 
@@ -172,11 +220,13 @@ def build_verification_code_prompt(
         data_manifest: Available data paths and tools
         previous_code: Code from previous attempt (if retrying)
         previous_error: Error from previous attempt (if retrying)
+        prior_evidence: Evidence from previously tested hypotheses
 
     Returns:
         Formatted prompt string
     """
     data_section = _format_data_for_coding(data_manifest)
+    prior_section = _format_prior_evidence(prior_evidence or [])
 
     retry_section = ""
     if previous_code and previous_error:
@@ -202,6 +252,8 @@ Please identify and fix the issue in the code.
 
 **Name**: {hypothesis.get('name', 'N/A')}
 **Prediction**: {hypothesis.get('prediction', 'N/A')}
+
+{prior_section}
 
 **Verification Plan**:
 {_format_verification_plan(hypothesis.get('verification_plan', []))}
@@ -243,10 +295,11 @@ Write Python code to test this hypothesis. The code MUST follow this structure:
 - NO matplotlib/seaborn visualizations - focus on statistics only
 - Print intermediate results for debugging
 - If any count seems wrong (e.g., 23 instead of thousands), STOP and investigate
-- Your code MUST finish within 10 minutes. Limit permutations/shuffles to 200 replicates max.
-- Use `bedtools shuffle` for randomization, NOT custom Python loops with per-peak sequence fetching.
-- Implement only the 3-4 most critical steps from the verification plan. Keep it simple.
+- Your code MUST finish within 10 minutes. You MUST use analytical tests (Fisher's, Mann-Whitney) instead of permutations. Permutations are only allowed for overlap counting (shuffle + intersect), max 100 reps, max one per script.
+- NEVER put bigWig extraction, getfasta, or FIMO inside a loop. Call them ONCE.
+- Your script should have ONE statistical test answering ONE question. Keep it under 150 lines. Other analyses go in the next iteration.
 - Do NOT download external files (blacklists, annotations, etc.) — use only the provided data.
+- When selecting columns from a data file, always use column names (e.g., `df['TPM']`), never positional indexing (e.g., `columns[0]` or `value_cols[0]`). Inspect column names first and pick the correct one.
 
 Respond with ONLY the Python code, no explanations. The code should be ready to execute.
 """

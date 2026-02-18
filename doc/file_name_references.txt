@@ -39,3 +39,78 @@ GENCODE annotation file path for K562:
 https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_24/gencode.v24.primary_assembly.annotation.gtf.gz
 
 in codebase: gencode.v24.primary_assembly.annotation.gtf
+
+DNase-seq for K562:
+https://www.encodeproject.org/files/ENCFF655HFU/@@download/ENCFF655HFU.bigWig
+
+in codebase: ENCFF655HFU.bigWig
+
+ChIP-seq H3K27ac genome track signal file path for K562:
+https://www.encodeproject.org/files/ENCFF381NDD/@@download/ENCFF381NDD.bigWig
+
+in codebase: ENCFF381NDD.bigWig
+
+ChIP-seq H3K4me3 genome track signal file path for K562:
+https://www.encodeproject.org/files/ENCFF253TOF/@@download/ENCFF253TOF.bigWig
+
+in codebase: ENCFF253TOF.bigWig
+
+ChromHMM 18-state for K562:
+https://egg2.wustl.edu/roadmap/data/byFileType/chromhmmSegmentations/ChmmModels/core_K27ac/jointModel/final/E123_18_core_K27ac_hg38lift_mnemonics.bed.gz
+
+in codebase: E123_18_core_K27ac_hg38lift_mnemonics.bed.gz
+
+Total RNA-seq gene quantification file path for GM12878:
+https://www.encodeproject.org/files/ENCFF345SHY/@@download/ENCFF345SHY.tsv
+
+in codebase: ENCFF345SHY.tsv
+
+DNase-seq for GM12878:
+https://www.encodeproject.org/files/ENCFF594DFV/@@download/ENCFF594DFV.bigWig
+
+in codebase: ENCFF594DFV.bigWig
+
+ChIP-seq H3K27ac genome track signal file path for GM12878:
+https://www.encodeproject.org/files/ENCFF716VWO/@@download/ENCFF716VWO.bigWig
+
+in codebase: ENCFF716VWO.bigWig
+
+ChIP-seq H3K4me3 genome track signal file path for GM12878:
+https://www.encodeproject.org/files/ENCFF287HAO/@@download/ENCFF287HAO.bigWig
+
+in codebase: ENCFF287HAO.bigWig
+
+ChromHMM 18-state for GM12878:
+https://egg2.wustl.edu/roadmap/data/byFileType/chromhmmSegmentations/ChmmModels/core_K27ac/jointModel/final/E116_18_core_K27ac_hg38lift_mnemonics.bed.gz
+
+in codebase: E116_18_core_K27ac_hg38lift_mnemonics.bed.gz
+
+ChIP-seq Peak file path for MAX in GM12878:
+https://www.encodeproject.org/files/ENCFF361EVH/@@download/ENCFF361EVH.bed.gz
+
+in codebase: ENCFF361EVH.bed.gz
+
+ChIP-seq Genome track signal file path for MAX in GM12878:
+https://www.encodeproject.org/files/ENCFF232BTG/@@download/ENCFF232BTG.bigWig
+
+in codebase: ENCFF232BTG.bigWig
+
+ChIP-seq Peak file path for ATF3 in GM12878:
+https://www.encodeproject.org/files/ENCFF882AEU/@@download/ENCFF882AEU.bed.gz
+
+in codebase: ENCFF882AEU.bed.gz
+
+ChIP-seq Genome track signal file path for ATF3 in GM12878:
+https://www.encodeproject.org/files/ENCFF243XPP/@@download/ENCFF243XPP.bigWig
+
+in codebase: ENCFF243XPP.bigWig
+
+ChIP-seq Peak file path for USF1 in GM12878:
+https://www.encodeproject.org/files/ENCFF879TPT/@@download/ENCFF879TPT.bed.gz
+
+in codebase: ENCFF879TPT.bed.gz
+
+ChIP-seq Genome track signal file path for USF1 in GM12878:
+https://www.encodeproject.org/files/ENCFF029MAS/@@download/ENCFF029MAS.bigWig
+
+in codebase: ENCFF029MAS.bigWig

@@ -30,6 +30,47 @@ class ExecutionResult:
     images: list[bytes] = field(default_factory=list)
     execution_count: int = 0
 
+    @staticmethod
+    def _normalize_line(line: str) -> str:
+        """Normalize a line for dedup by replacing variable parts with placeholders."""
+        import re
+        # Replace motif IDs like MA0138.2, +MA0138.2, -MA0138.2
+        s = re.sub(r'[+-]?MA\d+\.\d+\.?', '<MOTIF>', line)
+        # Replace file paths
+        s = re.sub(r'/[\w/._-]+\.\w+', '<PATH>', s)
+        # Replace numbers
+        s = re.sub(r'\b\d+\b', '<N>', s)
+        return s
+
+    @staticmethod
+    def _filter_noisy_output(text: str, max_repeats: int = 5) -> str:
+        """Filter repetitive lines from output (e.g., FIMO 'Skipping motif' spam).
+
+        Lines are normalized (variable parts like motif IDs replaced) before
+        counting, so 'Skipping motif +MA0138.2' and 'Skipping motif +MA0139.1'
+        count as the same pattern. Keeps the first `max_repeats` occurrences
+        and replaces the rest with a summary.
+        """
+        counts: dict[str, int] = {}
+        filtered: list[str] = []
+        for line in text.splitlines():
+            key = ExecutionResult._normalize_line(line)
+            counts[key] = counts.get(key, 0) + 1
+            if counts[key] <= max_repeats:
+                filtered.append(line)
+            elif counts[key] == max_repeats + 1:
+                filtered.append("  ... (repeated pattern, suppressed further occurrences)")
+
+        suppressed = {k: n for k, n in counts.items() if n > max_repeats}
+        if suppressed:
+            total_suppressed = sum(n - max_repeats for n in suppressed.values())
+            filtered.append(
+                f"\n[Suppressed {len(suppressed)} repeated line pattern(s), "
+                f"{total_suppressed} lines removed]"
+            )
+
+        return "\n".join(filtered)
+
     def get_display_output(self) -> str:
         """Get a human-readable summary of the execution."""
         parts = []
@@ -38,7 +79,8 @@ class ExecutionResult:
             parts.append(f"=== STDOUT ===\n{self.stdout}")
 
         if self.stderr:
-            parts.append(f"=== STDERR ===\n{self.stderr}")
+            filtered_stderr = self._filter_noisy_output(self.stderr)
+            parts.append(f"=== STDERR ===\n{filtered_stderr}")
 
         if self.error:
             parts.append(f"=== ERROR ===\n{self.error}")

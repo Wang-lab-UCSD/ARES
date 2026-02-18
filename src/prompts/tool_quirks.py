@@ -140,35 +140,43 @@ cut -f1,2 genome.fa.fai > chrom.sizes
 bedtools shuffle -i peaks.bed -g chrom.sizes > shuffled.bed
 ```
 
-**RULE 4: NEVER call getfasta or FIMO inside a loop over replicates**
+**RULE 4: NEVER call getfasta, FIMO, or bigWig extraction inside a loop**
 
-For permutation tests, do NOT extract sequences and scan motifs for each replicate.
-Each `bedtools getfasta` call reads the entire genome (~3GB) — doing this 200 times
-takes hours.
+These operations are expensive and MUST be called ONCE, outside any loop:
+- `bedtools getfasta` — reads entire genome (~3GB per call)
+- `fimo` — scans all sequences per call
+- `pyBigWig` / `bigWigAverageOverBed` — reads large bigWig files (1-3GB per call)
 
-WRONG (hours):
+WRONG (hours — getfasta in loop):
 ```python
-for i in range(200):
+for i in range(100):
     subprocess.run(["bedtools", "shuffle", "-i", peaks, "-g", chrom_sizes], ...)
     subprocess.run(["bedtools", "getfasta", "-fi", genome, "-bed", shuffled, ...])  # 3GB read
-    subprocess.run(["fimo", "--motif", motif_id, ..., shuffled_fa])  # slow per replicate
+```
+
+WRONG (hours — bigWig extraction in loop):
+```python
+for i in range(100):
+    shuffled = shuffle_peaks(...)
+    for chrom, start, end in shuffled_regions:
+        bw.stats(chrom, start, end)  # millions of bigWig lookups
 ```
 
 RIGHT — for overlap permutation tests, just shuffle and intersect (seconds per replicate):
 ```python
-for i in range(200):
+for i in range(100):
     subprocess.run(["bedtools", "shuffle", "-i", peaks, "-g", chrom_sizes], ...)
     subprocess.run(["bedtools", "intersect", "-a", shuffled, "-b", other_peaks, "-u"], ...)
     # count overlapping lines — no sequence extraction needed
 ```
 
-RIGHT — for motif enrichment, extract sequences ONCE, run FIMO ONCE, then permute the labels:
+RIGHT — for signal comparison, extract signals ONCE and use Mann-Whitney:
 ```python
-# Extract sequences once
-subprocess.run(["bedtools", "getfasta", "-fi", genome, "-bed", peaks, "-fo", peaks_fa])
-# Run FIMO once
-subprocess.run(["fimo", "--motif", motif_id, ..., peaks_fa])
-# Permute by shuffling peak labels or using Fisher's exact test
+# Extract signals ONCE for both groups
+signals_groupA = [bw.stats(c, s, e)[0] for c, s, e in group_a_regions]
+signals_groupB = [bw.stats(c, s, e)[0] for c, s, e in group_b_regions]
+# Compare with analytical test (instant)
+stat, pvalue = scipy.stats.mannwhitneyu(signals_groupA, signals_groupB)
 ```
 
 **getfasta output format**:
@@ -207,6 +215,73 @@ MEME_SUITE_QUIRKS = """
 """
 
 # =============================================================================
+# Data joining / gene ID matching
+# =============================================================================
+DATA_JOINING_QUIRKS = """
+=== DATA JOINING RULES — READ BEFORE MERGING ANY TWO FILES ===
+
+**RULE 1: NEVER assume gene ID formats match between files**
+
+Gene IDs come in many formats and they almost never match across different files:
+- GENCODE GTF: `ENSG00000223972.5` (Ensembl ID with version)
+- Some expression files: `ENSG00000223972` (Ensembl ID without version)
+- Some expression files: `10904` (numeric internal IDs)
+- Some files: `DDX11L1` (gene symbols)
+
+Before writing ANY join/merge between two files, you MUST:
+1. Print the first 5 rows of BOTH files
+2. Print the column you plan to join on from BOTH sides
+3. Check if formats match — if not, find a mapping strategy
+
+```python
+# ALWAYS do this before joining:
+print("=== File A gene IDs (first 5) ===")
+print(df_a['gene_id'].head())
+print(f"Example: {df_a['gene_id'].iloc[0]}")
+
+print("=== File B gene IDs (first 5) ===")
+print(df_b['gene_id'].head())
+print(f"Example: {df_b['gene_id'].iloc[0]}")
+
+# Check overlap BEFORE joining
+common = set(df_a['gene_id']) & set(df_b['gene_id'])
+print(f"Common IDs: {len(common)} / {len(df_a)}")
+if len(common) == 0:
+    print("WARNING: Zero overlap! ID formats likely differ.")
+```
+
+**RULE 2: Strip Ensembl version suffixes when joining**
+
+If one file has `ENSG00000223972.5` and another has `ENSG00000223972`:
+```python
+df['gene_id_stripped'] = df['gene_id'].str.split('.').str[0]
+```
+
+**RULE 3: When using GENCODE GTF, extract gene_name for symbol-based joins**
+
+```python
+# Parse gene_name from GTF attribute column
+import re
+df['gene_name'] = df['attributes'].apply(
+    lambda x: re.search(r'gene_name "([^"]+)"', x).group(1)
+    if re.search(r'gene_name "([^"]+)"', x) else None
+)
+```
+
+**RULE 4: Sort BED files before bedtools closest**
+
+`bedtools closest` requires sorted input. Always sort first:
+```bash
+bedtools sort -i unsorted.bed > sorted.bed
+bedtools closest -a sorted_a.bed -b sorted_b.bed -d
+```
+Or in Python:
+```python
+subprocess.run(["bedtools", "sort", "-i", input_bed], stdout=open(sorted_bed, 'w'))
+```
+"""
+
+# =============================================================================
 # Combined quirks for common workflows
 # =============================================================================
 def get_quirks_for_tools(tools: list[str]) -> str:
@@ -223,6 +298,7 @@ def get_quirks_for_tools(tools: list[str]) -> str:
         'bedtools': BEDTOOLS_QUIRKS,
         'meme': MEME_SUITE_QUIRKS,
         'meme-suite': MEME_SUITE_QUIRKS,
+        'data-joining': DATA_JOINING_QUIRKS,
     }
 
     sections = []
@@ -238,4 +314,4 @@ def get_quirks_for_tools(tools: list[str]) -> str:
 
 
 # Default quirks to always include (most common issues)
-DEFAULT_QUIRKS = FIMO_QUIRKS + "\n" + BEDTOOLS_QUIRKS
+DEFAULT_QUIRKS = FIMO_QUIRKS + "\n" + BEDTOOLS_QUIRKS + "\n" + DATA_JOINING_QUIRKS

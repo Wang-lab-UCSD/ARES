@@ -156,7 +156,7 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         logger.info("Pipeline completed", {
             "converged": result.get("converged"),
             "iterations": result.get("iterations"),
-            "conclusion": result.get("conclusion", "")[:200],
+            "conclusion": (result.get("conclusion") or "")[:200],
         })
 
         # Print summary to console
@@ -166,7 +166,7 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         print(f"Converged: {result.get('converged')}")
         print(f"Iterations: {result.get('iterations')}")
         print(f"Confidence: {result.get('confidence', 0):.2f}")
-        print(f"\nConclusion:\n{result.get('conclusion', 'N/A')}")
+        print(f"\nConclusion:\n{result.get('conclusion') or 'N/A'}")
         print(f"\nFull report: {result.get('report_file')}")
         print("=" * 60)
 

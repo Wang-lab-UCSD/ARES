@@ -11,6 +11,7 @@ from typing import Any
 from src.agents.hypothesis_agent import HypothesisAgent
 from src.agents.coding_agent import CodingAgent
 from src.agents.summary_agent import SummaryAgent
+from src.agents.review_agent import ReviewAgent
 from src.execution.jupyter_executor import JupyterExecutor
 from src.llm.base import create_provider
 from src.memory.conversation import PipelineState
@@ -128,6 +129,7 @@ class Orchestrator:
 
         self.hypothesis_agent = HypothesisAgent(self.hypothesis_llm)
         self.coding_agent = CodingAgent(self.coding_llm)
+        self.review_agent = ReviewAgent(self.coding_llm)
         self.summary_agent = SummaryAgent(self.summary_llm)
 
     async def _approve_hypothesis(
@@ -245,18 +247,19 @@ class Orchestrator:
 
             # Main loop
             tested_ids: set[int] = set()
+            consecutive_hypo_rejections = 0
+            max_hypo_rejections = 3
+            last_tested_hypothesis: dict[str, Any] | None = None
 
             while (
                 not self.state.converged
                 and self.state.current_iteration < self.state.max_iterations
                 and not self._check_shutdown()
             ):
-                self.state.current_iteration += 1
-                self.logger.info(f"Starting iteration {self.state.current_iteration}")
 
-                # Get next hypothesis to test
+                # Get next hypothesis to test (prefer same group as last tested)
                 hypothesis = self.hypothesis_agent.get_next_hypothesis(
-                    self.state.hypotheses, tested_ids
+                    self.state.hypotheses, tested_ids, last_tested=last_tested_hypothesis
                 )
 
                 if hypothesis is None:
@@ -266,6 +269,57 @@ class Orchestrator:
                 hypo_id = hypothesis.get("id", len(tested_ids))
                 tested_ids.add(hypo_id)
                 self.state.current_hypothesis_index = hypo_id
+
+                # Stage 1: Review hypothesis before code generation
+                hypo_review = await self.review_agent.review_hypothesis(
+                    hypothesis=hypothesis,
+                    tested_hypotheses=self.state.tested_hypotheses,
+                )
+
+                if not hypo_review.approved:
+                    consecutive_hypo_rejections += 1
+                    feedback = "; ".join(hypo_review.issues_found)
+                    self.logger.info("Hypothesis rejected by review", {
+                        "hypothesis": hypothesis.get("name", "N/A"),
+                        "feedback": feedback[:200],
+                        "consecutive_rejections": consecutive_hypo_rejections,
+                    })
+                    self._display_message(
+                        f"Hypothesis review: {feedback[:200]}",
+                        "warning"
+                    )
+
+                    if consecutive_hypo_rejections >= max_hypo_rejections:
+                        self.logger.warning("Max consecutive hypothesis rejections reached", {
+                            "count": consecutive_hypo_rejections,
+                        })
+                        self._display_message(
+                            f"Pipeline stopping: {max_hypo_rejections} consecutive hypothesis rejections",
+                            "error"
+                        )
+                        self.state.conclusion = (
+                            f"Pipeline stopped: hypothesis reviewer rejected "
+                            f"{max_hypo_rejections} consecutive hypotheses. "
+                            f"The hypothesis agent may be stuck generating duplicates or vague predictions."
+                        )
+                        break
+
+                    # Ask hypothesis agent to regenerate
+                    new_hypo = await self.hypothesis_agent.regenerate_hypothesis(
+                        state=self.state,
+                        rejected_hypothesis=hypothesis,
+                        feedback=feedback,
+                        data_manifest=self.manifest.model_dump(),
+                    )
+                    if new_hypo:
+                        self.state.add_hypothesis(new_hypo)
+                    continue
+
+                consecutive_hypo_rejections = 0
+
+                # Only count as an iteration when a hypothesis passes review
+                self.state.current_iteration += 1
+                self.logger.info(f"Starting iteration {self.state.current_iteration}")
 
                 # Request approval for hypothesis if interactive mode
                 approval = await self._approve_hypothesis(
@@ -293,6 +347,9 @@ class Orchestrator:
                 result = await self._run_verification_cycle(
                     hypothesis, run_dir
                 )
+
+                # Track last tested for group affinity
+                last_tested_hypothesis = hypothesis
 
                 # Update state with results
                 self.state.tested_hypotheses.append({
@@ -331,6 +388,21 @@ class Orchestrator:
                         )
                     else:
                         await self._check_and_refine(hypothesis, result)
+
+            # If max iterations reached without convergence, set a default conclusion
+            if not self.state.converged and not self.state.conclusion:
+                supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS"]
+                refuted = [h for h in self.state.tested_hypotheses if h.get("result") == "REFUTES"]
+                if supported:
+                    names = ", ".join(h["name"] for h in supported)
+                    refuted_names = ", ".join(h["name"] for h in refuted)
+                    self.state.conclusion = (
+                        f"Max iterations reached. The association is supported "
+                        f"({names}), but the underlying mechanism could not be "
+                        f"determined. Ruled-out explanations: {refuted_names}."
+                    )
+                else:
+                    self.state.conclusion = "Max iterations reached without finding a supported hypothesis."
 
             # Generate final report
             final_result = await self._generate_final_output(run_dir)
@@ -418,6 +490,7 @@ class Orchestrator:
                 previous_error=last_error,
                 previous_stdout=last_stdout,
                 previous_stderr=last_stderr,
+                prior_evidence=self.state.evidence,
             )
 
             # Validate code
@@ -430,6 +503,36 @@ class Orchestrator:
                 last_code = code
                 last_error = validation_error
                 continue
+
+            # Review code for rule violations
+            review_result = await self.review_agent.review_code(
+                code=code,
+                hypothesis=hypothesis,
+                data_manifest=self.manifest.model_dump(),
+                tested_hypotheses=self.state.tested_hypotheses,
+            )
+
+            if not review_result.approved:
+                self.logger.info("Code review found issues", {
+                    "issues": review_result.issues_found,
+                    "attempt": attempt + 1,
+                })
+                self._display_message(
+                    f"Code review: {'; '.join(review_result.issues_found[:3])}",
+                    "warning"
+                )
+                if review_result.corrected_code:
+                    code = review_result.corrected_code
+                    # Re-validate the corrected code
+                    is_valid, validation_error = self.coding_agent.validate_code(code)
+                    if not is_valid:
+                        last_code = code
+                        last_error = validation_error
+                        continue
+                else:
+                    last_code = code
+                    last_error = f"Code review issues: {'; '.join(review_result.issues_found)}"
+                    continue
 
             # Request approval for code if interactive mode
             code_approval = await self._approve_code(
@@ -496,6 +599,17 @@ class Orchestrator:
                     code=code,
                     execution_result=result,
                 )
+                if summary.get("support_level") == "ERROR":
+                    # Code ran but produced errors (caught by try/except) — retry
+                    self.logger.warning("Summary agent detected ERROR in output, retrying", {
+                        "attempt": attempt + 1,
+                        "reasoning": summary.get("reasoning", ""),
+                    })
+                    last_code = code
+                    last_error = summary.get("reasoning", "Analysis produced errors")
+                    last_stdout = result.stdout
+                    last_stderr = result.stderr
+                    continue
                 return summary
             else:
                 self.logger.warning("Execution failed", {
@@ -518,6 +632,49 @@ class Orchestrator:
             "summary": f"Failed to verify hypothesis due to execution errors: {last_error}",
         }
 
+    def _build_group_summary(self, hypothesis: dict[str, Any]) -> str | None:
+        """Build a summary if the hypothesis's group is now fully tested.
+
+        Args:
+            hypothesis: The hypothesis that was just tested
+
+        Returns:
+            Group summary string, or None if group is not complete
+        """
+        group = hypothesis.get("group")
+        if not group:
+            return None
+
+        # Find all hypotheses in this group
+        group_hypos = [h for h in self.state.hypotheses if h.get("group") == group]
+        tested_ids_in_group = set()
+        for th in self.state.tested_hypotheses:
+            if th.get("group") == group:
+                tested_ids_in_group.add(th.get("id"))
+
+        untested_in_group = [
+            h for h in group_hypos if h.get("id") not in tested_ids_in_group
+        ]
+        if untested_in_group:
+            return None  # Group not yet complete
+
+        # Build synthesis summary
+        parts = [f'# Completed Hypothesis Group: "{group}"', ""]
+        parts.append("All sub-hypotheses in this group have been tested:")
+        for th in self.state.tested_hypotheses:
+            if th.get("group") == group:
+                parts.append(
+                    f"- **{th.get('name', '?')}**: {th.get('result', '?')} — "
+                    f"{th.get('evidence_summary', 'no summary')[:200]}"
+                )
+        parts.append("")
+        parts.append(
+            "Synthesize these results when deciding next steps. "
+            "Consider whether the group as a whole supports, partially supports, "
+            "or refutes the broad mechanism."
+        )
+        return "\n".join(parts)
+
     async def _check_and_refine(
         self,
         last_hypothesis: dict[str, Any],
@@ -531,11 +688,15 @@ class Orchestrator:
         """
         self.logger.info("Checking results and refining")
 
+        # Check if the hypothesis group is now complete
+        group_summary = self._build_group_summary(last_hypothesis)
+
         refinement = await self.hypothesis_agent.refine_hypotheses(
             state=self.state,
             last_hypothesis=last_hypothesis,
             last_result=last_result,
             data_manifest=self.manifest.model_dump(),
+            group_summary=group_summary,
         )
 
         decision = refinement.get("decision", "CONTINUE")

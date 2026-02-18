@@ -36,12 +36,14 @@ class CodingAgent:
         self,
         hypothesis: dict[str, Any],
         data_manifest: dict[str, Any],
+        prior_evidence: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate code to verify a hypothesis.
 
         Args:
             hypothesis: The hypothesis to verify
             data_manifest: Available data paths and tools
+            prior_evidence: Evidence from previously tested hypotheses
 
         Returns:
             Python code as a string
@@ -50,7 +52,9 @@ class CodingAgent:
             "hypothesis": hypothesis.get("name", "N/A"),
         })
 
-        prompt = build_verification_code_prompt(hypothesis, data_manifest)
+        prompt = build_verification_code_prompt(
+            hypothesis, data_manifest, prior_evidence=prior_evidence
+        )
 
         try:
             response = await self.llm.complete(
@@ -125,6 +129,7 @@ class CodingAgent:
         previous_error: str | None = None,
         previous_stdout: str = "",
         previous_stderr: str = "",
+        prior_evidence: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate code with context from previous attempts.
 
@@ -135,6 +140,7 @@ class CodingAgent:
             previous_error: Error from previous attempt
             previous_stdout: Stdout from previous attempt (for debugging)
             previous_stderr: Stderr from previous attempt (for debugging)
+            prior_evidence: Evidence from previously tested hypotheses
 
         Returns:
             Python code as a string
@@ -149,7 +155,9 @@ class CodingAgent:
                 stderr=previous_stderr,
             )
         else:
-            return await self.generate_verification_code(hypothesis, data_manifest)
+            return await self.generate_verification_code(
+                hypothesis, data_manifest, prior_evidence=prior_evidence
+            )
 
     def _extract_code(self, response: str) -> str:
         """Extract Python code from LLM response.

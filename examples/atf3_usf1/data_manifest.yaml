@@ -1,0 +1,63 @@
+# ATF3/USF1 Example Data Manifest (GM12878)
+# Investigation: Why does USF1 motif predict ATF3 binding signal?
+
+finding: >
+  The USF1 motif is the most important feature for predicting ATF3 binding signal.
+  This is surprising because USF1 and ATF3 are different transcription factors.
+  The goal is to explain the biological mechanism behind this relationship.
+
+context: |
+  I aim to comprehend how various transcription factors interact with one another
+  to regulate gene expression. I currently only download the ChIP-seq data from
+  ENCODE for various transcription factors in diverse cell lines. It is possible
+  to download other publicly available data to verify if needed.
+
+  My ML model suggests that for the ATF3 binding signal prediction task, the
+  occurrence of the USF1 motif plays the most important role.
+
+data:
+  # ChIP-seq peak files (GM12878 cell line)
+  # IMPORTANT: Use absolute paths for Jupyter kernel compatibility
+  chipseq:
+    atf3_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF882AEU.bed"
+    atf3_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF243XPP.bigWig"
+    usf1_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF879TPT.bed"
+    usf1_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF029MAS.bigWig"
+
+  # Position Weight Matrices (JASPAR 2022)
+  pwm:
+    jaspar_meme: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/JASPAR2022_CORE_non-redundant_pfms_meme.txt"
+    atf3_motif_id: "MA0605.2"
+    usf1_motif_id: "MA0093.3"
+
+  # Reference genome
+  genome:
+    fasta: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/hg38.fa"
+
+  # Gene expression data (GM12878)
+  rnaseq:
+    gm12878_expression: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF345SHY.tsv"
+
+  # Gene annotations
+  annotations:
+    gencode: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/gencode.v24.primary_assembly.annotation.gtf"
+
+  # Epigenomic data (GM12878)
+  epigenome:
+    dnase_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF594DFV.bigWig"
+    h3k27ac_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF716VWO.bigWig"
+    h3k4me3_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF287HAO.bigWig"
+    chromhmm: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/E116_18_core_K27ac_hg38lift_mnemonics.bed.gz"
+
+# Data statistics
+stats:
+  atf3_peak_count: 4024
+  usf1_peak_count: 8461
+  jaspar_motif_count: 841
+
+# Available bioinformatics tools
+tools:
+  - bedtools
+  - samtools
+  - meme
+  - fimo

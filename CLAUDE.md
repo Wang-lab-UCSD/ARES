@@ -12,10 +12,10 @@ User provides a finding (X predicts Y) + data paths, pipeline runs until converg
 ## Architecture
 - `src/orchestrator.py` - Main loop coordinator
 - `src/llm/` - LLM provider abstraction (OpenAI, Claude, Gemini)
-- `src/agents/` - Hypothesis, Coding, Summary agents
+- `src/agents/` - Hypothesis, Coding, Review, Summary agents
 - `src/execution/` - Jupyter kernel for code execution
 - `src/memory/` - Conversation history management
-- `src/prompts/` - Prompt templates
+- `src/prompts/` - Prompt templates (hypothesis, coding, review, summary, tool_quirks)
 
 ## Available Models (January 2026)
 - **OpenAI**: `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.2-pro`, `gpt-5-mini`
@@ -80,9 +80,9 @@ pytest tests/ -v
 - Use descriptive names that indicate purpose
 
 ## TODO (Hanbei's Requests)
-- [ ] **Multi-hypothesis generation**: HypothesisAgent should generate multiple candidate hypotheses per iteration
-- [ ] **ReviewerAgent**: New agent to evaluate and rank hypotheses, selecting the most promising one to test
-- [ ] **Hypothesis scoring**: Criteria for ranking hypotheses (novelty, testability, relevance to finding)
+- [x] **Multi-hypothesis generation**: HypothesisAgent generates multiple candidate hypotheses at initialization (Phase 1-2), one at a time during refinement
+- [x] **ReviewerAgent**: `src/agents/review_agent.py` — reviews hypotheses (duplicate/vague check) and code (FIMO flags, loops, column selection, hypothesis mismatch) before execution
+- [x] **Hypothesis scoring**: Convergence check with confidence scores (0-1); 3 conditions: mechanism supported, alternative ruled out, explains WHY
 
 ## Known Issues & Lessons Learned (Jan 2026 ATF6/REST Run)
 
@@ -107,77 +107,19 @@ pytest tests/ -v
    - Scanning all 800+ motifs takes 1-2 hours
    - Most hypotheses only need targeted scans (2-3 specific motifs)
 
-### TODO: Pipeline Robustness Improvements
+### Pipeline Robustness (Completed)
 
-- [ ] **Separate technical vs scientific failures**
-  ```python
-  class FailureType(Enum):
-      TECHNICAL_ERROR = "technical"  # Code bug → retry same hypothesis
-      INSUFFICIENT_EVIDENCE = "insufficient"  # Need different approach
-      CONCLUSIVE = "conclusive"  # Done
-  ```
+- [x] **Separate technical vs scientific failures** — TECHNICAL_ERROR in refinement decisions + summary-level ERROR triggers retry loop
+- [x] **Disable visualizations** — Coding prompt: "No matplotlib/seaborn. Focus on statistics only."
+- [x] **Limit computation scale** — Coding prompt caps permutations at 100, one statistical test per script
+- [x] **Cost tracking** — Cost tracker records tokens and estimated cost per API call
+- [x] **Summary-level ERROR retry** — When code catches its own exception (try/except), Jupyter reports success, but summary agent detects ERROR and feeds it back into retry loop
 
-- [ ] **Add early convergence check**
-  ```python
-  def is_evidence_sufficient(p_value, effect_size):
-      """If p < 0.01 and effect size > 2x, don't need more samples"""
-      return p_value < 0.01 and effect_size > 2.0
-  ```
+### Pipeline Robustness (Still TODO)
 
-- [ ] **Disable visualizations in generated code**
-  - Add to coding prompt: "Focus on statistics only. No matplotlib/seaborn. Save results as JSON/CSV."
-  - Visualization should be a separate, optional post-processing step
-
-- [ ] **Add code validation before execution**
-  ```python
-  def validate_code(code: str) -> list[str]:
-      issues = []
-      if "df.apply(" in code and "axis=1" in code:
-          issues.append("df.apply with axis=1 can cause issues")
-      return issues
-  ```
-
-- [ ] **Limit default computation scale**
-  ```yaml
-  # In config
-  max_shuffles_quick: 100
-  max_shuffles_confirm: 500  # Only if borderline
-  max_fimo_motifs: 10  # Don't scan all 800+
-  ```
-
-- [ ] **Add checkpointing for long computations**
-  - Save intermediate results every N iterations
-  - Resume from checkpoint on crash
-
-### TODO: Better Logging
-
-- [ ] **Structured results after each successful execution**
-  ```python
-  results = {
-      "iteration": iter_num,
-      "hypothesis": hypothesis_name,
-      "status": "supported/rejected/inconclusive",
-      "key_statistics": {
-          "observed": 0.524,
-          "background": 0.174,
-          "p_value": 0.0099,
-          "effect_size": 3.01
-      },
-      "timestamp": datetime.now().isoformat()
-  }
-  save_json(f"results_iter_{iter_num}.json", results)
-  ```
-
-- [ ] **Execution summary log** (append-only)
-  ```
-  [14:25] iter=1 attempt=1 status=SUCCESS hypothesis="Direct motif overlap" p=0.0099
-  [15:27] iter=2 attempt=0 status=TECHNICAL_ERROR error="DataFrame assignment"
-  [16:28] iter=2 attempt=1 status=TECHNICAL_ERROR error="DataFrame assignment"
-  ```
-
-- [ ] **Cost tracking in state files**
-  - Record tokens used and estimated cost per API call
-  - Include running total in state JSON
+- [ ] **Add checkpointing for long computations** — Save intermediate results, resume from checkpoint on crash
+- [ ] **Structured results JSON after each iteration** — Machine-readable results with key statistics
+- [ ] **Execution summary log** (append-only, human-readable)
 
 ### Reference: ATF6/REST Run Results (outputs/20260126_135214/)
 
@@ -213,3 +155,37 @@ Key hypothesis from Hanbei's session: **"Trojan Horse" (Nested Motif)**
 - REST motif (~21bp) contains CCACG/TGACG (ATF6's core binding sequence)
 - ML model flags REST as important because it's a "super-ATF6" motif
 - The motif predicts ATF6 binding not because REST protein is involved, but because it contains ATF6's recognition sequence
+
+### Feb 2026 Three-Pair Test Run Results (outputs/20260216_*)
+
+Three runs on Feb 16, 2026 using the updated pipeline (with ReviewAgent, convergence criteria, tool quirks):
+
+1. **ATF3/USF1 (GM12878)** — `outputs/20260216_174252/`
+   - 9 iterations, 9 hypotheses, **CONVERGED** (confidence 0.82)
+   - Conclusion: "ATF3 dose-dependently co-occupies USF1 sites via shared E-box at promoters"
+   - Technical issues: iter 2 (5 attempts, tomtom flag error), iter 5 (6 attempts, bigWig parsing), iter 8 (2 attempts, duplicate BED)
+   - **Note**: Hanbei flagged this convergence as problematic — conclusion is phenomenon, not mechanism (see Known Issues)
+
+2. **ATF6/REST (K562)** — `outputs/20260216_154359/`
+   - 10 iterations, 9 hypotheses, **NOT converged**
+   - Found sequence-level effects (motif enrichment) but couldn't establish mechanism
+   - Trojan Horse hypothesis tested but FIMO approach was wrong (needs literal substring, not PWM matching)
+
+3. **MAX/ZBTB14 (GM12878)** — `outputs/20260216_164429/`
+   - 10 iterations, 9 hypotheses, **NOT converged**
+   - Found promoter architecture clues (CpG islands, bidirectional promoters) but couldn't synthesize into unified mechanism
+   - 2 iterations failed due to missing `bigWigToBedGraph` tool
+
+### Known Issues (Feb 2026)
+
+1. **No essential vs supplementary hypothesis distinction** — HypothesisAgent proposes supplementary characterization hypotheses (directional overlap, promoter location, genome-wide correlation) when it should push toward mechanism. 4 of 9 iterations in ATF3/USF1 were non-essential.
+
+2. **Superficial fixes on technical retry** — LLM makes shallow fixes instead of diagnosing root cause. Example: retried same broken `tomtom -revcomp` flag 4 times before switching approach.
+
+3. **Phenomenon hypothesis accepted as mechanism** — Pipeline converged on "ATF3 dose-dependently co-occupies USF1 sites via shared E-box" which is a detailed phenomenon description, not a causal mechanism. Convergence criteria's mechanism definition is too vague.
+
+4. **"Use the surprise" rule is redundant** — Conflicts with phase guidance and over-constrains hypothesis generation. Need balance between logical flow from previous results and freedom to explore mechanisms.
+
+5. **Phase 3 examples are misleading** — The 4-phase framework's Phase 3 examples (motif nesting, GC content, spatial analysis) are sophisticated observations, not mechanisms. LLM follows these examples and produces more observations labeled as "Phase 3."
+
+6. **4-phase framework duplicates phenomenon-first approach** — The original design (convergence criteria refuse to accept phenomenon-only conclusions) already handles phenomenon→mechanism progression. The 4-phase framework adds explicit Phase 1-2 phenomenon work on top, delaying mechanism exploration and giving the LLM permission to spend iterations on phenomenon hypotheses.
