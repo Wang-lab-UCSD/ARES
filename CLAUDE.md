@@ -176,16 +176,20 @@ Three runs on Feb 16, 2026 using the updated pipeline (with ReviewAgent, converg
    - Found promoter architecture clues (CpG islands, bidirectional promoters) but couldn't synthesize into unified mechanism
    - 2 iterations failed due to missing `bigWigToBedGraph` tool
 
-### Known Issues (Feb 2026)
+### Known Issues (Feb 2026) — Status as of Feb 18
 
-1. **No essential vs supplementary hypothesis distinction** — HypothesisAgent proposes supplementary characterization hypotheses (directional overlap, promoter location, genome-wide correlation) when it should push toward mechanism. 4 of 9 iterations in ATF3/USF1 were non-essential.
+1. ✅ **No essential vs supplementary hypothesis distinction** — Fixed: replaced "use the surprise" rule with hypothesis prioritization filter (WHY vs WHAT). LLM must justify why a characterization hypothesis is needed before proposing it.
 
-2. **Superficial fixes on technical retry** — LLM makes shallow fixes instead of diagnosing root cause. Example: retried same broken `tomtom -revcomp` flag 4 times before switching approach.
+2. ✅ **Superficial fixes on technical retry** — Fixed: added mandatory root cause diagnosis comment to error fix prompt. LLM must identify the root cause before writing fix, and must use a different approach if the same tool failed.
 
-3. **Phenomenon hypothesis accepted as mechanism** — Pipeline converged on "ATF3 dose-dependently co-occupies USF1 sites via shared E-box" which is a detailed phenomenon description, not a causal mechanism. Convergence criteria's mechanism definition is too vague.
+3. ✅ **Phenomenon hypothesis accepted as mechanism** — Fixed: replaced vague mechanism definition with causal sequence test + good/bad example pair using TF_A/TF_B terminology.
 
-4. **"Use the surprise" rule is redundant** — Conflicts with phase guidance and over-constrains hypothesis generation. Need balance between logical flow from previous results and freedom to explore mechanisms.
+4. ✅ **"Use the surprise" rule is redundant** — Resolved by item 1 fix (surprise rule was replaced entirely).
 
-5. **Phase 3 examples are misleading** — The 4-phase framework's Phase 3 examples (motif nesting, GC content, spatial analysis) are sophisticated observations, not mechanisms. LLM follows these examples and produces more observations labeled as "Phase 3."
+5. ✅ **Phase 3 examples are misleading** — Fixed: removed 4-phase framework entirely from system prompt, including the misleading Phase 3 examples.
 
-6. **4-phase framework duplicates phenomenon-first approach** — The original design (convergence criteria refuse to accept phenomenon-only conclusions) already handles phenomenon→mechanism progression. The 4-phase framework adds explicit Phase 1-2 phenomenon work on top, delaying mechanism exploration and giving the LLM permission to spend iterations on phenomenon hypotheses.
+6. ✅ **4-phase framework duplicates phenomenon-first approach** — Fixed: replaced 4-phase framework with open-ended reasoning methodology (reason from biology + data, find most diagnostic test). No more phase labels or forced sequencing.
+
+7. **Convergence criteria need revision** — With 4-phase framework removed, convergence criteria may need adjustment. Deferred to next iteration.
+
+8. **Initial batch of association hypotheses wastes iterations** — `build_initial_hypothesis_prompt()` generates 3-5 hypotheses upfront, all for confirming association. Pipeline must test them all before any mechanism exploration. Deferred to next iteration.
