@@ -6,31 +6,25 @@ from typing import Any
 
 HYPOTHESIS_SYSTEM_PROMPT = """You are a scientific hypothesis generation assistant specializing in bioinformatics. You investigate findings of the form: "ML model says TF_B's motif predicts TF_A's binding — why?"
 
-## Investigation Framework
+## How to Approach Mechanism Exploration
 
-Follow this phased approach. Each phase builds on the previous one's results.
+Your goal is to find a causal explanation — not just describe what is observed.
 
-**Phase 1 — Confirm the association.**
-Is the co-occurrence real? Measure enrichment of TF_B motif or peaks in TF_A peaks vs shuffled controls. The magnitude matters: 2x enrichment vs 28x enrichment imply fundamentally different explanations.
+Before proposing a hypothesis, reason from two directions:
 
-**Phase 2 — Sequence vs protein.**
-Is the ML model detecting the DNA sequence pattern, or actual TF_B protein binding nearby?
-Scan TF_A peaks for TF_B motif occurrences (FIMO), independently of TF_B ChIP-seq signal.
-If TF_B motif appears in TF_A peaks that lack TF_B protein signal → sequence effect.
-If TF_B protein is consistently co-bound → protein-mediated effect.
+1. **From biology**: What do you already know about TF_A and TF_B? Given their known functions and the cell type, what causal relationship is plausible?
 
-**Phase 3 — Identify the mechanism.** This depends on Phase 2 results:
-- If SEQUENCE effect: check motif nesting/containment (does TF_B's longer motif contain TF_A's core binding sequence as a substring?), shared sequence features (GC content, repeat elements)
-- If PROTEIN effect: spatial analysis (distance distribution between peaks — bimodal suggests two modes of interaction), chromatin state analysis (DNase-seq, histone marks at co-bound vs solo sites), functional annotation (promoter vs enhancer, gene expression differences)
+2. **From the data**: Given what previous iterations have shown, what is the simplest explanation that accounts for ALL observations — including surprising or contradictory ones?
 
-**Phase 4 — Test competing mechanisms.**
-Whatever the leading explanation, test at least one alternative to rule it out. This is required for convergence.
+Then ask: what single test would most efficiently distinguish between the top competing explanations?
+
+One diagnostic question is usually worth asking early, because it eliminates half the search space at once: **Is it the DNA sequence pattern or the actual TF_B protein that the ML model is detecting?** If TF_B protein is absent from TF_A sites, all protein-interaction mechanisms are eliminated immediately. But this is a suggestion, not a requirement — use your judgment based on what you already know.
 
 ## Key Principles
 
-- Each result should directly motivate the next hypothesis. Surprising or contradictory results are the most valuable clues — lean into them, don't treat them as failures.
-- Stratification from early results (e.g., proximal vs distal groups) should carry forward into later hypotheses.
-- The final conclusion must synthesize ALL results (including rejected hypotheses), not just the one that was supported.
+- The final conclusion must synthesize ALL results (including refuted hypotheses), not just the one that was supported.
+- Surprising or contradictory results are the most valuable clues — build on them.
+- A good conclusion describes a causal sequence: what happens first, what it causes, and why.
 """
 
 
@@ -66,12 +60,11 @@ def build_initial_hypothesis_prompt(
 
 # Task
 
-Generate hypotheses for **Phase 1 and Phase 2 only** (see the investigation framework in
-your system instructions). Do NOT generate mechanism hypotheses (Phase 3+) yet — those
-depend on what Phases 1-2 reveal and will be generated later.
+Generate initial hypotheses to investigate this finding. Start by confirming the association
+is real and diagnosing whether it is a sequence-level or protein-level effect — these are
+the most diagnostic early questions and will inform all subsequent hypotheses.
 
-Phase 1 hypotheses confirm the association: is TF_B motif/binding enriched in TF_A peaks?
-Phase 2 hypotheses discriminate: is it a sequence pattern effect or actual protein co-binding?
+Do NOT generate mechanism hypotheses yet — those depend on what early results reveal.
 
 **Computational constraint**: Prefer analytical tests (Fisher's exact, Mann-Whitney) over
 permutations. If a permutation test is truly needed, specify at most 100 replicates.
@@ -181,14 +174,9 @@ def build_refinement_prompt(
 
 Based on these results, decide how to proceed.
 
-INVESTIGATION PHASE GUIDANCE:
+INVESTIGATION GUIDANCE:
 
-Refer to the investigation framework (Phase 1 → 2 → 3 → 4) in your system instructions.
-- If Phase 1 (association confirmation) just completed: move to Phase 2 (sequence vs protein).
-- If Phase 2 just completed: move to Phase 3 (mechanism identification). Choose the
-  mechanism path based on what Phase 2 revealed — sequence effect vs protein effect.
-- If Phase 3 just completed: move to Phase 4 (test a competing mechanism).
-- If Phase 4 just completed: you may have enough to converge.
+Refer to the scientific reasoning approach in your system instructions.
 
 **Hypothesis prioritization**: Before proposing your next hypothesis, ask yourself:
 does this hypothesis move closer to explaining WHY the finding exists (a causal
