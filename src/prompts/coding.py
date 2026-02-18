@@ -366,14 +366,22 @@ def build_error_fix_prompt(
 
 # Task
 
-Fix the error in the code above. Common issues to check:
-- Incorrect file paths
-- Missing imports (use `!pip install package` if needed)
-- Wrong data types or column names
-- API/library usage errors
-- Check stdout above for clues about what went wrong
+First, diagnose the root cause of the error. Write a brief comment at the top of your
+code (1-2 lines) explaining:
+1. What specifically went wrong (not just "an error occurred")
+2. Why the previous code caused this (the root cause, not the symptom)
 
-Respond with ONLY the corrected Python code, no explanations.
+Then write the corrected code. Your fix MUST address the root cause you identified.
+If the same tool or command failed, you MUST use a different approach — do not retry
+the same command with minor flag variations.
+
+Common root causes to check:
+- Tool CLI flags not supported by the installed version (check --help or use a different tool)
+- Output format assumptions that don't match actual output (inspect output first)
+- Wrong data types or column names (print and verify before using)
+- File path or format issues
+
+Respond with the corrected Python code (the diagnostic comment should be inside the code).
 """
     return prompt
 

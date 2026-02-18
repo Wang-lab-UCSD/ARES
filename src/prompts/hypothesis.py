@@ -190,19 +190,51 @@ Refer to the investigation framework (Phase 1 → 2 → 3 → 4) in your system 
 - If Phase 3 just completed: move to Phase 4 (test a competing mechanism).
 - If Phase 4 just completed: you may have enough to converge.
 
-**"Use the surprise" rule**: Your next hypothesis MUST be directly motivated by the specific
-result from the latest experiment. State explicitly: (1) what the last result revealed,
-(2) what question it opens up, (3) how your new hypothesis addresses that question.
-Do NOT generate a hypothesis unrelated to what was just observed.
+**Hypothesis prioritization**: Before proposing your next hypothesis, ask yourself:
+does this hypothesis move closer to explaining WHY the finding exists (a causal
+mechanism), or does it further characterize WHAT the finding looks like (more detail
+about the association)?
+
+- If it explains WHY → propose it.
+- If it characterizes WHAT → skip it, unless it is necessary to disambiguate
+  between two competing mechanism hypotheses.
+
+Examples of WHAT (skip these):
+- "Is the overlap directional?" — describes the phenomenon more precisely
+- "Are the shared sites at promoters or enhancers?" — describes where, not why
+- "Does the correlation hold genome-wide?" — confirms the phenomenon at larger scale
+
+Examples of WHY (propose these):
+- "Does TF_A compete with TF_B for the same binding site?" — proposes a causal process
+- "Does TF_A recruit a co-factor that blocks TF_B?" — proposes a molecular event
+- "Is the motif similarity due to TF_B's motif containing TF_A's core sequence?" — explains the root cause
+
+Your hypothesis should also be motivated by previous results — build on what you've learned,
+don't ignore it. But advancing toward mechanism takes priority over following up on details.
 
 CONVERGENCE GUIDELINES (read carefully before deciding):
 
 You may choose CONVERGED only when ALL three conditions are met:
 
-Key distinction — a **mechanism** hypothesis explains WHY the finding exists (a causal
-process), not just THAT it exists (an association). For example, "REST motif contains
-ATF6's core binding sequence" is a mechanism; "ATF6 and REST peaks co-occur" is an
-observation. Your conclusion must be a mechanism.
+Key distinction — a **mechanism** hypothesis proposes a causal sequence: what molecular
+event happens first, what it causes next, and why one leads to the other.
+
+**The test**: Can you describe a before/after — what happens at the molecular level when
+the mechanism is active vs inactive? If your conclusion is a list of correlated
+observations (even detailed ones), it is NOT a mechanism.
+
+**Example — NOT a mechanism** (phenomenon):
+"TF_A and TF_B co-bind at promoters via shared E-box motif in a dose-dependent manner."
+This describes what happens, where, and how much — but not why.
+
+**Example — IS a mechanism** (causal process):
+"TF_B acts as a pioneer factor that opens chromatin at E-box promoters; TF_A then binds
+the accessible E-box as a secondary occupant. The ML model detects TF_B's motif as
+predictive because TF_B's prior binding is a prerequisite for TF_A access."
+This proposes a causal sequence (TF_B opens → TF_A follows) and is testable: if true,
+removing TF_B should reduce TF_A binding.
+
+Your conclusion must be a mechanism, not a phenomenon.
 
 1. A mechanism hypothesis has statistical support (p < 0.05, clear effect size).
    An observation (e.g., "X and Y co-occur") does NOT count.
