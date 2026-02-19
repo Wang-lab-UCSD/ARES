@@ -4,25 +4,22 @@ llm:
   # Model for generating and refining hypotheses
   hypothesis_model:
     provider: "openai"  # Options: openai, anthropic, gemini
-    model: "gpt-5-mini"
+    model: "gpt-5.2"
     api_key_env: "OPENAI_API_KEY"
-    # Note: gpt-5-mini only supports temperature=1 (default), so omit temperature
     # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
 
   # Model for writing verification code
   coding_model:
     provider: "openai"
-    model: "gpt-5-mini"
+    model: "gpt-5.2"
     api_key_env: "OPENAI_API_KEY"
-    # Note: gpt-5-mini only supports temperature=1 (default), so omit temperature
     # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
 
   # Model for summarizing results
   summary_model:
     provider: "openai"
-    model: "gpt-5-mini"
+    model: "gpt-5.2"
     api_key_env: "OPENAI_API_KEY"
-    # Note: gpt-5-mini only supports temperature=1 (default), so omit temperature
     # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
 
 execution:

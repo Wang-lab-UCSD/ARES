@@ -17,8 +17,8 @@ User provides a finding (X predicts Y) + data paths, pipeline runs until converg
 - `src/memory/` - Conversation history management
 - `src/prompts/` - Prompt templates (hypothesis, coding, review, summary, tool_quirks)
 
-## Available Models (January 2026)
-- **OpenAI**: `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.2-pro`, `gpt-5-mini`
+## Available Models (February 2026)
+- **OpenAI**: `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.1`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5.2-codex`, `gpt-5.1-codex`, `gpt-5-codex`
 - **Anthropic**: `claude-sonnet-4`, `claude-opus-4`
 - **Google**: `gemini-2.5-pro`, `gemini-2.5-flash`
 

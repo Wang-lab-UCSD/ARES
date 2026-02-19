@@ -21,14 +21,24 @@ class ModelPricing:
     context_limit: int = 128000  # Default context window size in tokens
 
 
-# Pricing table (January 2026 rates - update as needed)
+# Pricing table (February 2026 rates - update as needed)
 # Context limits are the maximum input tokens the model can accept
 MODEL_PRICING: dict[str, ModelPricing] = {
     # OpenAI
-    "gpt-5.2": ModelPricing(15.0, 60.0, "openai", "gpt-5.2", context_limit=256000),
-    "gpt-5.2-codex": ModelPricing(12.0, 48.0, "openai", "gpt-5.2-codex", context_limit=256000),
-    "gpt-5.2-pro": ModelPricing(25.0, 100.0, "openai", "gpt-5.2-pro", context_limit=256000),
-    "gpt-5-mini": ModelPricing(0.60, 2.40, "openai", "gpt-5-mini", context_limit=128000),
+    "gpt-5.2": ModelPricing(1.75, 14.0, "openai", "gpt-5.2", context_limit=256000),
+    "gpt-5.2-chat-latest": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-chat-latest", context_limit=256000),
+    "gpt-5.2-codex": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-codex", context_limit=256000),
+    "gpt-5.2-pro": ModelPricing(21.0, 168.0, "openai", "gpt-5.2-pro", context_limit=256000),
+    "gpt-5.1": ModelPricing(1.25, 10.0, "openai", "gpt-5.1", context_limit=256000),
+    "gpt-5.1-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-chat-latest", context_limit=256000),
+    "gpt-5.1-codex-max": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex-max", context_limit=256000),
+    "gpt-5.1-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex", context_limit=256000),
+    "gpt-5": ModelPricing(1.25, 10.0, "openai", "gpt-5", context_limit=256000),
+    "gpt-5-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5-chat-latest", context_limit=256000),
+    "gpt-5-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5-codex", context_limit=256000),
+    "gpt-5-pro": ModelPricing(15.0, 120.0, "openai", "gpt-5-pro", context_limit=256000),
+    "gpt-5-mini": ModelPricing(0.25, 2.0, "openai", "gpt-5-mini", context_limit=128000),
+    "gpt-5-nano": ModelPricing(0.05, 0.40, "openai", "gpt-5-nano", context_limit=128000),
     # Anthropic
     "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4", context_limit=200000),
     "claude-opus-4-20250514": ModelPricing(15.0, 75.0, "anthropic", "claude-opus-4", context_limit=200000),
