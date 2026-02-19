@@ -26,9 +26,9 @@ class ModelPricing:
 # Context limits are the maximum input tokens the model can accept
 MODEL_PRICING: dict[str, ModelPricing] = {
     # OpenAI
-    "gpt-5.2": ModelPricing(1.75, 14.0, "openai", "gpt-5.2", context_limit=256000, cached_input_price=0.175),
-    "gpt-5.2-chat-latest": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-chat-latest", context_limit=256000, cached_input_price=0.175),
-    "gpt-5.2-codex": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-codex", context_limit=256000, cached_input_price=0.175),
+    "gpt-5.2": ModelPricing(1.75, 14.0, "openai", "gpt-5.2", context_limit=400000, cached_input_price=0.175),
+    "gpt-5.2-chat-latest": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-chat-latest", context_limit=400000, cached_input_price=0.175),
+    "gpt-5.2-codex": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-codex", context_limit=400000, cached_input_price=0.175),
     "gpt-5.2-pro": ModelPricing(21.0, 168.0, "openai", "gpt-5.2-pro", context_limit=256000),
     "gpt-5.1": ModelPricing(1.25, 10.0, "openai", "gpt-5.1", context_limit=256000, cached_input_price=0.125),
     "gpt-5.1-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-chat-latest", context_limit=256000, cached_input_price=0.125),
@@ -43,6 +43,10 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # Anthropic
     "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4", context_limit=200000, cached_input_price=0.30),
     "claude-opus-4-20250514": ModelPricing(15.0, 75.0, "anthropic", "claude-opus-4", context_limit=200000, cached_input_price=1.50),
+    "claude-opus-4-5": ModelPricing(5.0, 25.0, "anthropic", "claude-opus-4-5", context_limit=200000, cached_input_price=0.50),
+    # TODO: verify pricing for claude-sonnet-4-5 and claude-haiku-4-5
+    "claude-sonnet-4-5": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4-5", context_limit=200000, cached_input_price=0.30),
+    "claude-haiku-4-5": ModelPricing(0.80, 4.0, "anthropic", "claude-haiku-4-5", context_limit=200000, cached_input_price=0.08),
     # Google — Gemini 2.5 Pro output price is $10/1M for prompts <=200K, $15/1M for >200K;
     # using <=200K tier as default since most pipeline calls are well under that limit
     "gemini-2.5-pro": ModelPricing(1.25, 10.0, "gemini", "gemini-2.5-pro", context_limit=1000000, cached_input_price=0.125),
