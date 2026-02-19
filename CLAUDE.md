@@ -190,6 +190,10 @@ Three runs on Feb 16, 2026 using the updated pipeline (with ReviewAgent, converg
 
 6. ✅ **4-phase framework duplicates phenomenon-first approach** — Fixed: replaced 4-phase framework with open-ended reasoning methodology (reason from biology + data, find most diagnostic test). No more phase labels or forced sequencing.
 
-7. **Convergence criteria need revision** — With 4-phase framework removed, convergence criteria may need adjustment. Deferred to next iteration.
+7. ✅ **Convergence criteria need revision** — Fixed: dropped condition 2 (alternative mechanism must be ruled out). New criteria: (1) mechanism hypothesis has statistical support (p < 0.05), (2) conclusion explains WHY. Rationale: requiring alternative mechanisms to be ruled out is too strict for 1,700+ TF pair scale; can be re-added if pipeline proves unreliable.
 
-8. **Initial batch of association hypotheses wastes iterations** — `build_initial_hypothesis_prompt()` generates 3-5 hypotheses upfront, all for confirming association. Pipeline must test them all before any mechanism exploration. Deferred to next iteration.
+8. ✅ **Initial batch of association hypotheses wastes iterations** — Fixed: `build_initial_hypothesis_prompt()` now generates exactly ONE association-confirmation hypothesis. Removed "Do NOT generate mechanism hypotheses yet" instruction so the refinement loop immediately takes over after confirmation.
+
+8.1. ✅ **Sequence-vs-protein suggestion hardcoded in initial prompt** — Fixed: removed the instruction to "diagnose whether it is a sequence-level or protein-level effect" from the initial prompt. This diagnostic is mechanism exploration, not association confirmation; the LLM should decide what the most diagnostic first mechanism test is based on context.
+
+9. **chromHMM never used despite availability** — Across all three Feb 16 runs (ATF6/REST, MAX/ZBTB14, ATF3/USF1), the chromHMM chromatin state annotation file was never referenced in any generated code script. All other data types were used in at least some iterations. chromHMM directly encodes genomic context (active promoter, enhancer, heterochromatin, etc.) in a single file — more efficient than combining individual histone mark tracks. LLM may not know how to work with it or may not prioritize it.

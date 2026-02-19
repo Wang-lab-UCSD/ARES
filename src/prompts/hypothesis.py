@@ -60,11 +60,9 @@ def build_initial_hypothesis_prompt(
 
 # Task
 
-Generate initial hypotheses to investigate this finding. Start by confirming the association
-is real and diagnosing whether it is a sequence-level or protein-level effect — these are
-the most diagnostic early questions and will inform all subsequent hypotheses.
-
-Do NOT generate mechanism hypotheses yet — those depend on what early results reveal.
+Generate exactly ONE hypothesis to confirm the association is real — that TF_B's motif
+or binding is enriched at TF_A's binding locations relative to a matched background.
+Choose the single most efficient statistical test for this confirmation.
 
 **Computational constraint**: Prefer analytical tests (Fisher's exact, Mann-Whitney) over
 permutations. If a permutation test is truly needed, specify at most 100 replicates.
@@ -105,8 +103,7 @@ Respond in JSON format:
         }},
         ...
     ],
-    "recommended_first": 0,
-    "reasoning": "Why this hypothesis should be tested first"
+    "reasoning": "Why this is the most efficient association confirmation test"
 }}
 
 Note on `group`: Hypotheses that are sub-parts of the same broad mechanism MUST share the
@@ -202,7 +199,7 @@ don't ignore it. But advancing toward mechanism takes priority over following up
 
 CONVERGENCE GUIDELINES (read carefully before deciding):
 
-You may choose CONVERGED only when ALL three conditions are met:
+You may choose CONVERGED only when BOTH conditions are met:
 
 Key distinction — a **mechanism** hypothesis proposes a causal sequence: what molecular
 event happens first, what it causes next, and why one leads to the other.
@@ -226,13 +223,8 @@ Your conclusion must be a mechanism, not a phenomenon.
 
 1. A mechanism hypothesis has statistical support (p < 0.05, clear effect size).
    An observation (e.g., "X and Y co-occur") does NOT count.
-2. At least one alternative mechanism hypothesis has been tested and ruled out.
-   Ruling out an observation-level hypothesis does NOT satisfy this condition.
-3. Your conclusion explains WHY the finding exists. If multiple mechanisms are
+2. Your conclusion explains WHY the finding exists. If multiple mechanisms are
    independently supported, describe how they contribute together.
-
-If condition 1 is met but conditions 2 or 3 are not, use NEW_HYPOTHESIS to test
-alternative mechanisms or explore WHY the association exists.
 
 Do NOT choose REFINE just to add more permutations, stricter matching, or additional
 control analyses on the same hypothesis. A good conclusion acknowledges limitations
@@ -242,7 +234,7 @@ made more rigorous.
 
 Decisions:
 
-1. **CONVERGED**: All three conditions above are met (mechanism supported, alternative mechanism ruled out, conclusion explains WHY)
+1. **CONVERGED**: Both conditions above are met (mechanism supported with p < 0.05, conclusion explains WHY)
 2. **REFINE**: If results partially support the hypothesis but need refinement
 3. **NEW_HYPOTHESIS**: If results refute the hypothesis and a new one is needed
 4. **TECHNICAL_ERROR**: If the code had bugs, parsing errors, or technical failures that prevented proper analysis. This is NOT convergence - we need to fix the code and retry.
