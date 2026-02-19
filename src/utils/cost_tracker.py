@@ -19,20 +19,21 @@ class ModelPricing:
     provider: str = ""
     model_id: str = ""
     context_limit: int = 128000  # Default context window size in tokens
+    cached_input_price: float = 0.0  # USD per 1M cached input tokens (0 = not supported)
 
 
 # Pricing table (February 2026 rates - update as needed)
 # Context limits are the maximum input tokens the model can accept
 MODEL_PRICING: dict[str, ModelPricing] = {
     # OpenAI
-    "gpt-5.2": ModelPricing(1.75, 14.0, "openai", "gpt-5.2", context_limit=256000),
-    "gpt-5.2-chat-latest": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-chat-latest", context_limit=256000),
-    "gpt-5.2-codex": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-codex", context_limit=256000),
+    "gpt-5.2": ModelPricing(1.75, 14.0, "openai", "gpt-5.2", context_limit=256000, cached_input_price=0.175),
+    "gpt-5.2-chat-latest": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-chat-latest", context_limit=256000, cached_input_price=0.175),
+    "gpt-5.2-codex": ModelPricing(1.75, 14.0, "openai", "gpt-5.2-codex", context_limit=256000, cached_input_price=0.175),
     "gpt-5.2-pro": ModelPricing(21.0, 168.0, "openai", "gpt-5.2-pro", context_limit=256000),
-    "gpt-5.1": ModelPricing(1.25, 10.0, "openai", "gpt-5.1", context_limit=256000),
-    "gpt-5.1-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-chat-latest", context_limit=256000),
-    "gpt-5.1-codex-max": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex-max", context_limit=256000),
-    "gpt-5.1-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex", context_limit=256000),
+    "gpt-5.1": ModelPricing(1.25, 10.0, "openai", "gpt-5.1", context_limit=256000, cached_input_price=0.125),
+    "gpt-5.1-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-chat-latest", context_limit=256000, cached_input_price=0.125),
+    "gpt-5.1-codex-max": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex-max", context_limit=256000, cached_input_price=0.125),
+    "gpt-5.1-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex", context_limit=256000, cached_input_price=0.125),
     "gpt-5": ModelPricing(1.25, 10.0, "openai", "gpt-5", context_limit=256000),
     "gpt-5-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5-chat-latest", context_limit=256000),
     "gpt-5-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5-codex", context_limit=256000),
@@ -40,11 +41,12 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     "gpt-5-mini": ModelPricing(0.25, 2.0, "openai", "gpt-5-mini", context_limit=128000),
     "gpt-5-nano": ModelPricing(0.05, 0.40, "openai", "gpt-5-nano", context_limit=128000),
     # Anthropic
-    "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4", context_limit=200000),
-    "claude-opus-4-20250514": ModelPricing(15.0, 75.0, "anthropic", "claude-opus-4", context_limit=200000),
-    # Google (Gemini doesn't report tokens, use estimates)
-    "gemini-2.5-pro": ModelPricing(1.25, 5.0, "gemini", "gemini-2.5-pro", context_limit=1000000),
-    "gemini-2.5-flash": ModelPricing(0.075, 0.30, "gemini", "gemini-2.5-flash", context_limit=1000000),
+    "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4", context_limit=200000, cached_input_price=0.30),
+    "claude-opus-4-20250514": ModelPricing(15.0, 75.0, "anthropic", "claude-opus-4", context_limit=200000, cached_input_price=1.50),
+    # Google — Gemini 2.5 Pro output price is $10/1M for prompts <=200K, $15/1M for >200K;
+    # using <=200K tier as default since most pipeline calls are well under that limit
+    "gemini-2.5-pro": ModelPricing(1.25, 10.0, "gemini", "gemini-2.5-pro", context_limit=1000000, cached_input_price=0.125),
+    "gemini-2.5-flash": ModelPricing(0.30, 2.50, "gemini", "gemini-2.5-flash", context_limit=1000000, cached_input_price=0.03),
 }
 
 
