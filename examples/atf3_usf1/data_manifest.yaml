@@ -19,10 +19,10 @@ data:
   # ChIP-seq peak files (GM12878 cell line)
   # IMPORTANT: Use absolute paths for Jupyter kernel compatibility
   chipseq:
-    atf3_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF882AEU.bed"
-    atf3_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF243XPP.bigWig"
-    usf1_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF879TPT.bed"
-    usf1_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF029MAS.bigWig"
+    atf3_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF882AEU.bed"
+    atf3_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF243XPP.bigWig"
+    usf1_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF879TPT.bed"
+    usf1_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF029MAS.bigWig"
 
   # Position Weight Matrices (JASPAR 2022)
   pwm:

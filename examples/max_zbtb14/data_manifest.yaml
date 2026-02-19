@@ -19,8 +19,8 @@ data:
   # ChIP-seq peak files (GM12878 cell line)
   # IMPORTANT: Use absolute paths for Jupyter kernel compatibility
   chipseq:
-    max_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF361EVH.bed"
-    max_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF232BTG.bigWig"
+    max_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/max_zbtb14/ENCFF361EVH.bed"
+    max_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/max_zbtb14/ENCFF232BTG.bigWig"
 
   # Position Weight Matrices (JASPAR 2022)
   pwm:
