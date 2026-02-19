@@ -85,6 +85,16 @@ https://egg2.wustl.edu/roadmap/data/byFileType/chromhmmSegmentations/ChmmModels/
 
 in codebase: E116_18_core_K27ac_hg38lift_mnemonics.bed.gz
 
+In situ Hi-C loops file for K562:
+https://www.encodeproject.org/files/ENCFF693XIL/@@download/ENCFF693XIL.bedpe.gz
+
+in codebase: data/atf6_rest/ENCFF693XIL.bedpe.gz
+
+In situ Hi-C chromatin strips file for K562:
+https://www.encodeproject.org/files/ENCFF448GZL/@@download/ENCFF448GZL.bedpe.gz
+
+in codebase: data/atf6_rest/ENCFF448GZL.bedpe.gz
+
 ChIP-seq Peak file path for MAX in GM12878:
 https://www.encodeproject.org/files/ENCFF361EVH/@@download/ENCFF361EVH.bed.gz
 
