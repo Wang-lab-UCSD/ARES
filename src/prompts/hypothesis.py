@@ -25,6 +25,7 @@ One diagnostic question is usually worth asking early, because it eliminates hal
 - The final conclusion must synthesize ALL results (including refuted hypotheses), not just the one that was supported.
 - Surprising or contradictory results are the most valuable clues — build on them.
 - A good conclusion describes a causal sequence: what happens first, what it causes, and why.
+- Your ultimate goal is to identify which specific mechanism class from a named taxonomy explains the finding — you will see the full taxonomy when evaluating convergence.
 """
 
 
@@ -32,6 +33,7 @@ def build_initial_hypothesis_prompt(
     finding: str,
     context: str,
     data_manifest: dict[str, Any],
+    file_summaries: dict[str, str] | None = None,
 ) -> str:
     """Build the initial prompt for hypothesis generation.
 
@@ -39,12 +41,13 @@ def build_initial_hypothesis_prompt(
         finding: The scientific finding to explain (X predicts Y)
         context: Additional context about the research
         data_manifest: Available data and tools
+        file_summaries: Pre-run file inspection output (from iteration 0)
 
     Returns:
         Formatted prompt string
     """
     # Format available data
-    data_section = _format_data_manifest(data_manifest)
+    data_section = _format_data_manifest(data_manifest, file_summaries)
 
     prompt = f"""# Scientific Finding to Investigate
 
@@ -59,6 +62,8 @@ def build_initial_hypothesis_prompt(
 {data_section}
 
 # Task
+
+Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant.
 
 Generate exactly ONE hypothesis to confirm the association is real — that TF_B's motif
 or binding is enriched at TF_A's binding locations relative to a matched background.
@@ -121,6 +126,7 @@ def build_refinement_prompt(
     last_result: dict[str, Any],
     data_manifest: dict[str, Any],
     group_summary: str | None = None,
+    file_summaries: dict[str, str] | None = None,
 ) -> str:
     """Build prompt for refining hypotheses based on results.
 
@@ -131,11 +137,12 @@ def build_refinement_prompt(
         last_result: Results from testing the last hypothesis
         data_manifest: Available data and tools
         group_summary: Summary of a completed hypothesis group for synthesis
+        file_summaries: Pre-run file inspection output (from iteration 0)
 
     Returns:
         Formatted prompt string
     """
-    data_section = _format_data_manifest(data_manifest)
+    data_section = _format_data_manifest(data_manifest, file_summaries)
 
     prompt = f"""# Scientific Finding Under Investigation
 
@@ -173,58 +180,56 @@ Based on these results, decide how to proceed.
 
 INVESTIGATION GUIDANCE:
 
-Refer to the scientific reasoning approach in your system instructions.
+You are in the **mechanism exploration phase**. The association has already been confirmed.
 
-**Hypothesis prioritization**: Before proposing your next hypothesis, ask yourself:
-does this hypothesis move closer to explaining WHY the finding exists (a causal
-mechanism), or does it further characterize WHAT the finding looks like (more detail
-about the association)?
+**Hard rule — no characterization**: Do NOT propose hypotheses that describe what the data
+looks like. Every hypothesis must propose a specific causal mechanism: a molecular event
+that explains WHY TF_B predicts TF_A's binding.
 
-- If it explains WHY → propose it.
-- If it characterizes WHAT → skip it, unless it is necessary to disambiguate
-  between two competing mechanism hypotheses.
+A valid mechanism hypothesis must:
+1. Name a specific causal agent or molecular event (e.g. pioneer opening, motif containment, protein tethering, 3D proximity)
+2. Predict a direction of effect
+3. Be falsifiable — a negative result would rule out this mechanism
 
-Examples of WHAT (skip these):
-- "Is the overlap directional?" — describes the phenomenon more precisely
+Invalid (characterization — do NOT propose):
 - "Are the shared sites at promoters or enhancers?" — describes where, not why
-- "Does the correlation hold genome-wide?" — confirms the phenomenon at larger scale
+- "Does the correlation hold genome-wide?" — confirms the association at larger scale
+- "What chromatin states do co-occupied sites fall in?" (unless predicting a specific pioneer/accessibility mechanism)
 
-Examples of WHY (propose these):
-- "Does TF_A compete with TF_B for the same binding site?" — proposes a causal process
-- "Does TF_A recruit a co-factor that blocks TF_B?" — proposes a molecular event
-- "Is the motif similarity due to TF_B's motif containing TF_A's core sequence?" — explains the root cause
+Valid (causal mechanism — propose these):
+- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin (chromHMM heterochromatin states) relative to TF_A-only sites"
+- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should exceed PWM match rate"
+- "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites should drop when TF_B motif is absent"
 
 Your hypothesis should also be motivated by previous results — build on what you've learned,
 don't ignore it. But advancing toward mechanism takes priority over following up on details.
 
-CONVERGENCE GUIDELINES (read carefully before deciding):
+CONVERGENCE GUIDELINE:
 
-You may choose CONVERGED only when BOTH conditions are met:
+You may choose CONVERGED only when the evidence supports a specific named mechanism from
+the taxonomy below. You must cite the mechanism category number and name in your response.
 
-Key distinction — a **mechanism** hypothesis proposes a causal sequence: what molecular
-event happens first, what it causes next, and why one leads to the other.
+## Mechanism Taxonomy
 
-**The test**: Can you describe a before/after — what happens at the molecular level when
-the mechanism is active vs inactive? If your conclusion is a list of correlated
-observations (even detailed ones), it is NOT a mechanism.
+1.  **Direct TF-TF protein contacts** — physical binding between TF_A and TF_B proteins (pull-down, co-IP evidence)
+2.  **DNA sequence-mediated** — motif containment, motif similarity, shared core binding sequence
+3.  **Chromatin/accessibility** — pioneer factor activity, nucleosome remodeling, ATAC-seq enrichment
+4.  **Cofactor sharing** — both TFs recruit the same intermediate protein or complex
+5.  **3D genome architecture** — chromatin loop anchors, TAD co-boundaries, Hi-C proximity
+6.  **Phase separation / condensates** — co-recruitment into super-enhancer condensates
+7.  **Post-translational modifications** — phospho/acetyl events that enable co-binding
+8.  **Gene regulatory network** — shared target gene programs, co-regulated gene sets
+9.  **Binding kinetics** — cooperative binding or competitive exclusion at shared sites
+10. **RNA-mediated** — eRNA or lncRNA scaffolding that co-localizes TFs
+11. **Molecular crowding** — high local TF concentration at active loci draws both TFs
+12. **Paralog / family cross-binding** — TF_B binds TF_A's motif due to structural similarity
 
-**Example — NOT a mechanism** (phenomenon):
-"TF_A and TF_B co-bind at promoters via shared E-box motif in a dose-dependent manner."
-This describes what happens, where, and how much — but not why.
+To declare CONVERGED, the evidence must identify the mechanism class that is operating —
+not just show that the two TFs co-occur or that a signal is higher at co-bound sites.
+Co-occurrence alone maps to no category and does not warrant convergence.
 
-**Example — IS a mechanism** (causal process):
-"TF_B acts as a pioneer factor that opens chromatin at E-box promoters; TF_A then binds
-the accessible E-box as a secondary occupant. The ML model detects TF_B's motif as
-predictive because TF_B's prior binding is a prerequisite for TF_A access."
-This proposes a causal sequence (TF_B opens → TF_A follows) and is testable: if true,
-removing TF_B should reduce TF_A binding.
-
-Your conclusion must be a mechanism, not a phenomenon.
-
-1. A mechanism hypothesis has statistical support (p < 0.05, clear effect size).
-   An observation (e.g., "X and Y co-occur") does NOT count.
-2. Your conclusion explains WHY the finding exists. If multiple mechanisms are
-   independently supported, describe how they contribute together.
+If you cannot map your evidence to a specific numbered category, do NOT converge.
+Continue with a new hypothesis that would distinguish between candidate categories.
 
 Do NOT choose REFINE just to add more permutations, stricter matching, or additional
 control analyses on the same hypothesis. A good conclusion acknowledges limitations
@@ -234,23 +239,26 @@ made more rigorous.
 
 Decisions:
 
-1. **CONVERGED**: Both conditions above are met (mechanism supported with p < 0.05, conclusion explains WHY)
-2. **REFINE**: If results partially support the hypothesis but need refinement
-3. **NEW_HYPOTHESIS**: If results refute the hypothesis and a new one is needed
-4. **TECHNICAL_ERROR**: If the code had bugs, parsing errors, or technical failures that prevented proper analysis. This is NOT convergence - we need to fix the code and retry.
-5. **INSUFFICIENT_DATA**: If the biological data truly cannot test the hypotheses (missing data files, wrong data type, etc.)
+1. **CONVERGED**: Evidence supports a specific mechanism from the taxonomy above. You must populate `mechanism_category_number` (integer 1-12) and `mechanism_category_name` in your response.
+2. **REFINE**: Results partially support a hypothesis but are ambiguous — retry with a cleaner test.
+3. **NEW_HYPOTHESIS**: Results refute the current hypothesis — propose a different mechanism.
+4. **TECHNICAL_ERROR**: Code had bugs, parsing errors, or technical failures that prevented proper analysis. Fix and retry — do NOT use this decision to converge.
+5. **INSUFFICIENT_DATA**: The available data truly cannot test the mechanism classes (wrong data type, missing files).
 
-IMPORTANT: Do NOT choose CONVERGED or INSUFFICIENT_DATA if there were technical errors in the code execution. Technical failures (parsing errors, wrong column names, file format issues, etc.) should be marked as TECHNICAL_ERROR so the code can be fixed and re-run.
+IMPORTANT: Do NOT choose CONVERGED or INSUFFICIENT_DATA if there were technical errors in the code execution.
 
 Respond in JSON format:
 {{
     "decision": "CONVERGED" | "REFINE" | "NEW_HYPOTHESIS" | "TECHNICAL_ERROR" | "INSUFFICIENT_DATA",
+    "mechanism_category_number": null,
+    "mechanism_category_name": null,
     "confidence": 0.0-1.0,
     "reasoning": "Explanation for the decision",
     "technical_issues": ["List of specific technical issues to fix, if TECHNICAL_ERROR"],
     "hypotheses": [
         // ONLY include the ONE hypothesis to test next. Do NOT repeat previously tested
         // hypotheses or list all candidates. Return exactly one hypothesis here.
+        // Omit this field when decision is CONVERGED or INSUFFICIENT_DATA.
         {{
             "name": "Hypothesis name",
             "group": "mechanism-slug",
@@ -303,18 +311,38 @@ def build_convergence_check_prompt(
 
 Evaluate whether we have reached a satisfactory conclusion or should continue investigating.
 
-Consider:
-1. Is there a consistent pattern in the evidence?
-2. Have we tested the most plausible hypotheses?
-3. Is additional iteration likely to yield new insights?
+To decide whether to stop: check if the accumulated evidence supports a specific mechanism
+from the taxonomy below. If yes, cite the category number and name. If no mechanism has
+been identified, recommend continuing unless iterations are exhausted.
+
+## Mechanism Taxonomy
+
+1.  **Direct TF-TF protein contacts** — physical binding between TF_A and TF_B proteins
+2.  **DNA sequence-mediated** — motif containment, motif similarity, shared core binding sequence
+3.  **Chromatin/accessibility** — pioneer factor activity, nucleosome remodeling, ATAC-seq enrichment
+4.  **Cofactor sharing** — both TFs recruit the same intermediate protein or complex
+5.  **3D genome architecture** — chromatin loop anchors, TAD co-boundaries, Hi-C proximity
+6.  **Phase separation / condensates** — co-recruitment into super-enhancer condensates
+7.  **Post-translational modifications** — phospho/acetyl events that enable co-binding
+8.  **Gene regulatory network** — shared target gene programs, co-regulated gene sets
+9.  **Binding kinetics** — cooperative binding or competitive exclusion at shared sites
+10. **RNA-mediated** — eRNA or lncRNA scaffolding that co-localizes TFs
+11. **Molecular crowding** — high local TF concentration at active loci draws both TFs
+12. **Paralog / family cross-binding** — TF_B binds TF_A's motif due to structural similarity
 
 Respond in JSON format:
 {{
     "should_continue": true | false,
+    "mechanism_category_number": null,
+    "mechanism_category_name": null,
     "confidence": 0.0-1.0,
     "reasoning": "Explanation for the decision",
-    "conclusion": "Current best explanation for the finding"
+    "conclusion": "Current best explanation for the finding (required when should_continue is false)"
 }}
+
+When should_continue is false, you must populate mechanism_category_number and mechanism_category_name
+if the evidence supports a named mechanism. If no mechanism was identified, set both to null and
+explain in reasoning.
 """
     return prompt
 
@@ -325,6 +353,7 @@ def build_regeneration_prompt(
     feedback: str,
     tested_hypotheses: list[dict[str, Any]],
     data_manifest: dict[str, Any],
+    file_summaries: dict[str, str] | None = None,
 ) -> str:
     """Build prompt for regenerating a rejected hypothesis.
 
@@ -334,11 +363,12 @@ def build_regeneration_prompt(
         feedback: Reviewer's feedback on why it was rejected
         tested_hypotheses: All previously tested hypotheses
         data_manifest: Available data and tools
+        file_summaries: Pre-run file inspection output (from iteration 0)
 
     Returns:
         Formatted prompt string
     """
-    data_section = _format_data_manifest(data_manifest)
+    data_section = _format_data_manifest(data_manifest, file_summaries)
 
     tested_section = ""
     if tested_hypotheses:
@@ -394,7 +424,10 @@ Respond in JSON format:
     return prompt
 
 
-def _format_data_manifest(data_manifest: dict[str, Any]) -> str:
+def _format_data_manifest(
+    data_manifest: dict[str, Any],
+    file_summaries: dict[str, str] | None = None,
+) -> str:
     """Format the data manifest for inclusion in prompts."""
     parts = []
 
@@ -413,5 +446,15 @@ def _format_data_manifest(data_manifest: dict[str, Any]) -> str:
         parts.append("**Available CLI Tools**:")
         for tool in tools:
             parts.append(f"  - {tool}")
+
+    if file_summaries and file_summaries.get("all_files"):
+        parts.append("")
+        parts.append("**File Previews (from pre-run inspection)**:")
+        parts.append("```")
+        preview = file_summaries["all_files"]
+        if len(preview) > 3000:
+            preview = preview[:3000] + "\n... [truncated]"
+        parts.append(preview)
+        parts.append("```")
 
     return "\n".join(parts)

@@ -146,7 +146,7 @@ class TestPipelineState:
         state = PipelineState(finding="X predicts Y")
         state.tested_hypotheses.append({
             "iteration": 1,
-            "description": "H1 description",
+            "name": "H1 name",
             "result": "SUPPORTS",
             "evidence_summary": "Found correlation",
         })
@@ -154,7 +154,7 @@ class TestPipelineState:
         summary = state.get_history_summary()
 
         assert "Iteration 1" in summary
-        assert "H1 description" in summary
+        assert "H1 name" in summary
 
     def test_serialization(self):
         """Test state serialization and deserialization."""

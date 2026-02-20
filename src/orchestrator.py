@@ -245,6 +245,9 @@ class Orchestrator:
             # Save initial state
             self._save_state(run_dir / "state_initial.json")
 
+            # Iteration 0: familiarize with all files (does not count toward max_iterations)
+            await self._run_file_familiarization(run_dir)
+
             # Main loop
             tested_ids: set[int] = set()
             consecutive_hypo_rejections = 0
@@ -310,6 +313,7 @@ class Orchestrator:
                         rejected_hypothesis=hypothesis,
                         feedback=feedback,
                         data_manifest=self.manifest.model_dump(),
+                        file_summaries=self.state.file_summaries or None,
                     )
                     if new_hypo:
                         self.state.add_hypothesis(new_hypo)
@@ -367,12 +371,6 @@ class Orchestrator:
                     "summary": result.get("summary", ""),
                 })
 
-                # Save intermediate state
-                if self.config.pipeline.save_intermediate:
-                    self._save_state(
-                        run_dir / f"state_iter_{self.state.current_iteration}.json"
-                    )
-
                 # Check for convergence or refinement
                 if not self._check_shutdown():
                     # If all retries failed, stop the pipeline
@@ -388,6 +386,12 @@ class Orchestrator:
                         )
                     else:
                         await self._check_and_refine(hypothesis, result)
+
+                # Save intermediate state after refinement so decision/reasoning are included
+                if self.config.pipeline.save_intermediate:
+                    self._save_state(
+                        run_dir / f"state_iter_{self.state.current_iteration}.json"
+                    )
 
             # If max iterations reached without convergence, set a default conclusion
             if not self.state.converged and not self.state.conclusion:
@@ -456,6 +460,40 @@ class Orchestrator:
             # Cleanup
             if self.executor:
                 await self.executor.stop()
+
+    async def _run_file_familiarization(self, run_dir: Path) -> None:
+        """Run iteration 0: inspect all manifest files and store summaries in state.
+
+        Does not count toward max_iterations. Non-blocking — pipeline continues even if
+        inspection fails.
+        """
+        self.logger.info("Running file familiarization (iteration 0)")
+        try:
+            code = await self.coding_agent.generate_inspection_code(
+                self.manifest.model_dump(),
+            )
+            is_valid, err = self.coding_agent.validate_code(code)
+            if not is_valid:
+                self.logger.warning("File inspection code invalid, skipping", {"error": err})
+                return
+
+            # Save code for debugging
+            code_path = run_dir / "file_inspection.py"
+            code_path.write_text(code)
+
+            result = await self.executor.execute(code)
+            stdout = result.stdout or ""
+
+            if stdout.strip():
+                self.state.file_summaries["all_files"] = stdout
+                self.logger.info("File familiarization complete", {
+                    "output_length": len(stdout),
+                })
+            else:
+                self.logger.warning("File inspection produced no output")
+
+        except Exception as e:
+            self.logger.warning("File familiarization failed (non-fatal)", {"error": str(e)})
 
     async def _run_verification_cycle(
         self,
@@ -697,15 +735,26 @@ class Orchestrator:
             last_result=last_result,
             data_manifest=self.manifest.model_dump(),
             group_summary=group_summary,
+            file_summaries=self.state.file_summaries or None,
         )
 
         decision = refinement.get("decision", "CONTINUE")
+
+        # Persist decision and reasoning into the last tested hypothesis for post-run analysis
+        if self.state.tested_hypotheses:
+            self.state.tested_hypotheses[-1]["decision"] = decision
+            self.state.tested_hypotheses[-1]["refinement_reasoning"] = refinement.get("reasoning", "")
+            if decision == "CONVERGED":
+                self.state.tested_hypotheses[-1]["mechanism_category_number"] = refinement.get("mechanism_category_number")
+                self.state.tested_hypotheses[-1]["mechanism_category_name"] = refinement.get("mechanism_category_name")
 
         if decision == "CONVERGED":
             self.state.mark_converged(
                 reason="Hypothesis confirmed",
                 confidence=refinement.get("confidence", 0.8),
                 conclusion=refinement.get("conclusion", ""),
+                mechanism_category_number=refinement.get("mechanism_category_number"),
+                mechanism_category_name=refinement.get("mechanism_category_name"),
             )
         elif decision == "INSUFFICIENT_DATA":
             # Only converge if confidence is high that data truly can't answer the question

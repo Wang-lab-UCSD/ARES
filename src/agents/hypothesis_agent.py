@@ -41,6 +41,7 @@ class HypothesisAgent:
         finding: str,
         context: str,
         data_manifest: dict[str, Any],
+        file_summaries: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Generate initial hypotheses for a scientific finding.
 
@@ -48,13 +49,14 @@ class HypothesisAgent:
             finding: The scientific finding to explain (X predicts Y)
             context: Additional context about the research
             data_manifest: Available data and tools
+            file_summaries: Pre-run file inspection output (from iteration 0)
 
         Returns:
             Dictionary containing hypotheses and recommendation
         """
         self.logger.info("Generating initial hypotheses", {"finding": finding[:100]})
 
-        prompt = build_initial_hypothesis_prompt(finding, context, data_manifest)
+        prompt = build_initial_hypothesis_prompt(finding, context, data_manifest, file_summaries)
         self.memory.add_user_message(prompt, stage="initial")
 
         try:
@@ -86,6 +88,7 @@ class HypothesisAgent:
         last_result: dict[str, Any],
         data_manifest: dict[str, Any],
         group_summary: str | None = None,
+        file_summaries: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Refine hypotheses based on experimental results.
 
@@ -95,6 +98,7 @@ class HypothesisAgent:
             last_result: Results from testing the hypothesis
             data_manifest: Available data and tools
             group_summary: Summary of completed hypothesis group for synthesis
+            file_summaries: Pre-run file inspection output (from iteration 0)
 
         Returns:
             Dictionary containing decision and updated hypotheses
@@ -112,6 +116,7 @@ class HypothesisAgent:
             last_result=last_result,
             data_manifest=data_manifest,
             group_summary=group_summary,
+            file_summaries=file_summaries,
         )
 
         self.memory.add_user_message(
@@ -229,6 +234,7 @@ class HypothesisAgent:
         rejected_hypothesis: dict[str, Any],
         feedback: str,
         data_manifest: dict[str, Any],
+        file_summaries: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
         """Regenerate a hypothesis that was rejected by review.
 
@@ -237,6 +243,7 @@ class HypothesisAgent:
             rejected_hypothesis: The hypothesis that was rejected
             feedback: Reviewer's feedback on why it was rejected
             data_manifest: Available data and tools
+            file_summaries: Pre-run file inspection output (from iteration 0)
 
         Returns:
             New hypothesis dict, or None if generation failed
@@ -252,6 +259,7 @@ class HypothesisAgent:
             feedback=feedback,
             tested_hypotheses=state.tested_hypotheses,
             data_manifest=data_manifest,
+            file_summaries=file_summaries,
         )
 
         try:

@@ -10,6 +10,7 @@ from src.prompts.coding import (
     CODING_SYSTEM_PROMPT,
     build_verification_code_prompt,
     build_error_fix_prompt,
+    _format_data_for_coding,
 )
 from src.utils.logging import get_logger
 
@@ -119,6 +120,61 @@ class CodingAgent:
 
         except Exception as e:
             self.logger.error("Failed to fix code", {"error": str(e)})
+            raise
+
+    async def generate_inspection_code(
+        self,
+        data_manifest: dict[str, Any],
+    ) -> str:
+        """Generate code to inspect all files in the data manifest.
+
+        Used in the pre-loop file familiarization step (iteration 0).
+        No hypothesis involved — just prints file shapes, column names, and samples.
+
+        Args:
+            data_manifest: Available data paths
+
+        Returns:
+            Python code as a string
+        """
+        self.logger.info("Generating file inspection code")
+
+        data_section = _format_data_for_coding(data_manifest)
+
+        prompt = f"""# Task: Inspect All Data Files
+
+Generate Python code to inspect every file listed in the data manifest below.
+
+For each file:
+1. Print the file path as a header
+2. Print the number of lines (or rows for tabular files)
+3. If tabular (TSV, CSV, BED, narrowPeak, any whitespace-delimited): print column names and 3 sample rows using pandas
+4. If binary (bigWig, bam, hic): print the file size in MB and note the format
+5. If FASTA or GTF: print line count and first 3 non-comment lines
+
+Print clearly labeled output per file. Do not perform any analysis or statistics.
+Do not import matplotlib or generate any plots.
+Use try/except around each file so one failure doesn't stop the rest.
+
+# Available Data
+
+{data_section}
+"""
+
+        try:
+            response = await self.llm.complete(
+                [
+                    Message.system(CODING_SYSTEM_PROMPT),
+                    Message.user(prompt),
+                ],
+            )
+
+            code = self._extract_code(response.content)
+            self.logger.info("Generated inspection code", {"code_length": len(code)})
+            return code
+
+        except Exception as e:
+            self.logger.error("Failed to generate inspection code", {"error": str(e)})
             raise
 
     async def generate_with_retry(

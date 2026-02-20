@@ -141,6 +141,9 @@ class PipelineState(BaseModel):
     current_hypothesis_index: int = 0
     tested_hypotheses: list[dict[str, Any]] = []
 
+    # File familiarization output (from iteration 0, before main loop)
+    file_summaries: dict[str, str] = {}
+
     # Evidence accumulation
     evidence: list[dict[str, Any]] = []
 
@@ -148,6 +151,10 @@ class PipelineState(BaseModel):
     converged: bool = False
     convergence_reason: str | None = None
     confidence_level: float = 0.0
+
+    # Named mechanism at convergence (item 17)
+    mechanism_category_number: int | None = None
+    mechanism_category_name: str | None = None
 
     # Final output
     conclusion: str | None = None
@@ -169,12 +176,21 @@ class PipelineState(BaseModel):
         evidence["hypothesis_id"] = self.current_hypothesis_index
         self.evidence.append(evidence)
 
-    def mark_converged(self, reason: str, confidence: float, conclusion: str) -> None:
+    def mark_converged(
+        self,
+        reason: str,
+        confidence: float,
+        conclusion: str,
+        mechanism_category_number: int | None = None,
+        mechanism_category_name: str | None = None,
+    ) -> None:
         """Mark the pipeline as converged."""
         self.converged = True
         self.convergence_reason = reason
         self.confidence_level = confidence
         self.conclusion = conclusion
+        self.mechanism_category_number = mechanism_category_number
+        self.mechanism_category_name = mechanism_category_name
 
     def get_history_summary(self) -> str:
         """Get a summary of all iterations for the hypothesis model."""
@@ -184,8 +200,10 @@ class PipelineState(BaseModel):
         parts = []
         for hypo in self.tested_hypotheses:
             parts.append(f"Iteration {hypo.get('iteration', '?')}:")
-            parts.append(f"  Hypothesis: {hypo.get('description', 'N/A')}")
+            parts.append(f"  Hypothesis: {hypo.get('name', 'N/A')}")
             parts.append(f"  Result: {hypo.get('result', 'N/A')}")
+            data_used = ', '.join(hypo.get('required_data', [])) or 'not specified'
+            parts.append(f"  Data used: {data_used}")
             parts.append(f"  Evidence: {hypo.get('evidence_summary', 'N/A')}")
             parts.append("")
 

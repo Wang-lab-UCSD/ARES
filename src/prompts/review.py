@@ -180,6 +180,38 @@ ATF6 core sequence" is ambiguous — does this mean scan the 21bp motif consensu
 substring, or scan broad peak regions for motif occurrences? The prediction must make the
 scientific comparison clear, not the implementation details.
 
+**3. Association re-test**
+The association (TF_B's motif/binding predicts TF_A binding) was confirmed in the first
+iteration. Look at the prior results below. If any prior hypothesis with a SUPPORTS or
+CONFIRMS result already measured this enrichment, then any hypothesis that re-measures
+TF_A enrichment at TF_B sites — regardless of framing (signal ratio, overlap rate,
+count comparison, fold-enrichment, co-occupancy rate) — is an association re-test. Reject it.
+
+Examples of disguised re-tests:
+- "Is TF_A ChIP-seq signal higher at TF_B-bound sites?" — re-tests the association
+- "Do TF_A peaks have greater TF_B signal in active vs inactive states?" — re-tests enrichment
+- "Is the TF_B:TF_A overlap rate significant genome-wide?" — re-tests at scale
+
+Only reject if a prior result has already confirmed this same enrichment. If the association
+has never been confirmed (first iteration), allow it.
+
+**4. Implied answer already exists**
+If a prior CONFIRMED result logically entails the answer to this hypothesis — either YES or
+NO — reject it. The pipeline should not run code to test what can already be derived from
+prior results.
+
+Examples:
+- Prior CONFIRMED "co-bound sites are in open chromatin (ATAC-seq enriched)"
+  → "H3K27ac enriched at co-bound sites" is implied (open chromatin ≈ active marks) → REJECT
+  → "H3K4me3 enriched at co-bound sites" is implied by the same logic → REJECT
+  → "co-bound sites are in closed/repressed chromatin" is the logical inverse → REJECT
+- Prior CONFIRMED "TF_B motif is enriched in TF_A peaks"
+  → "TF_B motif is NOT enriched in TF_A peaks" is the logical inverse → REJECT
+
+Rule: If you can answer this hypothesis (YES or NO) by reasoning from prior confirmed
+results without running new code, reject it. Only approve if the hypothesis tests something
+genuinely new that cannot be derived.
+
 # Task
 
 Review the hypothesis. Respond in JSON:
