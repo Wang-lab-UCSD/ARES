@@ -38,6 +38,32 @@ You can run multiple targeted scans for different motifs:
   fimo --no-pgc --oc out_rest --thresh 1e-4 --motif MA0138.2 JASPAR_full.meme peaks.fa
   fimo --no-pgc --oc out_atf6 --thresh 1e-4 --motif MA1466.1 JASPAR_full.meme peaks.fa
 
+**RULE 3: NEVER use --text mode**
+
+`fimo --text` streams output to stdout but does NOT compute q-values — the q-value
+column will be all NaN. Code that then filters on `q < 0.05` will find zero hits,
+silently producing wrong results (every hypothesis appears to REFUTE).
+
+WRONG — q-values will be NaN:
+  fimo --no-pgc --text --thresh 1e-4 --motif MA0093.3 motifs.meme peaks.fa
+
+CORRECT — let FIMO write to an output directory:
+  fimo --no-pgc --oc fimo_out --thresh 1e-4 --motif MA0093.3 motifs.meme peaks.fa
+
+Then read from the output file:
+```python
+fimo_df = pd.read_csv('fimo_out/fimo.tsv', sep='\\t', comment='#')
+# q-value column will now contain real values
+hits = fimo_df[fimo_df['q-value'] < 0.05]
+```
+
+**SANITY CHECK — always verify q-values are not NaN**:
+```python
+nan_frac = fimo_df['q-value'].isna().mean()
+if nan_frac > 0.5:
+    raise RuntimeError(f"FIMO q-values are {nan_frac:.0%} NaN — did you use --text mode? Use --oc instead.")
+```
+
 **Complete Workflow**:
 
 STEP 1: Create BED with numeric peak IDs and extract sequences:
