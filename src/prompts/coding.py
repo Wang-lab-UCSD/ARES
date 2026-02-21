@@ -122,7 +122,18 @@ Before reporting ANY count or statistic:
    **Even if the hypothesis specifies more than 100 replicates, cap at 100.** This is a
    hard pipeline limit that overrides the hypothesis.
 
-3. **One statistical test per script**. Your script should answer ONE specific question
+3. **Background sets must use `bedtools shuffle` — never bin the genome**.
+   When you need a random background to compare against foreground peaks, use:
+   ```bash
+   bedtools shuffle -i peaks.bed -g chrom.sizes > background.bed
+   ```
+   This takes 1-2 seconds. NEVER construct a background by:
+   - Binning the entire genome into windows (e.g., 50bp bins over hg38 = 60 million bins)
+   - Running `bigWigAverageOverBed` over genome-wide intervals
+   - Scanning all accessible regions genome-wide
+   These approaches take hours and are never necessary for a simple enrichment test.
+
+4. **One statistical test per script**. Your script should answer ONE specific question
    with ONE primary statistical test. Additional analyses belong in follow-up iterations.
 
    BAD (script does 5 things):
