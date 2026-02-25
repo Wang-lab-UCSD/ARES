@@ -155,6 +155,13 @@ Respond in JSON format:
         // hypotheses or list all candidates. Return exactly one hypothesis here.
         // Omit this field when decision is INSUFFICIENT_DATA.
         {{
+            "scratchpad": {{
+                "mechanism": "The specific molecular event (not a category name)",
+                "causal_chain": "Event A → Event B → measurable outcome C",
+                "prediction_if_mechanism": "What the data would show if this mechanism operates",
+                "prediction_if_co_occupancy_only": "What the data would show if TF_B and TF_A simply co-occur at active sites with no causal relationship",
+                "distinguishable": "YES or NO — and why. If NO, redesign the prediction field below."
+            }},
             "name": "Hypothesis name",
             "group": "mechanism-slug",
             "rationale": "Biological reasoning",
@@ -250,6 +257,13 @@ Each hypothesis must have exactly ONE prediction tested by exactly ONE statistic
 Respond in JSON format:
 {{
     "hypothesis": {{
+        "scratchpad": {{
+            "mechanism": "The specific molecular event (not a category name)",
+            "causal_chain": "Event A → Event B → measurable outcome C",
+            "prediction_if_mechanism": "What the data would show if this mechanism operates",
+            "prediction_if_co_occupancy_only": "What the data would show if TF_B and TF_A simply co-occur at active sites with no causal relationship",
+            "distinguishable": "YES or NO — and why. If NO, redesign the prediction field below."
+        }},
         "name": "Hypothesis name",
         "group": "mechanism-slug",
         "rationale": "Biological reasoning",

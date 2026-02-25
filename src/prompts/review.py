@@ -215,7 +215,17 @@ GOOD (causal mechanism — approve):
 - "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites
   should drop when TF_B motif is absent" — tests a physical interaction mechanism
 
-Reject if the hypothesis does not name a causal mechanism.
+Counterfactual sub-check: For the named mechanism, ask — would this prediction also be true
+if TF_B were merely co-present at active sites, without the named mechanism operating?
+
+If YES — reject. A valid prediction must be FALSE under mere co-occupancy and TRUE only if
+the named mechanism is actually operating. A hypothesis that names "pioneer factor activity"
+but predicts "TF_A signal is higher where TF_B is present" fails this test: higher TF_A
+signal is exactly what you would observe from co-occupancy alone, with no pioneer activity
+required.
+
+Reject if the hypothesis does not name a causal mechanism, OR if the prediction would be
+true under mere co-occupancy even if the named mechanism is absent.
 
 **5. Implied answer already exists**
 If a prior CONFIRMED result logically entails the answer to this hypothesis — either YES or
