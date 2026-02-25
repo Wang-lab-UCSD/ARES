@@ -270,10 +270,10 @@ Use try/except around each file so one failure doesn't stop the rest.
         if not code.strip():
             return False, "Empty code"
 
-        # Check for syntax errors
+        # Check for syntax errors (ValueError covers null bytes in source)
         try:
             compile(code, "<string>", "exec")
-        except SyntaxError as e:
+        except (SyntaxError, ValueError) as e:
             return False, f"Syntax error: {e}"
 
         # Check for potentially dangerous operations
