@@ -259,6 +259,20 @@ The previous code resulted in an error. Please fix it.
 Please identify and fix the issue in the code.
 """
 
+    technical_issues_section = ""
+    technical_issues = hypothesis.get("_technical_issues")
+    if technical_issues:
+        issues_text = "\n".join(f"- {issue}" for issue in technical_issues)
+        technical_issues_section = f"""
+# Known Technical Issues to Fix
+
+The previous attempt at this hypothesis failed due to these specific bugs. You MUST fix all of them:
+
+{issues_text}
+
+Write code that explicitly avoids these issues.
+"""
+
     prompt = f"""# Hypothesis to Verify
 
 **Name**: {hypothesis.get('name', 'N/A')}
@@ -272,7 +286,7 @@ Please identify and fix the issue in the code.
 # Available Data
 
 {data_section}
-{retry_section}
+{technical_issues_section}{retry_section}
 
 # Task
 

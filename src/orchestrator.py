@@ -282,65 +282,74 @@ class Orchestrator:
                 self.state.current_hypothesis_index = hypo_id
 
                 # Stage 1: Review hypothesis before code generation
-                hypo_review = await self.review_agent.review_hypothesis(
-                    hypothesis=hypothesis,
-                    tested_hypotheses=self.state.tested_hypotheses,
-                )
-
-                if not hypo_review.approved:
-                    # If the review LLM failed, approve rather than reject —
-                    # there is no static equivalent for hypothesis quality checks
-                    if any("REVIEW_UNAVAILABLE" in issue for issue in hypo_review.issues_found):
-                        self.logger.warning(
-                            "Hypothesis review LLM unavailable, approving by default",
-                            {"hypothesis": hypothesis.get("name", "N/A")}
-                        )
-                    else:
-                        consecutive_hypo_rejections += 1
-                if not hypo_review.approved and not any(
-                    "REVIEW_UNAVAILABLE" in issue for issue in hypo_review.issues_found
-                ):
-                    feedback = "; ".join(hypo_review.issues_found)
-                    self.logger.info("Hypothesis rejected by review", {
+                # Technical retries skip review — the same hypothesis already passed once;
+                # the review agent would incorrectly flag retries as duplicates
+                if hypothesis.get("_is_retry"):
+                    self.logger.info("Skipping hypothesis review for technical retry", {
                         "hypothesis": hypothesis.get("name", "N/A"),
-                        "feedback": feedback[:200],
-                        "consecutive_rejections": consecutive_hypo_rejections,
                     })
-                    self._display_message(
-                        f"Hypothesis review: {feedback[:200]}",
-                        "warning"
+                    consecutive_hypo_rejections = 0
+                else:
+                    hypo_review = await self.review_agent.review_hypothesis(
+                        hypothesis=hypothesis,
+                        tested_hypotheses=self.state.tested_hypotheses,
                     )
 
-                    if consecutive_hypo_rejections >= max_hypo_rejections:
-                        self.logger.warning("Max consecutive hypothesis rejections reached", {
-                            "count": consecutive_hypo_rejections,
+                    if not hypo_review.approved:
+                        # If the review LLM failed, approve rather than reject —
+                        # there is no static equivalent for hypothesis quality checks
+                        if any("REVIEW_UNAVAILABLE" in issue for issue in hypo_review.issues_found):
+                            self.logger.warning(
+                                "Hypothesis review LLM unavailable, approving by default",
+                                {"hypothesis": hypothesis.get("name", "N/A")}
+                            )
+                        else:
+                            consecutive_hypo_rejections += 1
+
+                    if not hypo_review.approved and not any(
+                        "REVIEW_UNAVAILABLE" in issue for issue in hypo_review.issues_found
+                    ):
+                        feedback = "; ".join(hypo_review.issues_found)
+                        self.logger.info("Hypothesis rejected by review", {
+                            "hypothesis": hypothesis.get("name", "N/A"),
+                            "feedback": feedback[:200],
+                            "consecutive_rejections": consecutive_hypo_rejections,
                         })
                         self._display_message(
-                            f"Pipeline stopping: {max_hypo_rejections} consecutive hypothesis rejections",
-                            "error"
+                            f"Hypothesis review: {feedback[:200]}",
+                            "warning"
                         )
-                        self.state.conclusion = (
-                            f"Pipeline stopped: hypothesis reviewer rejected "
-                            f"{max_hypo_rejections} consecutive hypotheses. "
-                            f"The hypothesis agent may be stuck generating duplicates or vague predictions."
+
+                        if consecutive_hypo_rejections >= max_hypo_rejections:
+                            self.logger.warning("Max consecutive hypothesis rejections reached", {
+                                "count": consecutive_hypo_rejections,
+                            })
+                            self._display_message(
+                                f"Pipeline stopping: {max_hypo_rejections} consecutive hypothesis rejections",
+                                "error"
+                            )
+                            self.state.conclusion = (
+                                f"Pipeline stopped: hypothesis reviewer rejected "
+                                f"{max_hypo_rejections} consecutive hypotheses. "
+                                f"The hypothesis agent may be stuck generating duplicates or vague predictions."
+                            )
+                            break
+
+                        # Ask hypothesis agent to regenerate
+                        new_hypo = await self.hypothesis_agent.regenerate_hypothesis(
+                            state=self.state,
+                            rejected_hypothesis=hypothesis,
+                            feedback=feedback,
+                            data_manifest=self.manifest.model_dump(),
+                            file_summaries=self.state.file_summaries or None,
                         )
-                        break
+                        if new_hypo:
+                            self.state.add_hypothesis(new_hypo)
+                        continue
 
-                    # Ask hypothesis agent to regenerate
-                    new_hypo = await self.hypothesis_agent.regenerate_hypothesis(
-                        state=self.state,
-                        rejected_hypothesis=hypothesis,
-                        feedback=feedback,
-                        data_manifest=self.manifest.model_dump(),
-                        file_summaries=self.state.file_summaries or None,
-                    )
-                    if new_hypo:
-                        self.state.add_hypothesis(new_hypo)
-                    continue
-
-                # Only reset rejection counter on genuine approval (not LLM-unavailable bypass)
-                if hypo_review.approved:
-                    consecutive_hypo_rejections = 0
+                    # Only reset rejection counter on genuine approval (not LLM-unavailable bypass)
+                    if hypo_review.approved:
+                        consecutive_hypo_rejections = 0
 
                 # Only count as an iteration when a hypothesis passes review
                 self.state.current_iteration += 1
@@ -849,7 +858,13 @@ class Orchestrator:
                 )
             else:
                 for hypo in refinement.get("hypotheses", []):
-                    self.state.add_hypothesis(hypo)
+                    hypo["_is_retry"] = True  # Skip hypothesis review for technical retries
+                    hypo["_technical_issues"] = technical_issues  # Pass to coding agent
+                    # Bypass name-dedup in add_hypothesis: retries intentionally
+                    # re-test the same hypothesis name with a code fix
+                    hypo["id"] = len(self.state.hypotheses)
+                    hypo["iteration"] = self.state.current_iteration
+                    self.state.hypotheses.append(hypo)
         elif decision in ("REFINE", "NEW_HYPOTHESIS"):
             for hypo in refinement.get("hypotheses", []):
                 self.state.add_hypothesis(hypo)
