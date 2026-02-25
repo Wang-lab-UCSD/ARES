@@ -261,6 +261,7 @@ class Orchestrator:
             consecutive_hypo_rejections = 0
             max_hypo_rejections = 3
             last_tested_hypothesis: dict[str, Any] | None = None
+            reviewer_rejected: list[dict[str, Any]] = []  # accumulate all reviewer rejections
 
             while (
                 not self.state.converged
@@ -320,6 +321,13 @@ class Orchestrator:
                             "warning"
                         )
 
+                        # Record rejection so regeneration prompt knows what was already tried
+                        reviewer_rejected.append({
+                            "name": hypothesis.get("name", "N/A"),
+                            "prediction": hypothesis.get("prediction", "N/A"),
+                            "feedback": feedback,
+                        })
+
                         if consecutive_hypo_rejections >= max_hypo_rejections:
                             self.logger.warning("Max consecutive hypothesis rejections reached", {
                                 "count": consecutive_hypo_rejections,
@@ -340,6 +348,7 @@ class Orchestrator:
                             state=self.state,
                             rejected_hypothesis=hypothesis,
                             feedback=feedback,
+                            reviewer_rejected=reviewer_rejected,
                             data_manifest=self.manifest.model_dump(),
                             file_summaries=self.state.file_summaries or None,
                         )

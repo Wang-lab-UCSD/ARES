@@ -175,6 +175,7 @@ def build_regeneration_prompt(
     feedback: str,
     tested_hypotheses: list[dict[str, Any]],
     data_manifest: dict[str, Any],
+    reviewer_rejected: list[dict[str, Any]] | None = None,
     file_summaries: dict[str, str] | None = None,
 ) -> str:
     """Build prompt for regenerating a rejected hypothesis.
@@ -185,6 +186,7 @@ def build_regeneration_prompt(
         feedback: Reviewer's feedback on why it was rejected
         tested_hypotheses: All previously tested hypotheses
         data_manifest: Available data and tools
+        reviewer_rejected: All hypotheses rejected by reviewer this session (with feedback)
         file_summaries: Pre-run file inspection output (from iteration 0)
 
     Returns:
@@ -199,6 +201,17 @@ def build_regeneration_prompt(
             parts.append(f"- **{t.get('name', '?')}**: {t.get('prediction', '?')} → {t.get('result', '?')}")
         tested_section = "\n".join(parts)
 
+    # Build list of all reviewer-rejected hypotheses (excluding the current one which is shown separately)
+    prior_rejected_section = ""
+    if reviewer_rejected and len(reviewer_rejected) > 1:
+        parts = []
+        for r in reviewer_rejected[:-1]:  # exclude last (that's the current rejected_hypothesis)
+            parts.append(
+                f"- **{r.get('name', '?')}**: {r.get('prediction', '?')}\n"
+                f"  Rejected because: {r.get('feedback', '?')}"
+            )
+        prior_rejected_section = "\n# Previously Rejected Hypotheses (do NOT repeat these)\n\n" + "\n".join(parts)
+
     prompt = f"""# Scientific Finding
 
 {finding}
@@ -211,7 +224,7 @@ The following hypothesis was rejected by review and must NOT be resubmitted:
 **Prediction**: {rejected_hypothesis.get('prediction', 'N/A')}
 
 **Reason for rejection**: {feedback}
-
+{prior_rejected_section}
 # Previously Tested Hypotheses
 
 {tested_section if tested_section else "None yet."}
