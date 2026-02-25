@@ -203,14 +203,17 @@ def build_regeneration_prompt(
 
     # Build list of all reviewer-rejected hypotheses (excluding the current one which is shown separately)
     prior_rejected_section = ""
-    if reviewer_rejected and len(reviewer_rejected) > 1:
-        parts = []
-        for r in reviewer_rejected[:-1]:  # exclude last (that's the current rejected_hypothesis)
-            parts.append(
-                f"- **{r.get('name', '?')}**: {r.get('prediction', '?')}\n"
-                f"  Rejected because: {r.get('feedback', '?')}"
-            )
-        prior_rejected_section = "\n# Previously Rejected Hypotheses (do NOT repeat these)\n\n" + "\n".join(parts)
+    if reviewer_rejected:
+        current_name = rejected_hypothesis.get("name", "")
+        prior = [r for r in reviewer_rejected if r.get("name") != current_name]
+        if prior:
+            parts = []
+            for r in prior:
+                parts.append(
+                    f"- **{r.get('name', '?')}**: {r.get('prediction', '?')}\n"
+                    f"  Rejected because: {r.get('feedback', '?')}"
+                )
+            prior_rejected_section = "\n# Previously Rejected Hypotheses (do NOT repeat these)\n\n" + "\n".join(parts)
 
     prompt = f"""# Scientific Finding
 
@@ -239,6 +242,8 @@ Generate ONE new hypothesis that:
 1. Does NOT duplicate any previously tested or rejected hypothesis
 2. Has a clear, unambiguous prediction — a coder should know exactly what data to use, what to compare, and what statistical test to run
 3. Tests a different aspect of the finding than what has already been tested
+
+**Hard rule**: Every hypothesis must propose a specific CAUSAL mechanism — a molecular event that explains WHY TF_B predicts TF_A's binding. Characterization hypotheses (describing what data looks like, confirming co-occurrence, or re-stating the original finding at a different scale) are NOT valid.
 
 Each hypothesis must have exactly ONE prediction tested by exactly ONE statistical test.
 

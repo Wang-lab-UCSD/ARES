@@ -3,6 +3,7 @@
 from src.prompts.hypothesis import (
     HYPOTHESIS_SYSTEM_PROMPT,
     build_refinement_prompt,
+    build_regeneration_prompt,
 )
 from src.prompts.coding import (
     CODING_SYSTEM_PROMPT,
@@ -20,6 +21,7 @@ from src.prompts.summary import (
 __all__ = [
     "HYPOTHESIS_SYSTEM_PROMPT",
     "build_refinement_prompt",
+    "build_regeneration_prompt",
     "CODING_SYSTEM_PROMPT",
     "build_verification_code_prompt",
     "build_error_fix_prompt",
