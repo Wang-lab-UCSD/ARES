@@ -270,7 +270,10 @@ Use try/except around each file so one failure doesn't stop the rest.
         if not code.strip():
             return False, "Empty code"
 
-        # Check for syntax errors (ValueError covers null bytes in source)
+        # Check for syntax errors.
+        # ValueError is raised for null bytes on Python <3.12 (our env: 3.10.12).
+        # SyntaxError is raised for null bytes on Python >=3.12 (CPython PR #97594).
+        # Catching both keeps this correct across versions.
         try:
             compile(code, "<string>", "exec")
         except (SyntaxError, ValueError) as e:
