@@ -259,7 +259,7 @@ class Orchestrator:
             # Main loop
             tested_ids: set[int] = set()
             consecutive_hypo_rejections = 0
-            max_hypo_rejections = 3
+            max_hypo_rejections = 6
             last_tested_hypothesis: dict[str, Any] | None = None
             reviewer_rejected: list[dict[str, Any]] = []  # accumulate all reviewer rejections
 
