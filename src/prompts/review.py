@@ -120,9 +120,9 @@ If you fix the code, return the COMPLETE corrected script (not just the changed 
     return prompt
 
 
-HYPOTHESIS_REVIEW_SYSTEM_PROMPT = """You review scientific hypotheses before they are tested. Your job is to catch duplicates and vague predictions BEFORE expensive code generation and execution.
+HYPOTHESIS_REVIEW_SYSTEM_PROMPT = """You review scientific hypotheses before they are tested. Your job is to catch duplicates, vague predictions, and association/characterization hypotheses BEFORE expensive code generation and execution.
 
-Be strict: a wasted hypothesis means wasted computation time. But only reject for real issues — duplicates or genuinely ambiguous predictions."""
+Be strict: a wasted hypothesis means wasted computation time. But only reject for real issues — duplicates, genuinely ambiguous predictions, or hypotheses that fail to name a causal mechanism."""
 
 
 def build_hypothesis_review_prompt(
@@ -169,7 +169,7 @@ If duplicate → REJECT.
 Is the prediction specific enough that a coder would know exactly:
 - What to compare (group A vs group B)?
 - What statistical test to run?
-- What result would support vs refute the hypothesis?
+- What result would support vs refuse the hypothesis?
 
 Do NOT reject for missing file paths, column names, or tool parameters — the coding agent
 has access to the full data manifest and will resolve those. The hypothesis is a scientific
@@ -180,22 +180,44 @@ ATF6 core sequence" is ambiguous — does this mean scan the 21bp motif consensu
 substring, or scan broad peak regions for motif occurrences? The prediction must make the
 scientific comparison clear, not the implementation details.
 
-**3. Association re-test**
-The association (TF_B's motif/binding predicts TF_A binding) was confirmed in the first
-iteration. Look at the prior results below. If any prior hypothesis with a SUPPORTS or
-CONFIRMS result already measured this enrichment, then any hypothesis that re-measures
-TF_A enrichment at TF_B sites — regardless of framing (signal ratio, overlap rate,
-count comparison, fold-enrichment, co-occupancy rate) — is an association re-test. Reject it.
+**3. Duplicate mechanism test**
+Look at the prior results below. If a prior SUPPORTS result already established a specific
+mechanism finding, any hypothesis testing the same mechanism claim — regardless of framing —
+is a duplicate. Reject it.
 
-Examples of disguised re-tests:
-- "Is TF_A ChIP-seq signal higher at TF_B-bound sites?" — re-tests the association
-- "Do TF_A peaks have greater TF_B signal in active vs inactive states?" — re-tests enrichment
-- "Is the TF_B:TF_A overlap rate significant genome-wide?" — re-tests at scale
+Examples of disguised duplicates:
+- Prior SUPPORTS "TF_B motif enriched at TF_A peaks" → any re-measurement of TF_A/TF_B
+  enrichment or overlap in any form is a duplicate
+- Prior SUPPORTS "co-bound sites are in active chromatin" → "H3K27ac enriched at co-bound
+  sites" is a duplicate (same mechanism class, different proxy)
+- Prior SUPPORTS "TF_B is at loop anchors" → "TF_B:TF_A overlap rate genome-wide" tests
+  the same spatial co-localization claim at larger scale
 
-Only reject if a prior result has already confirmed this same enrichment. If the association
-has never been confirmed (first iteration), allow it.
+Only reject if a prior SUPPORTS result already established this same mechanism claim. If the
+prior list is empty, this check does not apply — approve.
 
-**4. Implied answer already exists**
+**4. Mechanism vs. association**
+Every hypothesis must name a specific causal mechanism — a molecular event that explains
+WHY TF_B predicts TF_A's binding. Reject hypotheses that merely characterize the data or
+re-confirm co-occurrence without proposing a mechanism.
+
+BAD (characterization or co-occurrence re-statement — reject):
+- "Are the shared sites at promoters or enhancers?" — describes where, not why
+- "Does the correlation hold genome-wide?" — confirms co-occurrence at larger scale
+- "What chromatin states do co-occupied sites fall in?" — describes, does not explain
+- "Is TF_A enrichment higher where TF_B is present?" — re-states the original finding
+
+GOOD (causal mechanism — approve):
+- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin
+  (ChromHMM heterochromatin states) relative to TF_A-only sites" — tests a molecular event
+- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should
+  exceed PWM match rate" — tests a sequence-level mechanism
+- "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites
+  should drop when TF_B motif is absent" — tests a physical interaction mechanism
+
+Reject if the hypothesis does not name a causal mechanism.
+
+**5. Implied answer already exists**
 If a prior CONFIRMED result logically entails the answer to this hypothesis — either YES or
 NO — reject it. The pipeline should not run code to test what can already be derived from
 prior results.

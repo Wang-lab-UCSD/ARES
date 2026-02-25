@@ -8,9 +8,7 @@ from src.llm.base import LLMProvider, Message
 from src.memory.conversation import ConversationMemory, PipelineState
 from src.prompts.hypothesis import (
     HYPOTHESIS_SYSTEM_PROMPT,
-    build_initial_hypothesis_prompt,
     build_refinement_prompt,
-    build_convergence_check_prompt,
     build_regeneration_prompt,
 )
 from src.utils.logging import get_logger
@@ -20,9 +18,8 @@ class HypothesisAgent:
     """Agent for generating and refining scientific hypotheses.
 
     This agent:
-    - Generates initial hypotheses based on a scientific finding
-    - Refines hypotheses based on experimental results
-    - Decides when to converge or continue iterating
+    - Generates the first mechanism hypothesis (no prior history) and refines
+      subsequent ones based on experimental results, using a single unified prompt.
     - Maintains conversation memory for context
     """
 
@@ -36,66 +33,24 @@ class HypothesisAgent:
         self.memory = ConversationMemory(system_message=HYPOTHESIS_SYSTEM_PROMPT)
         self.logger = get_logger("hypothesis_agent")
 
-    async def generate_initial_hypotheses(
-        self,
-        finding: str,
-        context: str,
-        data_manifest: dict[str, Any],
-        file_summaries: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Generate initial hypotheses for a scientific finding.
-
-        Args:
-            finding: The scientific finding to explain (X predicts Y)
-            context: Additional context about the research
-            data_manifest: Available data and tools
-            file_summaries: Pre-run file inspection output (from iteration 0)
-
-        Returns:
-            Dictionary containing hypotheses and recommendation
-        """
-        self.logger.info("Generating initial hypotheses", {"finding": finding[:100]})
-
-        prompt = build_initial_hypothesis_prompt(finding, context, data_manifest, file_summaries)
-        self.memory.add_user_message(prompt, stage="initial")
-
-        try:
-            result = await self.llm.complete_json(
-                self.memory.get_messages(),
-            )
-
-            self.memory.add_assistant_message(
-                str(result),
-                stage="initial",
-                hypothesis_count=len(result.get("hypotheses", [])),
-            )
-
-            self.logger.info("Generated hypotheses", {
-                "count": len(result.get("hypotheses", [])),
-                "recommended_first": result.get("recommended_first", 0),
-            })
-
-            return result
-
-        except Exception as e:
-            self.logger.error("Failed to generate hypotheses", {"error": str(e)})
-            raise
-
     async def refine_hypotheses(
         self,
         state: PipelineState,
-        last_hypothesis: dict[str, Any],
-        last_result: dict[str, Any],
+        last_hypothesis: dict[str, Any] | None,
+        last_result: dict[str, Any] | None,
         data_manifest: dict[str, Any],
         group_summary: str | None = None,
         file_summaries: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Refine hypotheses based on experimental results.
+        """Generate or refine hypotheses based on experimental results.
+
+        On the first iteration, pass last_hypothesis=None and last_result=None
+        to generate the initial mechanism hypothesis with no prior history.
 
         Args:
             state: Current pipeline state
-            last_hypothesis: The hypothesis that was just tested
-            last_result: Results from testing the hypothesis
+            last_hypothesis: The hypothesis that was just tested, or None on first iteration
+            last_result: Results from testing the hypothesis, or None on first iteration
             data_manifest: Available data and tools
             group_summary: Summary of completed hypothesis group for synthesis
             file_summaries: Pre-run file inspection output (from iteration 0)
@@ -105,7 +60,7 @@ class HypothesisAgent:
         """
         self.logger.info("Refining hypotheses", {
             "iteration": state.current_iteration,
-            "last_hypothesis": last_hypothesis.get("name", "N/A"),
+            "last_hypothesis": last_hypothesis.get("name", "N/A") if last_hypothesis else "None (first iteration)",
             "group_complete": group_summary is not None,
         })
 
@@ -146,48 +101,6 @@ class HypothesisAgent:
 
         except Exception as e:
             self.logger.error("Failed to refine hypotheses", {"error": str(e)})
-            raise
-
-    async def check_convergence(
-        self,
-        state: PipelineState,
-    ) -> dict[str, Any]:
-        """Check if the pipeline should stop iterating.
-
-        Args:
-            state: Current pipeline state
-
-        Returns:
-            Dictionary with convergence decision
-        """
-        self.logger.info("Checking convergence", {
-            "iteration": state.current_iteration,
-            "evidence_count": len(state.evidence),
-        })
-
-        prompt = build_convergence_check_prompt(
-            finding=state.finding,
-            history_summary=state.get_history_summary(),
-            total_evidence=state.evidence,
-        )
-
-        try:
-            result = await self.llm.complete_json(
-                [
-                    Message.system(HYPOTHESIS_SYSTEM_PROMPT),
-                    Message.user(prompt),
-                ],
-            )
-
-            self.logger.info("Convergence check result", {
-                "should_continue": result.get("should_continue"),
-                "confidence": result.get("confidence"),
-            })
-
-            return result
-
-        except Exception as e:
-            self.logger.error("Failed to check convergence", {"error": str(e)})
             raise
 
     def get_next_hypothesis(

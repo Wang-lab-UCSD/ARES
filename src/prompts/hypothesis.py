@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-HYPOTHESIS_SYSTEM_PROMPT = """You are a scientific hypothesis generation assistant specializing in bioinformatics. You investigate findings of the form: "ML model says TF_B's motif predicts TF_A's binding — why?"
+HYPOTHESIS_SYSTEM_PROMPT = """You are a molecular biologist specializing in transcriptional regulation, working with bioinformatics tools. You investigate findings of the form: "ML model says TF_B's motif predicts TF_A's binding — why?"
+
+You are given two TFs: TF_A is the primary TF with ChIP-seq or CUT&TAG binding experiments; the motif of TF_B is found to be the most predictive feature to TF_A's binding signals. This is a surprising observation. You aim to find the molecular mechanisms to explain this.
 
 ## How to Approach Mechanism Exploration
 
@@ -14,7 +16,7 @@ Before proposing a hypothesis, reason from two directions:
 
 1. **From biology**: What do you already know about TF_A and TF_B? Given their known functions and the cell type, what causal relationship is plausible?
 
-2. **From the data**: Given what previous iterations have shown, what is the simplest explanation that accounts for ALL observations — including surprising or contradictory ones?
+2. **From the data**: Given what previous iterations have shown, what is the simplest molecular mechanism that accounts for ALL observations — including surprising or contradictory ones?
 
 Then ask: what single test would most efficiently distinguish between the top competing explanations?
 
@@ -22,119 +24,32 @@ One diagnostic question is usually worth asking early, because it eliminates hal
 
 ## Key Principles
 
-- The final conclusion must synthesize ALL results (including refuted hypotheses), not just the one that was supported.
+- The final conclusion must synthesize ALL results (including refused hypotheses), not just the one that was supported.
 - Surprising or contradictory results are the most valuable clues — build on them.
 - A good conclusion describes a causal sequence: what happens first, what it causes, and why.
-- Your ultimate goal is to identify which specific mechanism class from a named taxonomy explains the finding — you will see the full taxonomy when evaluating convergence.
+- Your ultimate goal is to identify a specific mechanism that explains why TF_B is identified as the most predictive feature of TF_A's binding signals.
 """
-
-
-def build_initial_hypothesis_prompt(
-    finding: str,
-    context: str,
-    data_manifest: dict[str, Any],
-    file_summaries: dict[str, str] | None = None,
-) -> str:
-    """Build the initial prompt for hypothesis generation.
-
-    Args:
-        finding: The scientific finding to explain (X predicts Y)
-        context: Additional context about the research
-        data_manifest: Available data and tools
-        file_summaries: Pre-run file inspection output (from iteration 0)
-
-    Returns:
-        Formatted prompt string
-    """
-    # Format available data
-    data_section = _format_data_manifest(data_manifest, file_summaries)
-
-    prompt = f"""# Scientific Finding to Investigate
-
-{finding}
-
-# Context
-
-{context}
-
-# Available Data and Tools
-
-{data_section}
-
-# Task
-
-Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant.
-
-Generate exactly ONE hypothesis to confirm the association is real — that TF_B's motif
-or binding is enriched at TF_A's binding locations relative to a matched background.
-Choose the single most efficient statistical test for this confirmation.
-
-**Computational constraint**: Prefer analytical tests (Fisher's exact, Mann-Whitney) over
-permutations. If a permutation test is truly needed, specify at most 100 replicates.
-
-Each hypothesis must have exactly ONE prediction tested by exactly ONE statistical test.
-If a phase has multiple testable aspects, split them into separate hypotheses and give
-them all the same `group` string so they are tested together.
-
-**Prediction quality** — each prediction must specify:
-- What metric is measured
-- The comparison (group A vs group B)
-- The expected direction and approximate magnitude
-- The statistical test
-
-Examples:
-- GOOD: "TF_A peaks will overlap TF_B peaks at >= 5x the rate expected by chance
-  (bedtools shuffle, 100 permutations, Fisher's exact p < 0.05)"
-- BAD: "TF_B motif will be found in TF_A peaks" (no comparison, no magnitude)
-- BAD: "TF_B peaks are closer to TSS AND have higher GC%" (two tests — split)
-
-For each hypothesis, provide:
-1. **Hypothesis Name**: A brief descriptive name
-2. **Rationale**: The biological reasoning behind this hypothesis
-3. **Prediction**: Quantitative, falsifiable (see examples above)
-4. **Verification Plan**: Steps leading to ONE statistical test
-
-Respond in JSON format:
-{{
-    "hypotheses": [
-        {{
-            "name": "Hypothesis name",
-            "group": "mechanism-slug",
-            "rationale": "Biological reasoning",
-            "prediction": "Quantitative, falsifiable prediction with metric, comparison, and expected direction/magnitude",
-            "verification_plan": ["Step 1", "Step 2", ...],
-            "priority": 1,
-            "required_data": ["data_key_1", "data_key_2"]
-        }},
-        ...
-    ],
-    "reasoning": "Why this is the most efficient association confirmation test"
-}}
-
-Note on `group`: Hypotheses that are sub-parts of the same broad mechanism MUST share the
-same `group` string (a short kebab-case slug, e.g. "promoter-mechanism"). The pipeline will
-test all hypotheses in a group before moving on. Hypotheses exploring independent mechanisms
-should have different group values.
-"""
-    return prompt
 
 
 def build_refinement_prompt(
     finding: str,
     history_summary: str,
-    last_hypothesis: dict[str, Any],
-    last_result: dict[str, Any],
+    last_hypothesis: dict[str, Any] | None,
+    last_result: dict[str, Any] | None,
     data_manifest: dict[str, Any],
     group_summary: str | None = None,
     file_summaries: dict[str, str] | None = None,
 ) -> str:
     """Build prompt for refining hypotheses based on results.
 
+    Also used for the first iteration (last_hypothesis=None, last_result=None),
+    in which case no prior hypothesis section is shown.
+
     Args:
         finding: Original scientific finding
         history_summary: Summary of all previous iterations
-        last_hypothesis: The most recently tested hypothesis
-        last_result: Results from testing the last hypothesis
+        last_hypothesis: The most recently tested hypothesis, or None on first iteration
+        last_result: Results from testing the last hypothesis, or None on first iteration
         data_manifest: Available data and tools
         group_summary: Summary of a completed hypothesis group for synthesis
         file_summaries: Pre-run file inspection output (from iteration 0)
@@ -144,15 +59,8 @@ def build_refinement_prompt(
     """
     data_section = _format_data_manifest(data_manifest, file_summaries)
 
-    prompt = f"""# Scientific Finding Under Investigation
-
-{finding}
-
-# Previous Iterations
-
-{history_summary}
-
-# Latest Hypothesis Tested
+    if last_hypothesis is not None and last_result is not None:
+        latest_section = f"""# Latest Hypothesis Tested
 
 **Name**: {last_hypothesis.get('name', 'N/A')}
 **Rationale**: {last_hypothesis.get('rationale', 'N/A')}
@@ -166,13 +74,29 @@ def build_refinement_prompt(
 {last_result.get('evidence', 'No evidence recorded')}
 
 **Interpretation**:
-{last_result.get('interpretation', 'No interpretation')}
+{last_result.get('interpretation', 'No interpretation')}"""
+    else:
+        latest_section = """# First Iteration
+
+No hypotheses have been tested yet. This is the start of the investigation.
+
+Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant."""
+
+    prompt = f"""# Scientific Finding Under Investigation
+
+{finding}
+
+# Previous Iterations
+
+{history_summary if history_summary else "None yet."}
+
+{latest_section}
 
 # Available Data and Tools
 
 {data_section}
 
-{"" if not group_summary else group_summary}
+{group_summary or ""}
 
 # Task
 
@@ -180,14 +104,15 @@ Based on these results, decide how to proceed.
 
 INVESTIGATION GUIDANCE:
 
-You are in the **mechanism exploration phase**. The association has already been confirmed.
+You are in the **mechanism exploration phase**.
 
 **Hard rule — no characterization**: Do NOT propose hypotheses that describe what the data
 looks like. Every hypothesis must propose a specific causal mechanism: a molecular event
-that explains WHY TF_B predicts TF_A's binding.
+that explains WHY TF_B predicts TF_A's binding — such as TF_B modifying chromatin or
+recruiting a co-factor to facilitate TF_A's binding.
 
 A valid mechanism hypothesis must:
-1. Name a specific causal agent or molecular event (e.g. pioneer opening, motif containment, protein tethering, 3D proximity)
+1. Name a specific causal mechanism or molecular event (e.g. pioneer opening, motif containment, protein tethering, 3D proximity)
 2. Predict a direction of effect
 3. Be falsifiable — a negative result would rule out this mechanism
 
@@ -204,33 +129,6 @@ Valid (causal mechanism — propose these):
 Your hypothesis should also be motivated by previous results — build on what you've learned,
 don't ignore it. But advancing toward mechanism takes priority over following up on details.
 
-CONVERGENCE GUIDELINE:
-
-You may choose CONVERGED only when the evidence supports a specific named mechanism from
-the taxonomy below. You must cite the mechanism category number and name in your response.
-
-## Mechanism Taxonomy
-
-1.  **Direct TF-TF protein contacts** — physical binding between TF_A and TF_B proteins (pull-down, co-IP evidence)
-2.  **DNA sequence-mediated** — motif containment, motif similarity, shared core binding sequence
-3.  **Chromatin/accessibility** — pioneer factor activity, nucleosome remodeling, ATAC-seq enrichment
-4.  **Cofactor sharing** — both TFs recruit the same intermediate protein or complex
-5.  **3D genome architecture** — chromatin loop anchors, TAD co-boundaries, Hi-C proximity
-6.  **Phase separation / condensates** — co-recruitment into super-enhancer condensates
-7.  **Post-translational modifications** — phospho/acetyl events that enable co-binding
-8.  **Gene regulatory network** — shared target gene programs, co-regulated gene sets
-9.  **Binding kinetics** — cooperative binding or competitive exclusion at shared sites
-10. **RNA-mediated** — eRNA or lncRNA scaffolding that co-localizes TFs
-11. **Molecular crowding** — high local TF concentration at active loci draws both TFs
-12. **Paralog / family cross-binding** — TF_B binds TF_A's motif due to structural similarity
-
-To declare CONVERGED, the evidence must identify the mechanism class that is operating —
-not just show that the two TFs co-occur or that a signal is higher at co-bound sites.
-Co-occurrence alone maps to no category and does not warrant convergence.
-
-If you cannot map your evidence to a specific numbered category, do NOT converge.
-Continue with a new hypothesis that would distinguish between candidate categories.
-
 Do NOT choose REFINE just to add more permutations, stricter matching, or additional
 control analyses on the same hypothesis. A good conclusion acknowledges limitations
 without requiring them to be resolved first. REFINE is for when results are ambiguous
@@ -239,26 +137,23 @@ made more rigorous.
 
 Decisions:
 
-1. **CONVERGED**: Evidence supports a specific mechanism from the taxonomy above. You must populate `mechanism_category_number` (integer 1-12) and `mechanism_category_name` in your response.
-2. **REFINE**: Results partially support a hypothesis but are ambiguous — retry with a cleaner test.
-3. **NEW_HYPOTHESIS**: Results refute the current hypothesis — propose a different mechanism.
-4. **TECHNICAL_ERROR**: Code had bugs, parsing errors, or technical failures that prevented proper analysis. Fix and retry — do NOT use this decision to converge.
-5. **INSUFFICIENT_DATA**: The available data truly cannot test the mechanism classes (wrong data type, missing files).
+1. **REFINE**: Results partially support a hypothesis but are ambiguous — retry with a cleaner test.
+2. **NEW_HYPOTHESIS**: Results refuse the current hypothesis — propose a different mechanism.
+3. **TECHNICAL_ERROR**: Code had bugs, parsing errors, or technical failures that prevented proper analysis. Fix and retry.
+4. **INSUFFICIENT_DATA**: The available data truly cannot test this mechanism class (wrong data type, missing files).
 
-IMPORTANT: Do NOT choose CONVERGED or INSUFFICIENT_DATA if there were technical errors in the code execution.
+IMPORTANT: Do NOT choose INSUFFICIENT_DATA if there were technical errors in the code execution.
 
 Respond in JSON format:
 {{
-    "decision": "CONVERGED" | "REFINE" | "NEW_HYPOTHESIS" | "TECHNICAL_ERROR" | "INSUFFICIENT_DATA",
-    "mechanism_category_number": null,
-    "mechanism_category_name": null,
+    "decision": "REFINE" | "NEW_HYPOTHESIS" | "TECHNICAL_ERROR" | "INSUFFICIENT_DATA",
     "confidence": 0.0-1.0,
     "reasoning": "Explanation for the decision",
     "technical_issues": ["List of specific technical issues to fix, if TECHNICAL_ERROR"],
     "hypotheses": [
         // ONLY include the ONE hypothesis to test next. Do NOT repeat previously tested
         // hypotheses or list all candidates. Return exactly one hypothesis here.
-        // Omit this field when decision is CONVERGED or INSUFFICIENT_DATA.
+        // Omit this field when decision is INSUFFICIENT_DATA.
         {{
             "name": "Hypothesis name",
             "group": "mechanism-slug",
@@ -268,81 +163,8 @@ Respond in JSON format:
             "priority": 1,
             "required_data": ["data_key_1", "data_key_2"]
         }}
-    ],
-    "conclusion": "Final conclusion if CONVERGED or INSUFFICIENT_DATA"
+    ]
 }}
-"""
-    return prompt
-
-
-def build_convergence_check_prompt(
-    finding: str,
-    history_summary: str,
-    total_evidence: list[dict[str, Any]],
-) -> str:
-    """Build prompt to check if we should stop iterating.
-
-    Args:
-        finding: Original scientific finding
-        history_summary: Summary of all iterations
-        total_evidence: All accumulated evidence
-
-    Returns:
-        Formatted prompt string
-    """
-    evidence_text = "\n".join([
-        f"- Iteration {e.get('iteration', '?')}: {e.get('summary', 'N/A')}"
-        for e in total_evidence
-    ])
-
-    prompt = f"""# Scientific Finding
-
-{finding}
-
-# Investigation History
-
-{history_summary}
-
-# Accumulated Evidence
-
-{evidence_text}
-
-# Task
-
-Evaluate whether we have reached a satisfactory conclusion or should continue investigating.
-
-To decide whether to stop: check if the accumulated evidence supports a specific mechanism
-from the taxonomy below. If yes, cite the category number and name. If no mechanism has
-been identified, recommend continuing unless iterations are exhausted.
-
-## Mechanism Taxonomy
-
-1.  **Direct TF-TF protein contacts** — physical binding between TF_A and TF_B proteins
-2.  **DNA sequence-mediated** — motif containment, motif similarity, shared core binding sequence
-3.  **Chromatin/accessibility** — pioneer factor activity, nucleosome remodeling, ATAC-seq enrichment
-4.  **Cofactor sharing** — both TFs recruit the same intermediate protein or complex
-5.  **3D genome architecture** — chromatin loop anchors, TAD co-boundaries, Hi-C proximity
-6.  **Phase separation / condensates** — co-recruitment into super-enhancer condensates
-7.  **Post-translational modifications** — phospho/acetyl events that enable co-binding
-8.  **Gene regulatory network** — shared target gene programs, co-regulated gene sets
-9.  **Binding kinetics** — cooperative binding or competitive exclusion at shared sites
-10. **RNA-mediated** — eRNA or lncRNA scaffolding that co-localizes TFs
-11. **Molecular crowding** — high local TF concentration at active loci draws both TFs
-12. **Paralog / family cross-binding** — TF_B binds TF_A's motif due to structural similarity
-
-Respond in JSON format:
-{{
-    "should_continue": true | false,
-    "mechanism_category_number": null,
-    "mechanism_category_name": null,
-    "confidence": 0.0-1.0,
-    "reasoning": "Explanation for the decision",
-    "conclusion": "Current best explanation for the finding (required when should_continue is false)"
-}}
-
-When should_continue is false, you must populate mechanism_category_number and mechanism_category_name
-if the evidence supports a named mechanism. If no mechanism was identified, set both to null and
-explain in reasoning.
 """
     return prompt
 

@@ -230,23 +230,31 @@ class Orchestrator:
             )
             await self.executor.start()
 
-            # Generate initial hypotheses
-            self.logger.info("Generating initial hypotheses")
-            initial_result = await self.hypothesis_agent.generate_initial_hypotheses(
-                finding=self.state.finding,
-                context=self.state.context,
+            # Iteration 0: familiarize with all files (does not count toward max_iterations)
+            await self._run_file_familiarization(run_dir)
+
+            # Generate first mechanism hypothesis (no prior history)
+            self.logger.info("Generating initial mechanism hypothesis")
+            initial_result = await self.hypothesis_agent.refine_hypotheses(
+                state=self.state,
+                last_hypothesis=None,
+                last_result=None,
                 data_manifest=self.manifest.model_dump(),
+                file_summaries=self.state.file_summaries or None,
             )
 
             # Store hypotheses
             for hypo in initial_result.get("hypotheses", []):
                 self.state.add_hypothesis(hypo)
 
+            if not self.state.hypotheses:
+                self.logger.warning(
+                    "No initial hypothesis generated — pipeline cannot proceed. "
+                    "Check if the LLM returned a valid 'hypotheses' list."
+                )
+
             # Save initial state
             self._save_state(run_dir / "state_initial.json")
-
-            # Iteration 0: familiarize with all files (does not count toward max_iterations)
-            await self._run_file_familiarization(run_dir)
 
             # Main loop
             tested_ids: set[int] = set()
@@ -280,7 +288,18 @@ class Orchestrator:
                 )
 
                 if not hypo_review.approved:
-                    consecutive_hypo_rejections += 1
+                    # If the review LLM failed, approve rather than reject —
+                    # there is no static equivalent for hypothesis quality checks
+                    if any("REVIEW_UNAVAILABLE" in issue for issue in hypo_review.issues_found):
+                        self.logger.warning(
+                            "Hypothesis review LLM unavailable, approving by default",
+                            {"hypothesis": hypothesis.get("name", "N/A")}
+                        )
+                    else:
+                        consecutive_hypo_rejections += 1
+                if not hypo_review.approved and not any(
+                    "REVIEW_UNAVAILABLE" in issue for issue in hypo_review.issues_found
+                ):
                     feedback = "; ".join(hypo_review.issues_found)
                     self.logger.info("Hypothesis rejected by review", {
                         "hypothesis": hypothesis.get("name", "N/A"),
@@ -319,7 +338,9 @@ class Orchestrator:
                         self.state.add_hypothesis(new_hypo)
                     continue
 
-                consecutive_hypo_rejections = 0
+                # Only reset rejection counter on genuine approval (not LLM-unavailable bypass)
+                if hypo_review.approved:
+                    consecutive_hypo_rejections = 0
 
                 # Only count as an iteration when a hypothesis passes review
                 self.state.current_iteration += 1
@@ -396,14 +417,14 @@ class Orchestrator:
             # If max iterations reached without convergence, set a default conclusion
             if not self.state.converged and not self.state.conclusion:
                 supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS"]
-                refuted = [h for h in self.state.tested_hypotheses if h.get("result") == "REFUTES"]
+                refused = [h for h in self.state.tested_hypotheses if h.get("result") == "REFUSES"]
                 if supported:
                     names = ", ".join(h["name"] for h in supported)
-                    refuted_names = ", ".join(h["name"] for h in refuted)
+                    refused_names = ", ".join(h["name"] for h in refused)
                     self.state.conclusion = (
-                        f"Max iterations reached. The association is supported "
-                        f"({names}), but the underlying mechanism could not be "
-                        f"determined. Ruled-out explanations: {refuted_names}."
+                        f"Max iterations reached. Supported mechanism evidence found "
+                        f"({names}), but no mechanism achieved full convergence. "
+                        f"Ruled-out mechanisms: {refused_names}."
                     )
                 else:
                     self.state.conclusion = "Max iterations reached without finding a supported hypothesis."
@@ -551,26 +572,32 @@ class Orchestrator:
             )
 
             if not review_result.approved:
-                self.logger.info("Code review found issues", {
-                    "issues": review_result.issues_found,
-                    "attempt": attempt + 1,
-                })
-                self._display_message(
-                    f"Code review: {'; '.join(review_result.issues_found[:3])}",
-                    "warning"
-                )
-                if review_result.corrected_code:
-                    code = review_result.corrected_code
-                    # Re-validate the corrected code
-                    is_valid, validation_error = self.coding_agent.validate_code(code)
-                    if not is_valid:
+                # If LLM review failed, fall back to static rule check
+                if any("REVIEW_UNAVAILABLE" in issue for issue in review_result.issues_found):
+                    self.logger.warning("LLM code review unavailable, falling back to static check")
+                    review_result = self.review_agent.static_review_code(code)
+
+                if not review_result.approved:
+                    self.logger.info("Code review found issues", {
+                        "issues": review_result.issues_found,
+                        "attempt": attempt + 1,
+                    })
+                    self._display_message(
+                        f"Code review: {'; '.join(review_result.issues_found[:3])}",
+                        "warning"
+                    )
+                    if review_result.corrected_code:
+                        code = review_result.corrected_code
+                        # Re-validate the corrected code
+                        is_valid, validation_error = self.coding_agent.validate_code(code)
+                        if not is_valid:
+                            last_code = code
+                            last_error = validation_error
+                            continue
+                    else:
                         last_code = code
-                        last_error = validation_error
+                        last_error = f"Code review issues: {'; '.join(review_result.issues_found)}"
                         continue
-                else:
-                    last_code = code
-                    last_error = f"Code review issues: {'; '.join(review_result.issues_found)}"
-                    continue
 
             # Request approval for code if interactive mode
             code_approval = await self._approve_code(
@@ -648,6 +675,8 @@ class Orchestrator:
                     last_stdout = result.stdout
                     last_stderr = result.stderr
                     continue
+                # Attach raw stdout for independent convergence check
+                summary["_raw_output"] = result.stdout or ""
                 return summary
             else:
                 self.logger.warning("Execution failed", {
@@ -668,6 +697,7 @@ class Orchestrator:
             "reasoning": f"Code execution failed after {max_retries + 1} attempts",
             "issues": [last_error],
             "summary": f"Failed to verify hypothesis due to execution errors: {last_error}",
+            "_raw_output": "",
         }
 
     def _build_group_summary(self, hypothesis: dict[str, Any]) -> str | None:
@@ -709,7 +739,7 @@ class Orchestrator:
         parts.append(
             "Synthesize these results when deciding next steps. "
             "Consider whether the group as a whole supports, partially supports, "
-            "or refutes the broad mechanism."
+            "or refuses the broad mechanism."
         )
         return "\n".join(parts)
 
@@ -720,13 +750,45 @@ class Orchestrator:
     ) -> None:
         """Check results and potentially refine hypotheses.
 
+        Convergence is determined first by an independent SummaryAgent check,
+        then HypothesisAgent proposes the next hypothesis if not converged.
+
         Args:
             last_hypothesis: The hypothesis that was just tested
-            last_result: Results from testing
+            last_result: Results from testing (may include '_raw_output' key)
         """
         self.logger.info("Checking results and refining")
 
-        # Check if the hypothesis group is now complete
+        # Step 1: Independent convergence check — SummaryAgent uses a fresh context
+        raw_output = last_result.pop("_raw_output", None)
+        convergence = await self.summary_agent.check_convergence(
+            finding=self.state.finding,
+            tested_hypotheses=self.state.tested_hypotheses,
+            last_result=last_result,
+            raw_output=raw_output,
+        )
+
+        if convergence.get("converged", False):
+            if self.state.tested_hypotheses:
+                self.state.tested_hypotheses[-1]["decision"] = "CONVERGED"
+                self.state.tested_hypotheses[-1]["refinement_reasoning"] = convergence.get("reasoning", "")
+                self.state.tested_hypotheses[-1]["mechanism_category_number"] = convergence.get("mechanism_category_number")
+                self.state.tested_hypotheses[-1]["mechanism_category_name"] = convergence.get("mechanism_category_name")
+            self.state.mark_converged(
+                reason="Independent convergence check confirmed",
+                confidence=convergence.get("confidence", 0.8),
+                conclusion=convergence.get("conclusion", ""),
+                mechanism_category_number=convergence.get("mechanism_category_number"),
+                mechanism_category_name=convergence.get("mechanism_category_name"),
+            )
+            self._display_message(
+                f"Converged on mechanism #{convergence.get('mechanism_category_number')}: "
+                f"{convergence.get('mechanism_category_name', '')}",
+                "success"
+            )
+            return
+
+        # Step 2: HypothesisAgent proposes next hypothesis
         group_summary = self._build_group_summary(last_hypothesis)
 
         refinement = await self.hypothesis_agent.refine_hypotheses(
@@ -740,42 +802,28 @@ class Orchestrator:
 
         decision = refinement.get("decision", "CONTINUE")
 
-        # Persist decision and reasoning into the last tested hypothesis for post-run analysis
+        # Guard: HypothesisAgent no longer decides convergence — treat as NEW_HYPOTHESIS
+        if decision == "CONVERGED":
+            self.logger.warning(
+                "HypothesisAgent returned CONVERGED — treating as NEW_HYPOTHESIS "
+                "(convergence is now determined by SummaryAgent)"
+            )
+            decision = "NEW_HYPOTHESIS"
+
+        # Persist decision and reasoning into the last tested hypothesis
         if self.state.tested_hypotheses:
             self.state.tested_hypotheses[-1]["decision"] = decision
             self.state.tested_hypotheses[-1]["refinement_reasoning"] = refinement.get("reasoning", "")
-            if decision == "CONVERGED":
-                self.state.tested_hypotheses[-1]["mechanism_category_number"] = refinement.get("mechanism_category_number")
-                self.state.tested_hypotheses[-1]["mechanism_category_name"] = refinement.get("mechanism_category_name")
 
-        if decision == "CONVERGED":
-            self.state.mark_converged(
-                reason="Hypothesis confirmed",
-                confidence=refinement.get("confidence", 0.8),
-                conclusion=refinement.get("conclusion", ""),
-                mechanism_category_number=refinement.get("mechanism_category_number"),
-                mechanism_category_name=refinement.get("mechanism_category_name"),
+        if decision == "INSUFFICIENT_DATA":
+            self.logger.warning(
+                "INSUFFICIENT_DATA — cannot test mechanism with available data",
+                {"confidence": refinement.get("confidence", 0.0)}
             )
-        elif decision == "INSUFFICIENT_DATA":
-            # Only converge if confidence is high that data truly can't answer the question
-            # Low confidence suggests we should keep trying
-            if refinement.get("confidence", 0.0) >= 0.7:
-                self.state.mark_converged(
-                    reason="Insufficient data to continue",
-                    confidence=refinement.get("confidence", 0.3),
-                    conclusion=refinement.get("conclusion", ""),
-                )
-            else:
-                self.logger.warning(
-                    "INSUFFICIENT_DATA with low confidence - continuing iteration",
-                    {"confidence": refinement.get("confidence", 0.0)}
-                )
-                # Add any new hypotheses for retry
-                for hypo in refinement.get("hypotheses", []):
-                    self.state.add_hypothesis(hypo)
+            self._display_message("Insufficient data to test this mechanism, moving on", "warning")
+            for hypo in refinement.get("hypotheses", []):
+                self.state.add_hypothesis(hypo)
         elif decision == "TECHNICAL_ERROR":
-            # Technical errors should NOT cause convergence
-            # But limit retries to avoid infinite loops on the same hypothesis
             technical_issues = refinement.get("technical_issues", [])
             self.logger.warning(
                 "Technical error detected - will retry with fixes",
@@ -785,7 +833,6 @@ class Orchestrator:
                 f"Technical issues detected: {', '.join(technical_issues[:3])}",
                 "warning"
             )
-            # Count how many times this hypothesis has already been tested
             hypothesis_name = last_hypothesis.get("name", "")
             times_tested = sum(
                 1 for h in self.state.tested_hypotheses
@@ -801,11 +848,9 @@ class Orchestrator:
                     "warning"
                 )
             else:
-                # Add hypotheses with hopefully fixed verification plans
                 for hypo in refinement.get("hypotheses", []):
                     self.state.add_hypothesis(hypo)
         elif decision in ("REFINE", "NEW_HYPOTHESIS"):
-            # Add new hypotheses
             for hypo in refinement.get("hypotheses", []):
                 self.state.add_hypothesis(hypo)
 

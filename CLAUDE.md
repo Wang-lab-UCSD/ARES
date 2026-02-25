@@ -79,10 +79,6 @@ pytest tests/ -v
 - Use snake_case for all Python files
 - Use descriptive names that indicate purpose
 
-## TODO (Hanbei's Requests)
-- [x] **Multi-hypothesis generation**: HypothesisAgent generates multiple candidate hypotheses at initialization (Phase 1-2), one at a time during refinement
-- [x] **ReviewerAgent**: `src/agents/review_agent.py` — reviews hypotheses (duplicate/vague check) and code (FIMO flags, loops, column selection, hypothesis mismatch) before execution
-- [x] **Hypothesis scoring**: Convergence check with confidence scores (0-1); 3 conditions: mechanism supported, alternative ruled out, explains WHY
 
 ## Known Issues & Lessons Learned (Jan 2026 ATF6/REST Run)
 
@@ -115,11 +111,6 @@ pytest tests/ -v
 - [x] **Cost tracking** — Cost tracker records tokens and estimated cost per API call
 - [x] **Summary-level ERROR retry** — When code catches its own exception (try/except), Jupyter reports success, but summary agent detects ERROR and feeds it back into retry loop
 
-### Pipeline Robustness (Still TODO)
-
-- [ ] **Add checkpointing for long computations** — Save intermediate results, resume from checkpoint on crash
-- [ ] **Structured results JSON after each iteration** — Machine-readable results with key statistics
-- [ ] **Execution summary log** (append-only, human-readable)
 
 ### Reference: ATF6/REST Run Results (outputs/20260126_135214/)
 
@@ -155,6 +146,27 @@ Key hypothesis from Hanbei's session: **"Trojan Horse" (Nested Motif)**
 - REST motif (~21bp) contains CCACG/TGACG (ATF6's core binding sequence)
 - ML model flags REST as important because it's a "super-ATF6" motif
 - The motif predicts ATF6 binding not because REST protein is involved, but because it contains ATF6's recognition sequence
+
+### Asset 1: ATF6/REST (K562) — Feb 21 run (outputs/20260220_230622/)
+
+7 iterations, CONVERGED on mechanism #3 (Chromatin/accessibility).
+Conclusion: REST+ATF6 co-bound sites are modestly enriched in Polycomb-repressed/poised ChromHMM states (2.4% vs 1.4%, OR=1.73, p=7.5e-4). Effect is real but small.
+Mechanisms tested: #2 (DNA sequence, REFUTES), #3 (chromatin, SUPPORTS), #5 (3D loops, INCONCLUSIVE).
+Mechanisms not yet explored: #1, #4, #6, #7, #8, #9, #10, #11, #12.
+
+### Asset 2: ATF3/USF1 (GM12878) — Feb 21 run (outputs/20260221_172221/)
+
+7 iterations, CONVERGED on mechanism #9 (Binding kinetics — cooperative binding).
+Conclusion: ATF3 ChIP-seq summits are centered on USF1's E-box 67% of the time in dual-motif peaks (p=0.001). USF1 nucleates the site; ATF3 binds cooperatively nearby. ML model detects USF1 motif as predictive because the ChIP signal is physically centered on it.
+Mechanisms tested: #2 (DNA sequence, REFUTES), #3 (chromatin, REFUTES), #9 (binding kinetics, CONVERGED).
+Mechanisms not yet explored: #1, #4, #5, #6, #7, #8, #10, #11, #12.
+
+### Asset 3: MAX/ZBTB14 (GM12878) — Feb 21 run (outputs/20260221_202803/)
+
+6 iterations, CONVERGED on mechanism #5 (3D genome architecture).
+Conclusion: ZBTB14 motif marks promoter-like loci enriched in ChromHMM Tss* states (OR~3.1), embedded in 3D promoter interaction hubs where MAX binding is stabilized. Co-bound sites sit at loop anchors and TAD boundaries, explaining why ZBTB14 predicts MAX binding.
+Mechanisms tested: #2 (DNA sequence, REFUTES), #3 (chromatin, REFUTES), #5 (3D genome, SUPPORTS/CONVERGED).
+Mechanisms not yet explored: #1, #4, #6, #7, #8, #9, #10, #11, #12.
 
 ### Feb 2026 Three-Pair Test Run Results (outputs/20260216_*)
 

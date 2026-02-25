@@ -310,6 +310,7 @@ Write Python code to test this hypothesis. The code MUST follow this structure:
 - NEVER put bigWig extraction, getfasta, or FIMO inside a loop. Call them ONCE.
 - Your script should have ONE statistical test answering ONE question. Keep it under 150 lines. Other analyses go in the next iteration.
 - Do NOT download external files (blacklists, annotations, etc.) — use only the provided data.
+- Only use CLI flags listed in the tool_quirks section above. Never invent or guess flags.
 - When selecting columns from a data file, always use column names (e.g., `df['TPM']`), never positional indexing (e.g., `columns[0]` or `value_cols[0]`). Inspect column names first and pick the correct one.
 
 Respond with ONLY the Python code, no explanations. The code should be ready to execute.

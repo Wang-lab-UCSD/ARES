@@ -42,7 +42,7 @@ You can run multiple targeted scans for different motifs:
 
 `fimo --text` streams output to stdout but does NOT compute q-values — the q-value
 column will be all NaN. Code that then filters on `q < 0.05` will find zero hits,
-silently producing wrong results (every hypothesis appears to REFUTE).
+silently producing wrong results (every hypothesis appears to REFUSE).
 
 WRONG — q-values will be NaN:
   fimo --no-pgc --text --thresh 1e-4 --motif MA0093.3 motifs.meme peaks.fa
@@ -113,6 +113,22 @@ if unique_names < 100:
 if fimo_df['start'].max() > 10000:
     print("ERROR: Coordinates are genomic, not sequence-relative. Use --no-pgc!")
 ```
+
+**VALID FIMO FLAGS — only use flags from this list. Any other flag is likely hallucinated.**
+
+| Flag | Description |
+|---|---|
+| `--no-pgc` | Do NOT parse genomic coordinates from FASTA headers (ALWAYS use this) |
+| `--oc <dir>` | Write output to directory, overwriting if it exists (ALWAYS use this) |
+| `--o <dir>` | Write output to directory, fails if it exists (use `--oc` instead) |
+| `--thresh <float>` | p-value threshold for reporting hits (default: 1e-4) |
+| `--motif <id>` | Only score the specified motif (e.g., `MA0138.2`) |
+| `--bfile <file>` | Background Markov model file |
+| `--max-strand` | Report only the best-scoring strand hit per position |
+| `--qv-thresh` | Use q-values instead of p-values for thresholding |
+| `--verbosity <1-5>` | Verbosity level |
+
+Do NOT use any flag not in this table. There is no `--no-header`, `--no-pgc-fix`, `--genomic`, `--peak-id`, `--format`, or any other flag not listed above.
 
 **Memory Warning**: Filter large FIMO output by motif_id immediately:
 ```python
@@ -219,6 +235,19 @@ stat, pvalue = scipy.stats.mannwhitneyu(signals_groupA, signals_groupB)
 - BED format is 0-based, half-open: [start, end)
 - FIMO output uses 1-based coordinates
 - Always verify coordinate systems match before intersecting
+
+**VALID BEDTOOLS FLAGS — only use flags from this list per subcommand.**
+
+`bedtools intersect`: `-a`, `-b`, `-u`, `-v`, `-c`, `-wa`, `-wb`, `-f`, `-r`, `-s`, `-S`, `-sorted`
+`bedtools getfasta`: `-fi`, `-bed`, `-fo`, `-name`, `-s`, `-tab`, `-split`
+`bedtools shuffle`: `-i`, `-g`, `-excl`, `-chrom`, `-seed`, `-noOverlapping`, `-maxTries`
+`bedtools sort`: `-i`, `-g`
+`bedtools closest`: `-a`, `-b`, `-d`, `-s`, `-S`, `-t`, `-io`, `-iu`, `-id`, `-D`
+`bedtools slop`: `-i`, `-g`, `-b`, `-l`, `-r`, `-s`, `-pct`
+`bedtools nuc`: `-fi`, `-bed`, `-s`, `-seq`, `-pattern`, `-C`
+`bedtools coverage`: `-a`, `-b`, `-d`, `-hist`, `-mean`, `-counts`, `-sorted`
+
+Do NOT invent flags. There is no `-output`, `-out`, `-results`, `-peaks`, or any other flag not listed above.
 """
 
 # =============================================================================

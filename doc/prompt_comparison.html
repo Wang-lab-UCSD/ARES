@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pipeline Prompt Comparison</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/reset.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/reveal.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/theme/black.min.css" />
+<style>
+  /* ── Global overrides ───────────────────────────────────────── */
+  .reveal { font-size: 18px; }
+  .reveal h1 { font-size: 2em;   color: #ffffff; }
+  .reveal h2 { font-size: 1.5em; color: #e0e0e0; }
+  .reveal h3 { font-size: 1.1em; color: #cccccc; margin: 0 0 6px 0; }
+  .reveal p, .reveal li { color: #ddd; line-height: 1.45; }
+  .reveal table { font-size: 0.82em; width: 100%; border-collapse: collapse; }
+  .reveal table th { background: #222; color: #fff; padding: 6px 10px; border: 1px solid #444; }
+  .reveal table td { padding: 6px 10px; border: 1px solid #333; color: #ddd; vertical-align: top; }
+  .reveal table tr:nth-child(even) td { background: #1a1a1a; }
+
+  /* ── Diff colour classes ────────────────────────────────────── */
+  .removed  { color: #ff6b6b; text-decoration: line-through; }
+  .added    { color: #69db7c; }
+  .changed  { color: #f0a000; }
+
+  /* ── Legend chips ───────────────────────────────────────────── */
+  .legend { display: flex; gap: 24px; justify-content: center; margin-top: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.82em; }
+  .chip { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+  .chip-red    { background: #ff6b6b; }
+  .chip-green  { background: #69db7c; }
+  .chip-orange { background: #f0a000; }
+
+  /* ── Two-column comparison layout ──────────────────────────── */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    width: 100%;
+    margin-top: 10px;
+  }
+  .col-box { border-radius: 6px; overflow: hidden; }
+  .col-header {
+    padding: 6px 12px;
+    font-family: monospace;
+    font-size: 0.85em;
+    font-weight: bold;
+    letter-spacing: 0.03em;
+  }
+  .col-header-doc  { background: #2a1010; color: #ff9999; }
+  .col-header-code { background: #0a2010; color: #99ff99; }
+  .col-body {
+    background: #111;
+    padding: 10px 12px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.72em;
+    line-height: 1.6;
+    max-height: 420px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    border-top: none;
+  }
+  .col-body::-webkit-scrollbar { width: 5px; }
+  .col-body::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+
+  /* ── Single-column "deleted" or "note" box ──────────────────── */
+  .single-box { border-radius: 6px; overflow: hidden; margin-top: 10px; }
+  .single-header { padding: 6px 12px; font-size: 0.85em; font-weight: bold; }
+  .single-body {
+    background: #111;
+    padding: 10px 12px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.72em;
+    line-height: 1.6;
+    max-height: 380px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    border-top: none;
+  }
+
+  /* ── Summary bottom box ─────────────────────────────────────── */
+  .summary-box {
+    background: #0e1e0e;
+    border: 1px solid #4a7c59;
+    border-radius: 6px;
+    padding: 10px 18px;
+    margin-top: 14px;
+    font-size: 0.82em;
+    color: #b5f0c8;
+    text-align: center;
+  }
+
+  /* ── Slide-title sub-note ───────────────────────────────────── */
+  .slide-note { font-size: 0.7em; color: #888; margin-top: 4px; }
+
+  /* ── Callout tag ────────────────────────────────────────────── */
+  .tag {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 0.72em;
+    font-weight: bold;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .tag-deleted  { background: #4a1010; color: #ff9999; }
+  .tag-added    { background: #0a3010; color: #99ff99; }
+  .tag-updated  { background: #2a2000; color: #f0c060; }
+  .tag-sync     { background: #1a2a3a; color: #99ccff; }
+</style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 1 — TITLE
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h1>Pipeline Prompt Comparison</h1>
+  <h2 style="color:#aaa; font-size:1em; margin-top:10px;">
+    Google Doc (expert suggestions) vs Current Codebase
+  </h2>
+  <div class="legend" style="margin-top:30px;">
+    <div class="legend-item">
+      <div class="chip chip-red"></div>
+      <span style="color:#ff6b6b;">Removed from code</span>
+    </div>
+    <div class="legend-item">
+      <div class="chip chip-green"></div>
+      <span style="color:#69db7c;">Added in code</span>
+    </div>
+    <div class="legend-item">
+      <div class="chip chip-orange"></div>
+      <span style="color:#f0a000;">Changed wording</span>
+    </div>
+  </div>
+  <p class="slide-note" style="margin-top:28px;">Arrow keys to navigate &nbsp;|&nbsp; 2026-02-25</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 2 — OVERVIEW TABLE
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Overview — What Changed</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Prompt</th>
+        <th>Google Doc</th>
+        <th>Code</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>System Prompt</strong></td>
+        <td>Old role framing; "Search the literature"</td>
+        <td>New role + TF context sentence; structured examples</td>
+        <td><span class="tag tag-updated">Updated</span></td>
+      </tr>
+      <tr>
+        <td><strong>Initial Prompt</strong></td>
+        <td>Confirms association is real</td>
+        <td><strong>Deleted</strong> — unified loop, first call uses refinement prompt</td>
+        <td><span class="tag tag-deleted">Removed</span></td>
+      </tr>
+      <tr>
+        <td><strong>Refinement Prompt</strong></td>
+        <td>Has CONVERGED option + taxonomy inline</td>
+        <td>CONVERGED removed; mechanism taxonomy moved to convergence</td>
+        <td><span class="tag tag-updated">Updated</span></td>
+      </tr>
+      <tr>
+        <td><strong>Regeneration Prompt</strong></td>
+        <td>Identical</td>
+        <td>Identical</td>
+        <td><span class="tag tag-sync">In sync</span></td>
+      </tr>
+      <tr>
+        <td><strong>Review Prompt</strong></td>
+        <td>5 checks; Check #4 = mechanism/association</td>
+        <td>5 checks; Check #3 = duplicate mechanism; Check #4 = mechanism vs association</td>
+        <td><span class="tag tag-updated">Updated</span></td>
+      </tr>
+      <tr>
+        <td><strong>Convergence Prompt</strong></td>
+        <td>Informal criteria; rich taxonomy (one-liner)</td>
+        <td>3 formal criteria + but-for test + false-convergence guards + verbatim taxonomy</td>
+        <td><span class="tag tag-updated">Updated</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 3 — SYSTEM PROMPT DIFF
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>System Prompt — Role &amp; Framing</h2>
+  <p class="slide-note">Source: <code>HYPOTHESIS_SYSTEM_PROMPT</code> in hypothesis.py</p>
+  <div class="compare-grid">
+
+    <div class="col-box">
+      <div class="col-header col-header-doc">Google Doc</div>
+      <div class="col-body"><span class="removed">You are a biologist scientific hypothesis generation assistant specializing in understanding transcriptional regulation, particularly how transcription factors (TF) cooperate with each bioinformatics.</span>
+
+<span class="removed">[MISSING: TF context sentence]</span>
+
+<span class="removed">Search the literature and start with the most plausible mechanism.</span>
+
+## How to Approach Mechanism Exploration
+
+Before proposing a hypothesis, reason from two directions:
+1. From biology: What do you already know...
+2. From the data: What is the simplest mechanism...
+
+## Key Principles
+
+- The final conclusion must synthesize ALL results...
+- Surprising or contradictory results are the most valuable clues...
+- A good conclusion describes a causal sequence...
+- <span class="changed">Your ultimate goal is to identify a which specific mechanism... class from a named taxonomy explains the finding — you will see the full taxonomy when evaluating convergence.</span></div>
+    </div>
+
+    <div class="col-box">
+      <div class="col-header col-header-code">Code — hypothesis.py</div>
+      <div class="col-body"><span class="added">You are a molecular biologist specializing in transcriptional regulation, working with bioinformatics tools. You investigate findings of the form: "ML model says TF_B's motif predicts TF_A's binding — why?"</span>
+
+<span class="added">You are given two TFs: TF_A is the primary TF with ChIP-seq or CUT&amp;TAG binding experiments; the motif of TF_B is found to be the most predictive feature to TF_A's binding signals. This is a surprising observation. You aim to find the molecular mechanisms to explain this.</span>
+
+## How to Approach Mechanism Exploration
+
+Your goal is to find a causal explanation — not just describe what is observed.
+
+Before proposing a hypothesis, reason from two directions:
+1. From biology: ...
+2. From the data: ...
+
+<span class="added">Two examples of early eliminations that save many iterations:
+- If TF_A and TF_B motifs substantially overlap or are similar in sequence → the ML model may be detecting a trivial sequence artifact. Test motif similarity first.
+- If TF_B ChIP-seq signal is absent from TF_A peaks → all direct protein-contact and co-recruitment mechanisms are eliminated.</span>
+
+## Key Principles
+
+- The final conclusion must synthesize ALL results...
+- Surprising or contradictory results are the most valuable clues...
+- A good conclusion describes a causal sequence...
+- <span class="changed">Your ultimate goal is to identify a specific mechanism that explains why TF_B is identified as the most predictive feature of TF_A's binding signals.</span></div>
+    </div>
+
+  </div>
+  <aside class="notes">
+    Three changes: (1) role line is cleaner and more specific; (2) the TF_A/TF_B context sentence is new and critical — it defines the problem frame for every call; (3) the two diagnostic bullet examples give the LLM concrete early-elimination heuristics; (4) the Key Principles last bullet drops the forward-reference to the taxonomy.
+  </aside>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 4 — INITIAL PROMPT (DELETED)
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Initial Prompt — <span class="tag tag-deleted">Entire function deleted</span></h2>
+  <div class="compare-grid">
+
+    <div class="col-box">
+      <div class="col-header col-header-doc">Google Doc — build_initial_hypothesis_prompt()</div>
+      <div class="col-body"><span class="removed">Generate exactly ONE hypothesis to confirm the association is real.
+
+This is a sanity check but not a final mechanism.
+
+GOOD example:
+  Name: "Association Confirmation"
+  Prediction: "ATF6 peaks are significantly enriched
+               at REST-bound sites (Fisher's exact test
+               or overlap enrichment &gt;2x)"
+  reasoning: "most efficient association
+              confirmation test"
+
+The output of this step informs whether to proceed
+to mechanism exploration.
+The prediction must be falsifiable — a negative
+result would mean the original finding is an
+artifact.</span></div>
+    </div>
+
+    <div class="col-box">
+      <div class="col-header col-header-code">Code — function does not exist</div>
+      <div class="col-body"><span class="added">The initial prompt function has been deleted entirely.
+
+The pipeline now starts with mechanism exploration
+from iteration 1.
+
+build_refinement_prompt() handles the first iteration:
+  last_hypothesis=None, last_result=None
+
+When both are None, the "First Iteration" section is
+shown:
+
+  "No hypotheses have been tested yet.
+   This is the start of the investigation.
+   Before selecting data for your hypothesis,
+   review all available files in the manifest
+   above — pay balanced attention to each data
+   category so you don't overlook information
+   that may be directly relevant."
+
+File familiarization (iteration 0) runs first so the
+LLM has file previews before proposing its first
+hypothesis.</span></div>
+    </div>
+
+  </div>
+  <aside class="notes">
+    Removing the initial prompt resolves known issue #8: the association-confirmation step was wasting an entire iteration. The first call now goes straight into mechanism exploration. The "First Iteration" branch inside build_refinement_prompt is a lightweight replacement — it sets context without making scientific assumptions.
+  </aside>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 5 — REFINEMENT PROMPT: PREAMBLE DIFF
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Refinement Prompt — Preamble &amp; Context</h2>
+  <p class="slide-note">Source: <code>build_refinement_prompt()</code> in hypothesis.py</p>
+  <div class="compare-grid">
+
+    <div class="col-box">
+      <div class="col-header col-header-doc">Google Doc</div>
+      <div class="col-body"># Scientific Finding Under Investigation
+
+{finding}
+
+# Previous Iterations
+
+{history_summary}
+
+# Latest Hypothesis Tested
+
+**Name**: {last_hypothesis.name}
+**Rationale**: {last_hypothesis.rationale}
+**Prediction**: {last_hypothesis.prediction}
+
+# Experimental Results
+
+{last_result.summary}
+{last_result.evidence}
+{last_result.interpretation}
+
+# Task
+
+You are in the **mechanism exploration phase**.
+<span class="removed">The association has already been confirmed.</span>
+
+Hard rule — no characterization: ...</div>
+    </div>
+
+    <div class="col-box">
+      <div class="col-header col-header-code">Code</div>
+      <div class="col-body"># Scientific Finding Under Investigation
+
+{finding}
+
+# Previous Iterations
+
+{history_summary}
+
+<span class="added">## First Iteration branch (last_hypothesis is None):
+
+# First Iteration
+
+No hypotheses have been tested yet. This is the
+start of the investigation.
+
+Before selecting data for your hypothesis, review
+all available files in the manifest above — pay
+balanced attention to each data category so you
+don't overlook information that may be directly
+relevant.</span>
+
+## Normal branch (prior hypothesis exists):
+
+# Latest Hypothesis Tested
+# Experimental Results
+...
+
+# Task
+
+You are in the **mechanism exploration phase**.
+<span class="removed">[association-confirmed sentence removed]</span>
+
+Hard rule — no characterization: ...</div>
+    </div>
+
+  </div>
+  <aside class="notes">
+    "The association has already been confirmed." was removed because (a) the initial prompt that would have confirmed it no longer exists, and (b) the assumption could bias mechanism choice. The first-iteration branch is purely structural.
+  </aside>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 6 — REFINEMENT PROMPT: DECISIONS DIFF
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Refinement Prompt — Decision Options &amp; JSON Schema</h2>
+  <div class="compare-grid">
+
+    <div class="col-box">
+      <div class="col-header col-header-doc">Google Doc</div>
+      <div class="col-body">Decisions:
+
+<span class="removed">1. CONVERGED — mechanism confirmed; cite
+      mechanism_category_number +
+      mechanism_category_name</span>
+2. REFINE
+3. NEW_HYPOTHESIS — Results <span class="changed">refuste</span> the current hypothesis
+4. TECHNICAL_ERROR
+5. INSUFFICIENT_DATA
+
+Respond in JSON format:
+{
+  "decision": "CONVERGED" | "REFINE" |
+              "NEW_HYPOTHESIS" |
+              "TECHNICAL_ERROR" |
+              "INSUFFICIENT_DATA",
+  "confidence": 0.0-1.0,
+  "reasoning": "...",
+  <span class="removed">"mechanism_category_number": &lt;int 1-12&gt;,</span>
+  <span class="removed">"mechanism_category_name": "&lt;string&gt;",</span>
+  <span class="removed">"conclusion": "&lt;paragraph if CONVERGED&gt;",</span>
+  "technical_issues": [...],
+  "hypotheses": [ { ... } ]
+}</div>
+    </div>
+
+    <div class="col-box">
+      <div class="col-header col-header-code">Code</div>
+      <div class="col-body">Decisions:
+
+<span class="added">[CONVERGED removed — handled exclusively by
+ SummaryAgent via build_convergence_check_prompt()]</span>
+
+1. REFINE
+2. NEW_HYPOTHESIS — Results <span class="changed">refuse</span> the current hypothesis
+3. TECHNICAL_ERROR
+4. INSUFFICIENT_DATA
+
+Respond in JSON format:
+{
+  "decision": "REFINE" | "NEW_HYPOTHESIS" |
+              "TECHNICAL_ERROR" |
+              "INSUFFICIENT_DATA",
+  "confidence": 0.0-1.0,
+  "reasoning": "...",
+  <span class="added">// mechanism_category_number, mechanism_category_name,
+  // and conclusion fields REMOVED from refinement JSON.
+  // These now live only in the convergence check JSON.</span>
+  "technical_issues": [...],
+  "hypotheses": [ { ... one hypothesis only ... } ]
+}</div>
+    </div>
+
+  </div>
+  <aside class="notes">
+    CONVERGED was removed from the HypothesisAgent because it was declaring convergence too early. Now convergence is an independent adjudication step run by the SummaryAgent, which applies the three formal criteria with explicit false-convergence guards. "refuste" is the typo from the Google Doc; the code uses "refuse" throughout.
+  </aside>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 7 — REVIEW PROMPT DIFF
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Hypothesis Review Prompt — Checklist Diff</h2>
+  <p class="slide-note">Source: <code>build_hypothesis_review_prompt()</code> &amp; <code>HYPOTHESIS_REVIEW_SYSTEM_PROMPT</code> in review.py</p>
+  <div class="compare-grid">
+
+    <div class="col-box">
+      <div class="col-header col-header-doc">Google Doc (5 checks)</div>
+      <div class="col-body"><strong>System prompt:</strong>
+Your job is to catch duplicates, vague predictions,
+<span class="removed">and hypothesis framing issues.</span>
+
+<strong>Check 1.</strong> Duplicate check [unchanged]
+
+<strong>Check 2.</strong> Prediction clarity:
+  What result would <span class="changed">support vs refute</span> the hypothesis?
+
+<strong>Check 3.</strong> Association re-test
+<span class="removed">  "Is this re-testing the association that was
+   already confirmed in the first iteration?
+   If never confirmed (first iteration), allow it."</span>
+
+<span class="removed"><strong>Check 4.</strong> (mechanism/association check folded
+   into Check 3; no dedicated check)</span>
+
+<strong>Check 5.</strong> Implied answer already exists
+   (was Check 4 in the Google Doc)</div>
+    </div>
+
+    <div class="col-box">
+      <div class="col-header col-header-code">Code — review.py</div>
+      <div class="col-body"><strong>HYPOTHESIS_REVIEW_SYSTEM_PROMPT:</strong>
+Your job is to catch duplicates, vague predictions,
+<span class="added">and association vs. mechanism violations</span>
+BEFORE expensive code generation and execution.
+
+<strong>Check 1.</strong> Duplicate check [unchanged]
+
+<strong>Check 2.</strong> Prediction clarity:
+  What result would <span class="changed">support vs refuse</span> the hypothesis?
+
+<span class="added"><strong>Check 3.</strong> Duplicate mechanism test [entirely rewritten]
+  If a prior SUPPORTS result already established a
+  mechanism finding, any hypothesis testing the same
+  mechanism claim is a duplicate — regardless of
+  framing.
+
+  Examples of disguised duplicates:
+  - Prior SUPPORTS "TF_B motif enriched at TF_A peaks"
+    → any re-measurement of overlap is a duplicate
+  - Prior SUPPORTS "co-bound sites in active chromatin"
+    → "H3K27ac enriched at co-bound sites" is duplicate</span>
+
+<span class="added"><strong>Check 4.</strong> Mechanism vs. association [dedicated check]
+  Every hypothesis must name a causal mechanism.
+
+  BAD: "Are the shared sites at promoters?"
+  BAD: "Is TF_A enrichment higher where TF_B present?"
+
+  GOOD: "TF_B acts as pioneer factor: co-occupied
+         sites enriched in closed chromatin states"
+  GOOD: "TF_B's motif contains TF_A's core binding
+         sequence as literal substring"</span>
+
+<strong>Check 5.</strong> Implied answer already exists
+   [renumbered from Check 4]</div>
+    </div>
+
+  </div>
+  <aside class="notes">
+    The Google Doc's Check 3 had "first iteration" dependency that became moot after the initial prompt was deleted. The code splits it into two independent checks: (3) catches disguised duplicates at the mechanism-class level, and (4) is a dedicated mechanism vs. association gate. Separating them makes each check independently applicable.
+  </aside>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 8 — CONVERGENCE PROMPT: CRITERIA DIFF
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Convergence Prompt — Criteria &amp; Guards</h2>
+  <p class="slide-note">Source: <code>CONVERGENCE_CHECK_SYSTEM_PROMPT</code> &amp; <code>build_convergence_check_prompt()</code> in summary.py</p>
+  <div class="compare-grid">
+
+    <div class="col-box">
+      <div class="col-header col-header-doc">Google Doc</div>
+      <div class="col-body">To decide whether to stop: check if the
+accumulated evidence supports a specific
+mechanism from the taxonomy below. If yes,
+cite the category number and name. If no
+mechanism has been identified, recommend
+continuing unless iterations are exhausted.
+
+<span class="removed">[No formal numeric criteria]</span>
+<span class="removed">[No False Convergence Patterns section]</span>
+<span class="removed">[No but-for test]</span>
+<span class="removed">[No escape hatch for novel mechanisms]</span>
+<span class="removed">[No "independent adjudicator" framing]</span>
+
+JSON response:
+{
+  <span class="removed">"should_continue": true | false,</span>
+  "mechanism_category_number": ...,
+  "mechanism_category_name": ...,
+  "confidence": ...,
+  "conclusion": ...,
+  "reasoning": ...
+}</div>
+    </div>
+
+    <div class="col-box">
+      <div class="col-header col-header-code">Code — summary.py</div>
+      <div class="col-body"><span class="added">You are an INDEPENDENT scientific adjudicator.
+You have NO stake in any particular outcome.
+Evaluate the evidence skeptically and objectively.</span>
+
+## Convergence Criteria
+
+Declare converged=true ONLY when ALL THREE:
+
+<span class="added">1. Statistical support: p &lt; 0.05 AND effect size
+   &gt;= 1.5x enrichment, OR &gt;= 10 percentage points,
+   OR Cohen's d &gt;= 0.5</span>
+
+<span class="added">2. Named mechanism: maps to specific numbered
+   category. Co-occurrence does NOT qualify.</span>
+
+<span class="added">3. But-for test: "If the proposed causal agent
+   were absent, would the data look different?"
+   If answer is "not necessarily" → do NOT converge.</span>
+
+<span class="added">## Common False Convergence Patterns (4 named):
+- "Co-bound sites are in active chromatin" — correlation
+- "TF_B signal higher where TF_A present" — restates finding
+- "Effect is small but real" — below threshold
+- "Data cannot answer" — not convergence</span>
+
+<span class="added">## Escape hatch for novel mechanisms:
+  permitted if mechanism names a molecular process,
+  states a causal chain, is not a re-description</span>
+
+JSON response:
+{
+  <span class="added">"converged": true | false,</span>
+  "mechanism_category_number": ...,
+  "mechanism_category_name": ...,
+  "confidence": ...,
+  "conclusion": ...,
+  "reasoning": ...
+}</div>
+    </div>
+
+  </div>
+  <aside class="notes">
+    "should_continue" replaced by "converged" — semantic clarification. The three formal criteria replace the vague "check the taxonomy" instruction. The but-for test addresses the correlation-masquerading-as-causation problem seen in the Feb 20 run (H3K27ac at REST+ATF6 sites — real effect but passive correlation). The four false-convergence patterns are drawn directly from failures across Feb 2026 runs.
+  </aside>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 9 — CONVERGENCE PROMPT: TAXONOMY DIFF
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Convergence Prompt — Mechanism Taxonomy</h2>
+  <p class="slide-note">Old: condensed one-liners per category &nbsp;|&nbsp; New: verbatim <code>data/mechanisms.txt</code> with sub-items</p>
+  <div class="compare-grid">
+
+    <div class="col-box">
+      <div class="col-header col-header-doc">Google Doc — condensed one-liners</div>
+      <div class="col-body"><span class="removed">1. Direct TF-TF protein contacts — physical binding
+   between TF_A and TF_B proteins, including
+   homodimerization/heterodimerization.
+
+2. DNA-mediated effects — motif containment,
+   motif similarity, composite motifs.
+
+3. Chromatin/accessibility — pioneer activity,
+   nucleosome remodeling, HAT/HDAC recruitment.
+
+4. Cofactor/co-activator sharing — p300/CBP,
+   Mediator, BRD4 complexes.
+
+5. 3D genome architecture — loop anchors,
+   TAD boundaries, enhancer-promoter proximity.
+
+6. Phase separation / condensate co-recruitment.
+
+7. Post-translational modifications enabling
+   co-binding.
+
+8. Gene regulatory networks — shared target gene
+   co-regulation, feedforward loops.
+
+9. Binding kinetics — competitive/cooperative
+   binding at shared sites.
+
+10. RNA-mediated mechanisms.
+
+11. Molecular crowding / local concentration
+    effects.
+
+12. Paralog / family-member cross-binding.</span></div>
+    </div>
+
+    <div class="col-box">
+      <div class="col-header col-header-code">Code — verbatim sub-items (summary.py)</div>
+      <div class="col-body"><span class="added">1. Direct TF–TF contacts
+   1.1 Homodimerization and heterodimerization
+       (bZIP, bHLH, nuclear receptors).
+   1.2 Higher-order oligomerization (tetramers).
+   1.3 Partner switching — same TF forms different
+       heterodimers with distinct motif preferences.
+   1.4 Interface masking/unmasking.
+
+2. DNA-mediated interplay
+   2.1 Classic cooperative binding at nearby sites.
+   2.2 Composite motifs — spacing/orientation
+       encodes preferred TF pair geometry.
+   2.3 Competitive binding at overlapping sites.
+   2.4 DNA-mediated allostery — TF_B changes local
+       DNA shape, alters TF_A binding at distance.
+   2.5 Facilitated diffusion / "antenna" effects.
+
+3. Nucleosome and chromatin-based mechanisms
+   3.1 Pioneer activity: TF_B binds nucleosomal
+       DNA and opens chromatin for secondary TFs.
+   3.2 Nucleosome-displacement cooperativity.
+   3.3 Nucleosome-positioning competition.
+   3.4 Chromatin-modifier recruitment (HATs, HDACs,
+       methyltransferases, remodelers).
+
+4. Cofactors, Mediator, and general machinery
+   4.1 Shared coactivators/corepressors (p300/CBP,
+       Mediator, BRD4, HDAC complexes).
+   4.2 Competition ("squelching") for limiting
+       cofactors.
+   4.3 Scaffolding via Mediator and PIC components.
+
+5–12. [full sub-items embedded in code ...]</span>
+
+"Exact text from data/mechanisms.txt —
+ no words changed between source and prompt."</div>
+    </div>
+
+  </div>
+  <aside class="notes">
+    The condensed one-liner taxonomy gave the LLM insufficient granularity to distinguish, for example, mechanism 3.1 (pioneer opens chromatin) from 3.2 (collective nucleosome eviction). The Feb 20 run converged on "chromatin/accessibility" without specifying which sub-mechanism — too vague to be scientifically actionable. The full taxonomy forces the LLM to identify the precise molecular sub-process.
+  </aside>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 10 — SUMMARY TABLE
+     ══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Summary — Removed vs Added Per Prompt</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Prompt</th>
+        <th style="color:#ff9999;">Removed from code</th>
+        <th style="color:#99ff99;">Added in code</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>System Prompt</strong></td>
+        <td>Old role line; "Search literature"; taxonomy forward-reference in Key Principles</td>
+        <td>TF context sentence (TF_A/TF_B problem framing); two diagnostic bullet examples; cleaner role line</td>
+      </tr>
+      <tr>
+        <td><strong>Initial Prompt</strong></td>
+        <td>Entire function — association confirmation step</td>
+        <td>First-iteration branch inside build_refinement_prompt(); file-familiarization note</td>
+      </tr>
+      <tr>
+        <td><strong>Refinement Prompt</strong></td>
+        <td>CONVERGED decision; 3 JSON fields (mechanism_category_number, mechanism_category_name, conclusion); "association confirmed" sentence</td>
+        <td>Unified first-iteration handling (last_hypothesis=None path); "refuse" replacing "refuste"</td>
+      </tr>
+      <tr>
+        <td><strong>Review Prompt</strong></td>
+        <td>Old Check #3 (association re-test with "first iteration" dependency)</td>
+        <td>Check #3 (duplicate mechanism test with disguised-duplicate examples); Check #4 (mechanism vs association with GOOD/BAD examples); updated system prompt</td>
+      </tr>
+      <tr>
+        <td><strong>Convergence Prompt</strong></td>
+        <td>Informal "check the taxonomy" instruction; "should_continue" JSON key; condensed one-liner taxonomy</td>
+        <td>3 formal criteria (statistical, named mechanism, but-for test); 4 false-convergence patterns; escape hatch for novel mechanisms; "converged" JSON key; verbatim sub-item taxonomy (1.1–12.1)</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="summary-box">
+    All tests passing (40/40). &nbsp;|&nbsp;
+    Unified loop: single prompt path from iteration 1. &nbsp;|&nbsp;
+    Convergence is now an independent adjudication step, not a refinement decision.
+  </div>
+</section>
+
+</div><!-- .slides -->
+</div><!-- .reveal -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/reveal.min.js"></script>
+<script>
+  Reveal.initialize({
+    hash: true,
+    slideNumber: true,
+    controls: true,
+    progress: true,
+    center: true,
+    transition: 'slide',
+    transitionSpeed: 'fast',
+    width: 1280,
+    height: 760,
+    margin: 0.04,
+    minScale: 0.3,
+    maxScale: 1.5,
+  });
+</script>
+</body>
+</html>

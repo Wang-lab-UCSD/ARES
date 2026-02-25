@@ -54,6 +54,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 api_key.txt
+.claude/settings.local.json
 
 slides/
 

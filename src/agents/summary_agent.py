@@ -8,8 +8,10 @@ from src.llm.base import LLMProvider, Message
 from src.execution.jupyter_executor import ExecutionResult
 from src.prompts.summary import (
     SUMMARY_SYSTEM_PROMPT,
+    CONVERGENCE_CHECK_SYSTEM_PROMPT,
     build_result_summary_prompt,
     build_final_report_prompt,
+    build_convergence_check_prompt,
 )
 from src.utils.logging import get_logger
 
@@ -91,6 +93,69 @@ class SummaryAgent:
                 "reasoning": f"Failed to summarize: {str(e)}",
                 "issues": [str(e)],
                 "summary": f"Error during summarization: {str(e)}",
+            }
+
+    async def check_convergence(
+        self,
+        finding: str,
+        tested_hypotheses: list[dict[str, Any]],
+        last_result: dict[str, Any],
+        raw_output: str | None = None,
+    ) -> dict[str, Any]:
+        """Independently check whether the evidence warrants convergence.
+
+        Uses a fresh context (no accumulated history) to evaluate convergence
+        against the mechanism taxonomy and three convergence criteria. Intentionally
+        separate from HypothesisAgent to prevent motivated reasoning.
+
+        Args:
+            finding: Original scientific finding
+            tested_hypotheses: All tested hypotheses with results
+            last_result: Summary of the most recent result
+            raw_output: Raw stdout from the last execution (will be truncated)
+
+        Returns:
+            Dictionary with converged (bool), mechanism_category_number,
+            mechanism_category_name, confidence, conclusion, reasoning
+        """
+        self.logger.info("Running independent convergence check", {
+            "iterations_tested": len(tested_hypotheses),
+            "last_support_level": last_result.get("support_level"),
+        })
+
+        prompt = build_convergence_check_prompt(
+            finding=finding,
+            tested_hypotheses=tested_hypotheses,
+            last_result=last_result,
+            raw_output=raw_output,
+        )
+
+        try:
+            result = await self.llm.complete_json(
+                [
+                    Message.system(CONVERGENCE_CHECK_SYSTEM_PROMPT),
+                    Message.user(prompt),
+                ],
+            )
+
+            self.logger.info("Convergence check complete", {
+                "converged": result.get("converged", False),
+                "mechanism_category_number": result.get("mechanism_category_number"),
+                "confidence": result.get("confidence"),
+            })
+
+            return result
+
+        except Exception as e:
+            self.logger.error("Convergence check failed", {"error": str(e)})
+            # On failure, do not converge — safe default
+            return {
+                "converged": False,
+                "mechanism_category_number": None,
+                "mechanism_category_name": None,
+                "confidence": 0.0,
+                "conclusion": "",
+                "reasoning": f"Convergence check failed: {str(e)}",
             }
 
     async def generate_final_report(

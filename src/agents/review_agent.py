@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,12 +105,11 @@ class ReviewAgent:
 
         except Exception as e:
             self.logger.error("Code review failed", {"error": str(e)})
-            # If review fails, approve by default to not block the pipeline
             return ReviewResult(
-                approved=True,
+                approved=False,
                 corrected_code=None,
-                issues_found=[],
-                reasoning=f"Review skipped due to error: {str(e)}",
+                issues_found=["REVIEW_UNAVAILABLE: LLM call failed — static check will run"],
+                reasoning=f"Review failed: {str(e)}",
             )
 
     async def review_hypothesis(
@@ -166,16 +166,68 @@ class ReviewAgent:
         except Exception as e:
             self.logger.error("Hypothesis review failed", {"error": str(e)})
             return ReviewResult(
-                approved=True,
+                approved=False,
                 corrected_code=None,
-                issues_found=[],
-                reasoning=f"Review skipped due to error: {str(e)}",
+                issues_found=["REVIEW_UNAVAILABLE: LLM call failed — hypothesis will be re-queued"],
+                reasoning=f"Review failed: {str(e)}",
             )
+
+    @staticmethod
+    def static_review_code(code: str) -> "ReviewResult":
+        """Static rule-based code check, used as fallback when LLM review is unavailable.
+
+        Checks the three highest-value rules that are syntactically detectable
+        without an LLM call.
+
+        Args:
+            code: The Python code to check
+
+        Returns:
+            ReviewResult with approval status
+        """
+        issues = []
+
+        # Rule 1: fimo used without --motif (would scan 800+ motifs = hours)
+        if re.search(r"\bfimo\b", code) and not re.search(r"--motif\b", code):
+            issues.append("FIMO called without --motif flag — would scan all 800+ motifs")
+
+        # Rule 2: expensive tools (fimo, bedtools getfasta) inside a loop
+        lines = code.split("\n")
+        in_loop = False
+        loop_indent = 0
+        for line in lines:
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+            if re.match(r"(for |while )", stripped):
+                in_loop = True
+                loop_indent = indent
+            elif in_loop and stripped and not stripped.startswith("#") and indent <= loop_indent:
+                in_loop = False
+            if in_loop and re.search(r"\b(fimo|bedtools getfasta)\b", line):
+                issues.append("Expensive tool (fimo or bedtools getfasta) called inside a loop")
+                break
+
+        # Rule 3: visualization imports
+        if re.search(r"^import (matplotlib|seaborn)|^from (matplotlib|seaborn)", code, re.MULTILINE):
+            issues.append("Visualization library (matplotlib/seaborn) imported — not allowed")
+
+        if issues:
+            return ReviewResult(
+                approved=False,
+                corrected_code=None,
+                issues_found=issues,
+                reasoning="Static rule check failed: " + "; ".join(issues),
+            )
+
+        return ReviewResult(
+            approved=True,
+            corrected_code=None,
+            issues_found=[],
+            reasoning="Static rule check passed (LLM review unavailable)",
+        )
 
     def _extract_code(self, text: str) -> str:
         """Extract code from potential markdown blocks."""
-        import re
-
         text = text.strip()
         patterns = [
             r"```python\s*(.*?)```",
