@@ -407,7 +407,19 @@ Common root causes to check:
 - Wrong data types or column names (print and verify before using)
 - File path or format issues
 
-Respond with the corrected Python code (the diagnostic comment should be inside the code).
+If the error is caused by a missing data file (FileNotFoundError, file does not exist)
+or an unavailable CLI tool (command not found) and there is NO valid substitute in the
+data manifest above, do NOT attempt a workaround. Instead respond with ONLY:
+
+```python
+# UNTESTABLE: <one-line explanation of what resource is missing>
+```
+
+Use this ONLY for genuinely missing files or tools — NOT for "I don't know how to write
+this code." If the error is a bug in your code (wrong column, wrong flag, type error),
+you MUST fix it.
+
+Otherwise, respond with the corrected Python code (the diagnostic comment should be inside the code).
 """
     return prompt
 

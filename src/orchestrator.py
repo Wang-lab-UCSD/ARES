@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import signal
 from datetime import datetime
 from pathlib import Path
@@ -207,6 +208,31 @@ class Orchestrator:
         """Check if shutdown has been requested."""
         return self._shutdown_requested
 
+    @staticmethod
+    def _flatten_manifest_keys(data_manifest: dict[str, Any]) -> set[str]:
+        """Extract all recognized data key forms from the manifest."""
+        keys: set[str] = set()
+        data = data_manifest.get("data", {})
+        for category, items in data.items():
+            keys.add(category)
+            if isinstance(items, dict):
+                for leaf_key in items:
+                    keys.add(leaf_key)
+                    keys.add(f"{category}.{leaf_key}")
+                    keys.add(f"{category}:{leaf_key}")
+        return keys
+
+    def _check_data_availability(
+        self, hypothesis: dict[str, Any],
+    ) -> tuple[bool, list[str], list[str]]:
+        """Check if required_data keys exist in the manifest."""
+        required = hypothesis.get("required_data", [])
+        if not required:
+            return True, [], []
+        manifest_keys = self._flatten_manifest_keys(self.manifest.model_dump())
+        missing = [k for k in required if k not in manifest_keys]
+        return len(missing) == 0, missing, sorted(manifest_keys)
+
     async def run(self) -> dict[str, Any]:
         """Run the full hypothesis generation pipeline.
 
@@ -262,6 +288,7 @@ class Orchestrator:
             max_hypo_rejections = 6
             last_tested_hypothesis: dict[str, Any] | None = None
             reviewer_rejected: list[dict[str, Any]] = []  # accumulate all reviewer rejections
+            consecutive_data_rejections = 0
 
             while (
                 not self.state.converged
@@ -359,6 +386,47 @@ class Orchestrator:
                     # Only reset rejection counter on genuine approval (not LLM-unavailable bypass)
                     if hypo_review.approved:
                         consecutive_hypo_rejections = 0
+
+                # Stage 1.5: Deterministic data-availability check
+                data_ok, missing_keys, available_keys = self._check_data_availability(hypothesis)
+                if not data_ok:
+                    consecutive_data_rejections += 1
+                    self.logger.info("Hypothesis requires unavailable data", {
+                        "hypothesis": hypothesis.get("name", "N/A"),
+                        "missing_keys": missing_keys,
+                        "consecutive_data_rejections": consecutive_data_rejections,
+                    })
+                    self._display_message(
+                        f"Data pre-check: missing keys {missing_keys}",
+                        "warning"
+                    )
+                    if consecutive_data_rejections >= 3:
+                        self.logger.warning("Repeated data-availability failures, moving on")
+                        self._display_message(
+                            "Pipeline skipping: 3 consecutive data-availability rejections",
+                            "warning"
+                        )
+                        consecutive_data_rejections = 0
+                        continue
+                    data_feedback = (
+                        f"DATA_UNAVAILABLE: required_data references keys not in the manifest: "
+                        f"{missing_keys}. Available keys: {available_keys}. "
+                        f"You may keep the same causal mechanism if it can be tested with "
+                        f"available data — just revise required_data and verification_plan."
+                    )
+                    new_hypo = await self.hypothesis_agent.regenerate_hypothesis(
+                        state=self.state,
+                        rejected_hypothesis=hypothesis,
+                        feedback=data_feedback,
+                        reviewer_rejected=reviewer_rejected,
+                        data_manifest=self.manifest.model_dump(),
+                        file_summaries=self.state.file_summaries or None,
+                    )
+                    if new_hypo:
+                        self.state.add_hypothesis(new_hypo)
+                    continue
+                else:
+                    consecutive_data_rejections = 0
 
                 # Only count as an iteration when a hypothesis passes review
                 self.state.current_iteration += 1
@@ -569,6 +637,29 @@ class Orchestrator:
                 previous_stderr=last_stderr,
                 prior_evidence=self.state.evidence,
             )
+
+            # Check for UNTESTABLE escape hatch (regex handles multiple code blocks)
+            untestable_match = re.search(r"^#\s*UNTESTABLE:\s*(.+)$", code, re.MULTILINE)
+            if untestable_match:
+                reason = untestable_match.group(1).strip()
+                self.logger.warning("Coding agent signaled UNTESTABLE", {
+                    "reason": reason,
+                    "hypothesis": hypothesis.get("name", "N/A"),
+                })
+                self._display_message(
+                    f"Coding agent: hypothesis untestable — {reason}",
+                    "warning"
+                )
+                return {
+                    "execution_success": False,
+                    "findings": [],
+                    "support_level": "UNTESTABLE",
+                    "confidence": 0.0,
+                    "reasoning": f"Hypothesis cannot be tested: {reason}",
+                    "issues": [reason],
+                    "summary": f"Untestable: {reason}",
+                    "_raw_output": "",
+                }
 
             # Validate code
             is_valid, validation_error = self.coding_agent.validate_code(code)

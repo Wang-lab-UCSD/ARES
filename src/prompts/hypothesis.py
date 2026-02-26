@@ -228,7 +228,7 @@ def build_regeneration_prompt(
 
 # Rejected Hypothesis
 
-The following hypothesis was rejected by review and must NOT be resubmitted:
+The following hypothesis was rejected and must NOT be resubmitted without addressing the rejection reason:
 
 **Name**: {rejected_hypothesis.get('name', 'N/A')}
 **Prediction**: {rejected_hypothesis.get('prediction', 'N/A')}
