@@ -353,6 +353,7 @@ class Orchestrator:
                             "name": hypothesis.get("name", "N/A"),
                             "prediction": hypothesis.get("prediction", "N/A"),
                             "feedback": feedback,
+                            "rejection_category": hypo_review.rejection_category,
                         })
 
                         if consecutive_hypo_rejections >= max_hypo_rejections:
@@ -375,6 +376,7 @@ class Orchestrator:
                             state=self.state,
                             rejected_hypothesis=hypothesis,
                             feedback=feedback,
+                            rejection_category=hypo_review.rejection_category,
                             reviewer_rejected=reviewer_rejected,
                             data_manifest=self.manifest.model_dump(),
                             file_summaries=self.state.file_summaries or None,

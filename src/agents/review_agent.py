@@ -24,6 +24,7 @@ class ReviewResult:
     corrected_code: str | None
     issues_found: list[str]
     reasoning: str
+    rejection_category: str | None = None  # "wrong_mechanism", "flawed_test", or None
 
 
 class ReviewAgent:
@@ -145,10 +146,12 @@ class ReviewAgent:
             approved = result.get("approved", True)
             issues = result.get("issues", [])
             reasoning = result.get("reasoning", "")
+            rejection_category = result.get("rejection_category") if not approved else None
 
             self.logger.info("Hypothesis review complete", {
                 "approved": approved,
                 "issues_count": len(issues),
+                "rejection_category": rejection_category,
                 "reasoning": reasoning[:200],
             })
 
@@ -161,6 +164,7 @@ class ReviewAgent:
                 corrected_code=None,
                 issues_found=issues,
                 reasoning=reasoning,
+                rejection_category=rejection_category,
             )
 
         except Exception as e:

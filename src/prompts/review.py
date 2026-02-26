@@ -294,9 +294,16 @@ OR if issues found:
 
 {{
     "approved": false,
+    "rejection_category": "wrong_mechanism" | "flawed_test",
     "issues": ["Issue 1", "Issue 2"],
     "reasoning": "Why this hypothesis should not be tested"
 }}
+
+rejection_category values:
+- "wrong_mechanism" — the mechanism itself is the problem: duplicate, characterization,
+  same-direction counterfactual, or implied by prior results. (Checks 1, 3, 4, 5)
+- "flawed_test" — the mechanism is sound but the prediction is unclear or the test
+  design is flawed. (Check 2)
 """
     return prompt
 

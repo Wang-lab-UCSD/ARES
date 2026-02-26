@@ -182,6 +182,7 @@ def build_regeneration_prompt(
     feedback: str,
     tested_hypotheses: list[dict[str, Any]],
     data_manifest: dict[str, Any],
+    rejection_category: str | None = None,
     reviewer_rejected: list[dict[str, Any]] | None = None,
     file_summaries: dict[str, str] | None = None,
 ) -> str:
@@ -193,6 +194,7 @@ def build_regeneration_prompt(
         feedback: Reviewer's feedback on why it was rejected
         tested_hypotheses: All previously tested hypotheses
         data_manifest: Available data and tools
+        rejection_category: Structured category from reviewer ("wrong_mechanism" or "flawed_test")
         reviewer_rejected: All hypotheses rejected by reviewer this session (with feedback)
         file_summaries: Pre-run file inspection output (from iteration 0)
 
@@ -222,6 +224,47 @@ def build_regeneration_prompt(
                 )
             prior_rejected_section = "\n# Previously Rejected Hypotheses (do NOT repeat these)\n\n" + "\n".join(parts)
 
+    # Build diagnosis section based on structured rejection category
+    if rejection_category == "wrong_mechanism":
+        diagnosis_section = """# Diagnosis: Wrong Mechanism
+
+The reviewer determined that the MECHANISM itself is the problem — it is a duplicate of a
+prior test, a characterization (not causal), fails the directional counterfactual, or its
+answer is already implied by prior results.
+
+**Action**: ABANDON this mechanism entirely. Propose a DIFFERENT causal mechanism."""
+
+    elif rejection_category == "flawed_test":
+        diagnosis_section = """# Diagnosis: Flawed Test Design
+
+The reviewer determined that the mechanism is reasonable, but the prediction is unclear,
+the verification plan has a flawed null model, or the test logic does not match the
+hypothesis claim.
+
+**Action**: KEEP the same mechanism. Redesign the test with a different experimental
+approach — different comparison groups, different statistical test, or different data."""
+
+    else:
+        # Fallback when category is unavailable (e.g. data-availability rejection from
+        # orchestrator, or reviewer LLM didn't produce the field)
+        diagnosis_section = """# Diagnosis — Read the Rejection Reason Carefully
+
+Before generating a replacement, determine WHY the hypothesis was rejected:
+
+**(A) Wrong mechanism** — The rejection says the mechanism is a duplicate, a characterization
+(not causal), the directional counterfactual fails (mechanism and co-occupancy predict the
+same direction), or the prediction's answer is implied by the setup. In this case, ABANDON
+the mechanism and propose a different one.
+
+**(B) Flawed test design** — The rejection says the mechanism is reasonable but the prediction
+is unclear, the verification plan has a flawed null model, or the test logic does not match
+the hypothesis claim. In this case, KEEP the same mechanism and redesign the test with a
+different experimental approach.
+
+**(C) Missing data** — The rejection says the required data files or tools are not available
+in the manifest. In this case, KEEP the mechanism idea but redesign the test to use only
+data that IS available, or propose a different mechanism if no viable test exists."""
+
     prompt = f"""# Scientific Finding
 
 {finding}
@@ -243,29 +286,7 @@ The following hypothesis was rejected and must NOT be resubmitted without addres
 
 {data_section}
 
-# Diagnosis — Read the Rejection Reason Carefully
-
-Before generating a replacement, determine WHY the hypothesis was rejected:
-
-**(A) Wrong mechanism** — The rejection says the mechanism is a duplicate, a characterization
-(not causal), the directional counterfactual fails (mechanism and co-occupancy predict the
-same direction), or the prediction's answer is implied by the setup. In this case, ABANDON
-the mechanism and propose a different one.
-
-**(B) Flawed test design** — The rejection says the mechanism is reasonable but the prediction
-is unclear, the verification plan has a flawed null model, or the test logic does not match
-the hypothesis claim. In this case, KEEP the same mechanism and redesign the test with a
-different experimental approach.
-
-**(C) Missing data** — The rejection says the required data files or tools are not available
-in the manifest. In this case, KEEP the mechanism idea but redesign the test to use only
-data that IS available, or propose a different mechanism if no viable test exists.
-
-Rule of thumb: if the rejection mentions "duplicate", "characterization", "association",
-"same direction", "implied", "already derived", "not actually tested", or "not uniquely
-tested" → category (A). If it mentions "ambiguous", "unclear", "null model", "mismatch",
-or "test logic" → category (B). If it mentions "unavailable", "missing", or "not in
-manifest" → category (C).
+{diagnosis_section}
 
 # Task
 

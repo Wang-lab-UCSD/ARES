@@ -147,6 +147,7 @@ class HypothesisAgent:
         rejected_hypothesis: dict[str, Any],
         feedback: str,
         data_manifest: dict[str, Any],
+        rejection_category: str | None = None,
         reviewer_rejected: list[dict[str, Any]] | None = None,
         file_summaries: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
@@ -157,6 +158,7 @@ class HypothesisAgent:
             rejected_hypothesis: The hypothesis that was rejected
             feedback: Reviewer's feedback on why it was rejected
             data_manifest: Available data and tools
+            rejection_category: Structured category from reviewer ("wrong_mechanism" or "flawed_test")
             reviewer_rejected: All hypotheses rejected by reviewer this session (with feedback)
             file_summaries: Pre-run file inspection output (from iteration 0)
 
@@ -173,8 +175,9 @@ class HypothesisAgent:
             rejected_hypothesis=rejected_hypothesis,
             feedback=feedback,
             tested_hypotheses=state.tested_hypotheses,
-            reviewer_rejected=reviewer_rejected,
             data_manifest=data_manifest,
+            rejection_category=rejection_category,
+            reviewer_rejected=reviewer_rejected,
             file_summaries=file_summaries,
         )
 
