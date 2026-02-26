@@ -40,11 +40,11 @@ You can run multiple targeted scans for different motifs:
 
 **RULE 3: NEVER use --text mode**
 
-`fimo --text` streams output to stdout but does NOT compute q-values — the q-value
-column will be all NaN. Code that then filters on `q < 0.05` will find zero hits,
-silently producing wrong results (every hypothesis appears to REFUSE).
+`fimo --text` streams output to stdout but does NOT compute q-values, and p-values
+may also be unreliable. Code that then filters on significance columns will find
+incorrect or zero hits, silently producing wrong results (every hypothesis appears to REFUSE).
 
-WRONG — q-values will be NaN:
+WRONG — significance values will be unreliable:
   fimo --no-pgc --text --thresh 1e-4 --motif MA0093.3 motifs.meme peaks.fa
 
 CORRECT — let FIMO write to an output directory:
@@ -53,16 +53,40 @@ CORRECT — let FIMO write to an output directory:
 Then read from the output file:
 ```python
 fimo_df = pd.read_csv('fimo_out/fimo.tsv', sep='\\t', comment='#')
-# q-value column will now contain real values
-hits = fimo_df[fimo_df['q-value'] < 0.05]
+# Filter on p-value, NOT q-value (see RULE 4)
+hits = fimo_df[fimo_df['p-value'] < 1e-4]
 ```
 
-**SANITY CHECK — always verify q-values are not NaN**:
+**SANITY CHECK — always verify p-values are not NaN**:
 ```python
-nan_frac = fimo_df['q-value'].isna().mean()
+nan_frac = fimo_df['p-value'].isna().mean()
 if nan_frac > 0.5:
-    raise RuntimeError(f"FIMO q-values are {nan_frac:.0%} NaN — did you use --text mode? Use --oc instead.")
+    raise RuntimeError(f"FIMO p-values are {nan_frac:.0%} NaN — did you use --text mode? Use --oc instead.")
 ```
+
+**RULE 4: Filter on p-value, NOT q-value**
+
+FIMO's q-values use Benjamini-Hochberg correction across ALL sequences scanned. When
+scanning short peak regions (100-500bp), the correction can be severe — especially in
+shuffled/control regions where true motif hits are rare. Legitimate hits get q > 0.05,
+producing zero results and crashing enrichment comparisons.
+
+For peak-level motif analysis, ALWAYS filter on `p-value < 1e-4` (FIMO's default
+reporting threshold). This is the standard approach for ChIP-seq motif enrichment.
+
+WRONG — q-value filter drops legitimate hits in control regions:
+```python
+hits = fimo_df[fimo_df['q-value'] < 0.05]  # Often returns 0 rows for shuffled peaks
+```
+
+CORRECT — p-value filter is stable across foreground and control:
+```python
+hits = fimo_df[fimo_df['p-value'] < 1e-4]  # Consistent results, field-standard threshold
+```
+
+Do NOT use q-values for filtering FIMO output in this pipeline. The `--thresh 1e-4`
+flag already pre-filters on p-value at the command line; your Python code should match
+this same threshold when post-filtering.
 
 **Complete Workflow**:
 
@@ -125,7 +149,7 @@ if fimo_df['start'].max() > 10000:
 | `--motif <id>` | Only score the specified motif (e.g., `MA0138.2`) |
 | `--bfile <file>` | Background Markov model file |
 | `--max-strand` | Report only the best-scoring strand hit per position |
-| `--qv-thresh` | Use q-values instead of p-values for thresholding |
+| `--qv-thresh` | Use q-values instead of p-values for thresholding (DO NOT USE — see RULE 4) |
 | `--verbosity <1-5>` | Verbosity level |
 
 Do NOT use any flag not in this table. There is no `--no-header`, `--no-pgc-fix`, `--genomic`, `--peak-id`, `--format`, or any other flag not listed above.
