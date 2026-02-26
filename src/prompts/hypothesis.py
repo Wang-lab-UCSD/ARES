@@ -243,12 +243,29 @@ The following hypothesis was rejected and must NOT be resubmitted without addres
 
 {data_section}
 
+# Diagnosis — Read the Rejection Reason Carefully
+
+Before generating a replacement, determine WHY the hypothesis was rejected:
+
+**(A) Wrong mechanism** — The rejection says the mechanism is a duplicate, a characterization
+(not causal), or the directional counterfactual fails (mechanism and co-occupancy predict the
+same direction). In this case, ABANDON the mechanism and propose a different one.
+
+**(B) Flawed test design** — The rejection says the mechanism is reasonable but the prediction
+is unclear, the verification plan has a flawed null model, or the test logic does not match
+the hypothesis claim. In this case, KEEP the same mechanism and redesign the test with a
+different experimental approach.
+
+Rule of thumb: if the rejection mentions "duplicate", "characterization", "association", or
+"same direction" → category (A). If it mentions "ambiguous", "unclear", "null model",
+"mismatch", or "test logic" → category (B).
+
 # Task
 
 Generate ONE new hypothesis that:
 1. Does NOT duplicate any previously tested or rejected hypothesis
 2. Has a clear, unambiguous prediction — a coder should know exactly what data to use, what to compare, and what statistical test to run
-3. Tests a different aspect of the finding than what has already been tested
+3. Tests a genuinely new question — either a different mechanism OR the same mechanism with a fundamentally different test design (if the rejection was about test design, not the mechanism itself)
 
 **Hard rule**: Every hypothesis must propose a specific CAUSAL mechanism — a molecular event that explains WHY TF_B predicts TF_A's binding. Characterization hypotheses (describing what data looks like, confirming co-occurrence, or re-stating the original finding at a different scale) are NOT valid.
 
