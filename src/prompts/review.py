@@ -147,11 +147,25 @@ def build_hypothesis_review_prompt(
             )
         tested_section = "\n".join(parts)
 
+    # Format scratchpad if present (hypothesis agent's counterfactual analysis)
+    scratchpad = hypothesis.get("scratchpad")
+    if scratchpad and isinstance(scratchpad, dict):
+        scratchpad_section = f"""
+**Hypothesis Agent's Counterfactual Analysis (scratchpad)**:
+- Mechanism: {scratchpad.get('mechanism', 'N/A')}
+- Causal chain: {scratchpad.get('causal_chain', 'N/A')}
+- Prediction if mechanism operates: {scratchpad.get('prediction_if_mechanism', 'N/A')}
+- Prediction if co-occupancy only: {scratchpad.get('prediction_if_co_occupancy_only', 'N/A')}
+- Distinguishable?: {scratchpad.get('distinguishable', 'N/A')}"""
+    else:
+        scratchpad_section = ""
+
     prompt = f"""# Hypothesis to Review
 
 **Name**: {hypothesis.get('name', 'N/A')}
 **Prediction**: {hypothesis.get('prediction', 'N/A')}
 **Verification Plan**: {hypothesis.get('verification_plan', 'N/A')}
+{scratchpad_section}
 
 # Previously Tested Hypotheses
 
@@ -215,17 +229,39 @@ GOOD (causal mechanism — approve):
 - "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites
   should drop when TF_B motif is absent" — tests a physical interaction mechanism
 
-Counterfactual sub-check: For the named mechanism, ask — would this prediction also be true
-if TF_B were merely co-present at active sites, without the named mechanism operating?
+Directional counterfactual test: Compare two scenarios:
+(A) The named mechanism operates.
+(B) TF_B and TF_A merely co-occur at active regulatory sites with no causal relationship.
 
-If YES — reject. A valid prediction must be FALSE under mere co-occupancy and TRUE only if
-the named mechanism is actually operating. A hypothesis that names "pioneer factor activity"
-but predicts "TF_A signal is higher where TF_B is present" fails this test: higher TF_A
-signal is exactly what you would observe from co-occupancy alone, with no pioneer activity
-required.
+Ask: do scenarios A and B predict the SAME qualitative direction for the measured outcome?
 
-Reject if the hypothesis does not name a causal mechanism, OR if the prediction would be
-true under mere co-occupancy even if the named mechanism is absent.
+- If SAME direction → REJECT. The test cannot distinguish mechanism from co-occupancy.
+- If OPPOSITE or ORTHOGONAL directions → APPROVE.
+
+If the hypothesis includes a scratchpad with prediction_if_mechanism and
+prediction_if_co_occupancy_only, evaluate those two fields directly. If the scratchpad
+is absent, reason about scenarios A and B yourself.
+
+Do NOT reject merely because co-occupancy could produce a weaker version of the same
+effect. Reject ONLY when the qualitative direction (up vs down, enriched vs depleted,
+present vs absent) is identical.
+
+PASS examples (directions differ or are orthogonal — approve):
+- "Co-bound sites should be enriched in CLOSED chromatin" — mechanism predicts closed,
+  co-occupancy predicts open. Opposite. PASS.
+- "TF_B's motif contains TF_A's core sequence as a literal substring" — mechanism predicts
+  substring match, co-occupancy has no prediction about motif content. Orthogonal. PASS.
+- "TF_A ChIP signal centered on TF_B's motif, not TF_A's own motif" — mechanism predicts
+  centering on TF_B, co-occupancy predicts centering on TF_A. Opposite. PASS.
+
+FAIL examples (same direction — reject):
+- "TF_A signal is higher where TF_B is present" — both mechanism and co-occupancy predict
+  higher signal. Same direction. FAIL.
+- "Co-bound sites are enriched in active chromatin marks" — both predict active marks.
+  Same direction. FAIL.
+
+Reject if the hypothesis does not name a causal mechanism, OR if the directional
+counterfactual test fails (same qualitative direction under both scenarios).
 
 **5. Implied answer already exists**
 If a prior CONFIRMED result logically entails the answer to this hypothesis — either YES or
