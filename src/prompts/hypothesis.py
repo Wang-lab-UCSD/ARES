@@ -248,17 +248,24 @@ The following hypothesis was rejected and must NOT be resubmitted without addres
 Before generating a replacement, determine WHY the hypothesis was rejected:
 
 **(A) Wrong mechanism** — The rejection says the mechanism is a duplicate, a characterization
-(not causal), or the directional counterfactual fails (mechanism and co-occupancy predict the
-same direction). In this case, ABANDON the mechanism and propose a different one.
+(not causal), the directional counterfactual fails (mechanism and co-occupancy predict the
+same direction), or the prediction's answer is implied by the setup. In this case, ABANDON
+the mechanism and propose a different one.
 
 **(B) Flawed test design** — The rejection says the mechanism is reasonable but the prediction
 is unclear, the verification plan has a flawed null model, or the test logic does not match
 the hypothesis claim. In this case, KEEP the same mechanism and redesign the test with a
 different experimental approach.
 
-Rule of thumb: if the rejection mentions "duplicate", "characterization", "association", or
-"same direction" → category (A). If it mentions "ambiguous", "unclear", "null model",
-"mismatch", or "test logic" → category (B).
+**(C) Missing data** — The rejection says the required data files or tools are not available
+in the manifest. In this case, KEEP the mechanism idea but redesign the test to use only
+data that IS available, or propose a different mechanism if no viable test exists.
+
+Rule of thumb: if the rejection mentions "duplicate", "characterization", "association",
+"same direction", "implied", "already derived", "not actually tested", or "not uniquely
+tested" → category (A). If it mentions "ambiguous", "unclear", "null model", "mismatch",
+or "test logic" → category (B). If it mentions "unavailable", "missing", or "not in
+manifest" → category (C).
 
 # Task
 
