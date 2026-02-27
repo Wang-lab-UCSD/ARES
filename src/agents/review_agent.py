@@ -180,7 +180,7 @@ class ReviewAgent:
     def static_review_code(code: str) -> "ReviewResult":
         """Static rule-based code check, used as fallback when LLM review is unavailable.
 
-        Checks the three highest-value rules that are syntactically detectable
+        Checks the four highest-value rules that are syntactically detectable
         without an LLM call.
 
         Args:
@@ -214,6 +214,15 @@ class ReviewAgent:
         # Rule 3: visualization imports
         if re.search(r"^import (matplotlib|seaborn)|^from (matplotlib|seaborn)", code, re.MULTILINE):
             issues.append("Visualization library (matplotlib/seaborn) imported — not allowed")
+
+        # Rule 4: FIMO output filtered on q-value instead of p-value
+        if re.search(r"\bfimo\b", code, re.IGNORECASE):
+            if re.search(r"q[-_.]?value", code):
+                issues.append(
+                    "FIMO output filtered on q-value — for peak-level analysis, "
+                    "use p-value < 1e-4 instead (q-value correction is overly "
+                    "conservative for short peak regions)"
+                )
 
         if issues:
             return ReviewResult(

@@ -95,6 +95,14 @@ do NOT flag it as an issue.
 **7. Code matches hypothesis**
 Read the hypothesis prediction carefully. Does the code actually test that specific claim? For example, if the hypothesis says "the REST motif (21bp) contains the ATF6 motif (5bp) as a substring," the code must scan the motif sequence itself — NOT scan broad peak regions (hundreds of bp) for the pattern, which would test a different question. If the code tests something different from what the prediction states → REJECT (do not fix — the mismatch is too fundamental).
 
+**8. FIMO p-value filtering**
+When code filters FIMO output for peak-level motif analysis, it MUST use `p-value < 1e-4`,
+not q-value. FIMO's q-value applies genome-wide multiple testing correction that is overly
+conservative for short peak regions — legitimate hits in control/shuffled regions get
+q > 0.05, producing zero results. If the code filters on q-value, FIX it to use p-value.
+This takes precedence over Check #7: even if the hypothesis text says "q-value," the code
+must use p-value for peak-level FIMO analysis.
+
 # Task
 
 Review the code against the checklist above. Respond in JSON format:
@@ -215,53 +223,14 @@ Every hypothesis must name a specific causal mechanism — a molecular event tha
 WHY TF_B predicts TF_A's binding. Reject hypotheses that merely characterize the data or
 re-confirm co-occurrence without proposing a mechanism.
 
-BAD (characterization or co-occurrence re-statement — reject):
-- "Are the shared sites at promoters or enhancers?" — describes where, not why
-- "Does the correlation hold genome-wide?" — confirms co-occurrence at larger scale
-- "What chromatin states do co-occupied sites fall in?" — describes, does not explain
-- "Is TF_A enrichment higher where TF_B is present?" — re-states the original finding
+Directional advisory: Consider whether the named mechanism and simple co-occupancy would
+predict the same qualitative outcome — if so, note this as a weakness but do NOT treat it
+as an automatic rejection. Spatial and geometric tests (signal centering, summit
+displacement, motif offset distributions) are inherently distinguishing and should not be
+flagged on directional grounds.
 
-GOOD (causal mechanism — approve):
-- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin
-  (ChromHMM heterochromatin states) relative to TF_A-only sites" — tests a molecular event
-- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should
-  exceed PWM match rate" — tests a sequence-level mechanism
-- "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites
-  should drop when TF_B motif is absent" — tests a physical interaction mechanism
-
-Directional counterfactual test: Compare two scenarios:
-(A) The named mechanism operates.
-(B) TF_B and TF_A merely co-occur at active regulatory sites with no causal relationship.
-
-Ask: do scenarios A and B predict the SAME qualitative direction for the measured outcome?
-
-- If SAME direction → REJECT. The test cannot distinguish mechanism from co-occupancy.
-- If OPPOSITE or ORTHOGONAL directions → APPROVE.
-
-If the hypothesis includes a scratchpad with prediction_if_mechanism and
-prediction_if_co_occupancy_only, evaluate those two fields directly. If the scratchpad
-is absent, reason about scenarios A and B yourself.
-
-Do NOT reject merely because co-occupancy could produce a weaker version of the same
-effect. Reject ONLY when the qualitative direction (up vs down, enriched vs depleted,
-present vs absent) is identical.
-
-PASS examples (directions differ or are orthogonal — approve):
-- "Co-bound sites should be enriched in CLOSED chromatin" — mechanism predicts closed,
-  co-occupancy predicts open. Opposite. PASS.
-- "TF_B's motif contains TF_A's core sequence as a literal substring" — mechanism predicts
-  substring match, co-occupancy has no prediction about motif content. Orthogonal. PASS.
-- "TF_A ChIP signal centered on TF_B's motif, not TF_A's own motif" — mechanism predicts
-  centering on TF_B, co-occupancy predicts centering on TF_A. Opposite. PASS.
-
-FAIL examples (same direction — reject):
-- "TF_A signal is higher where TF_B is present" — both mechanism and co-occupancy predict
-  higher signal. Same direction. FAIL.
-- "Co-bound sites are enriched in active chromatin marks" — both predict active marks.
-  Same direction. FAIL.
-
-Reject if the hypothesis does not name a causal mechanism, OR if the directional
-counterfactual test fails (same qualitative direction under both scenarios).
+If the hypothesis includes a scratchpad, check that prediction_if_mechanism and
+prediction_if_co_occupancy_only are meaningfully different.
 
 **5. Implied answer already exists**
 If a prior CONFIRMED result logically entails the answer to this hypothesis — either YES or
@@ -300,8 +269,8 @@ OR if issues found:
 }}
 
 rejection_category values:
-- "wrong_mechanism" — the mechanism itself is the problem: duplicate, characterization,
-  same-direction counterfactual, or implied by prior results. (Checks 1, 3, 4, 5)
+- "wrong_mechanism" — the mechanism itself is the problem: duplicate, characterization
+  (no causal mechanism named), or implied by prior results. (Checks 1, 3, 4, 5)
 - "flawed_test" — the mechanism is sound but the prediction is unclear or the test
   design is flawed. (Check 2)
 """
