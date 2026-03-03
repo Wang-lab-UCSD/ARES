@@ -158,7 +158,7 @@ class HypothesisAgent:
             rejected_hypothesis: The hypothesis that was rejected
             feedback: Reviewer's feedback on why it was rejected
             data_manifest: Available data and tools
-            rejection_category: Structured category from reviewer ("wrong_mechanism" or "flawed_test")
+            rejection_category: Structured category from reviewer ("wrong_mechanism")
             reviewer_rejected: All hypotheses rejected by reviewer this session (with feedback)
             file_summaries: Pre-run file inspection output (from iteration 0)
 

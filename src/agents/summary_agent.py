@@ -142,6 +142,7 @@ class SummaryAgent:
                 "converged": result.get("converged", False),
                 "mechanism_category_number": result.get("mechanism_category_number"),
                 "confidence": result.get("confidence"),
+                "reasoning": result.get("reasoning"),
             })
 
             return result

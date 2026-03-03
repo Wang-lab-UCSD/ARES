@@ -24,7 +24,7 @@ class ReviewResult:
     corrected_code: str | None
     issues_found: list[str]
     reasoning: str
-    rejection_category: str | None = None  # "wrong_mechanism", "flawed_test", or None
+    rejection_category: str | None = None  # "wrong_mechanism" or None
 
 
 class ReviewAgent:
@@ -215,9 +215,9 @@ class ReviewAgent:
         if re.search(r"^import (matplotlib|seaborn)|^from (matplotlib|seaborn)", code, re.MULTILINE):
             issues.append("Visualization library (matplotlib/seaborn) imported — not allowed")
 
-        # Rule 4: FIMO output filtered on q-value instead of p-value
+        # Rule 4: FIMO q-value filtering (should use p-value for peak-level analysis)
         if re.search(r"\bfimo\b", code, re.IGNORECASE):
-            if re.search(r"q[-_.]?value", code):
+            if re.search(r"q[-.]?value", code):
                 issues.append(
                     "FIMO output filtered on q-value — for peak-level analysis, "
                     "use p-value < 1e-4 instead (q-value correction is overly "

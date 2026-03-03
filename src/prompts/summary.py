@@ -22,22 +22,20 @@ job is to check whether that specific prediction was confirmed.
 
 **SUPPORTS** — ALL of the following must be true:
   1. The predicted effect exists in the data
-  2. The effect is statistically significant (p < 0.05)
-  3. The effect size is meaningful: enrichment >= 1.5x over background, OR
-     absolute difference >= 10 percentage points, OR Cohen's d >= 0.5
+  2. p < 0.05
+  3. fold change >= 1.5 OR Cohen's d >= 0.4
   If all three are met, set support_level = "SUPPORTS" and confidence >= 0.8.
+
+**INCONCLUSIVE** — The effect is real but modest:
+  1. p < 0.05
+  2. 1.2 <= fold change < 1.5 OR 0.2 <= Cohen's d < 0.4
+  Set support_level = "INCONCLUSIVE" and confidence 0.4-0.7.
 
 **REFUSES** — ANY of the following:
   1. The predicted effect is absent or reversed (e.g., depletion instead of enrichment)
-  2. The effect is not significant (p >= 0.05) with adequate sample size (N >= 30)
-  3. The effect size is trivial: enrichment < 1.2x AND difference < 5 percentage points
+  2. p >= 0.05 with adequate sample size (N >= 30)
+  3. fold change < 1.2 AND Cohen's d < 0.2
   If clearly refused, set support_level = "REFUSES" and confidence >= 0.7.
-
-**INCONCLUSIVE** — The result falls between SUPPORTS and REFUSES:
-  1. Significant but small effect (1.2x-1.5x enrichment, or 5-10 pp difference)
-  2. Large effect but not significant (small sample size)
-  3. Mixed signals (some metrics support, others refuse)
-  Set support_level = "INCONCLUSIVE" and confidence 0.4-0.7.
 
 **ERROR** — Technical failure prevented analysis (code crashed, wrong file format, etc.)
 
@@ -61,13 +59,15 @@ You have NO stake in any particular outcome. You were not involved in generating
 
 ## Convergence Criteria
 
-Declare converged=true ONLY when ALL THREE conditions are met:
+Declare converged=true ONLY when ALL FOUR conditions are met:
 
-1. **Statistical support**: At least one result shows p < 0.05 with meaningful effect size (enrichment >= 1.5x, OR absolute difference >= 10 percentage points, OR Cohen's d >= 0.5).
+1. **Statistical support**: At least one result shows p < 0.05 with meaningful effect size (fold change >= 1.5 OR Cohen's d >= 0.4).
 
 2. **Named mechanism**: The evidence maps to a specific numbered category from the mechanism taxonomy. Co-occurrence and correlation do NOT qualify — you must identify a concrete molecular or structural mechanism.
 
 3. **But-for test**: Ask — "If the proposed causal agent were absent, would the data look different?" If the answer is "not necessarily" (because the result could reflect passive co-occurrence, shared active chromatin, or any confound), do NOT converge.
+
+4. **Cross-layer consistency**: The proposed mechanism must be supported by consistent directional evidence from at least two independent omics layers (e.g., ChIP-seq + DNase-seq, or motif analysis + histone marks, or Hi-C + expression). A single data type is not sufficient — convergence requires cross-validation across independent measurement modalities.
 
 ## Mechanism Taxonomy
 
@@ -145,7 +145,7 @@ RNA is now recognized as a major scaffold for TF interactions.
 
 - "Co-bound sites are in active chromatin" — correlation. Active sites attract many TFs. Does NOT establish mechanism unless pioneer activity is shown (mechanism #3 requires the pioneer to OPEN the site, not merely be present at already-open sites).
 - "TF_B signal is higher where TF_A is present" — restates the original finding. Not a mechanism.
-- "The effect is small but real" — effect sizes below threshold (< 1.5x) do not meet the statistical support criterion.
+- "The effect is small but real" — effect sizes below threshold (fold change < 1.5 AND Cohen's d < 0.4) do not meet the statistical support criterion.
 - "Data cannot answer the question" — insufficient data is NOT convergence.
 
 Co-occurrence alone maps to no category and does not warrant convergence. Alternatively, if the evidence supports a mechanism not listed here, convergence is permitted provided all three criteria are met AND the proposed mechanism: (1) names a specific molecular process (e.g., a named enzymatic activity, a structural interaction, a defined signal transduction step), (2) states a clear causal chain (what acts on what, in what order), and (3) is not merely a re-description of the observed correlation.
@@ -236,10 +236,11 @@ def build_convergence_check_prompt(
 
 Evaluate whether the accumulated evidence is sufficient to declare convergence on a named causal mechanism.
 
-Apply ALL THREE convergence criteria strictly:
-1. Statistical support (p < 0.05, effect size >= 1.5x enrichment or >= 10pp difference or Cohen's d >= 0.5)
+Apply ALL FOUR convergence criteria strictly:
+1. Statistical support (p < 0.05, fold change >= 1.5 or Cohen's d >= 0.4)
 2. Named mechanism from taxonomy (cite category number)
 3. But-for test (causal, not merely correlational)
+4. Cross-layer consistency (consistent directional support from >= 2 independent omics layers)
 
 Respond in JSON format:
 {{

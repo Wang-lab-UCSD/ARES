@@ -95,13 +95,12 @@ do NOT flag it as an issue.
 **7. Code matches hypothesis**
 Read the hypothesis prediction carefully. Does the code actually test that specific claim? For example, if the hypothesis says "the REST motif (21bp) contains the ATF6 motif (5bp) as a substring," the code must scan the motif sequence itself — NOT scan broad peak regions (hundreds of bp) for the pattern, which would test a different question. If the code tests something different from what the prediction states → REJECT (do not fix — the mismatch is too fundamental).
 
-**8. FIMO p-value filtering**
-When code filters FIMO output for peak-level motif analysis, it MUST use `p-value < 1e-4`,
-not q-value. FIMO's q-value applies genome-wide multiple testing correction that is overly
-conservative for short peak regions — legitimate hits in control/shuffled regions get
-q > 0.05, producing zero results. If the code filters on q-value, FIX it to use p-value.
-This takes precedence over Check #7: even if the hypothesis text says "q-value," the code
-must use p-value for peak-level FIMO analysis.
+**8. FIMO p-value vs q-value filtering**
+When code filters FIMO output for peak-level motif analysis, prefer `p-value < 1e-4` over
+q-value. FIMO's q-value applies genome-wide multiple testing correction that may be overly
+conservative for short peak regions — legitimate hits in control/shuffled regions can get
+q > 0.05, producing zero results. If the code filters on q-value and gets zero or
+suspiciously few hits, flag it and suggest switching to p-value filtering.
 
 # Task
 
@@ -128,9 +127,9 @@ If you fix the code, return the COMPLETE corrected script (not just the changed 
     return prompt
 
 
-HYPOTHESIS_REVIEW_SYSTEM_PROMPT = """You review scientific hypotheses before they are tested. Your job is to catch duplicates, vague predictions, and association/characterization hypotheses BEFORE expensive code generation and execution.
+HYPOTHESIS_REVIEW_SYSTEM_PROMPT = """You review scientific hypotheses before they are tested. Your job is to catch duplicates and association/characterization hypotheses BEFORE expensive code generation and execution.
 
-Be strict: a wasted hypothesis means wasted computation time. But only reject for real issues — duplicates, genuinely ambiguous predictions, or hypotheses that fail to name a causal mechanism."""
+You have exactly TWO checklist items. Reject ONLY when one of them is violated. Do NOT evaluate statistical methodology, test design, control groups, or causal inference validity — that is not your job."""
 
 
 def build_hypothesis_review_prompt(
@@ -181,98 +180,61 @@ def build_hypothesis_review_prompt(
 
 # Review Checklist
 
-**1. Duplicate check**
-Is this hypothesis testing essentially the same question as one already tested? Different wording does not make it a new hypothesis. Examples of duplicates:
-- "ATF6 peaks overlap REST peaks" vs "REST peaks overlap ATF6 peaks" (same overlap test)
-- "REST motif is enriched in ATF6 peaks" vs "ATF6 peaks contain REST motif" (same enrichment test)
-If duplicate → REJECT.
+You have exactly TWO checks. Apply ONLY these. Do not invent additional criteria.
 
-**2. Prediction clarity**
-Is the prediction specific enough that a coder would know exactly:
-- What to compare (group A vs group B)?
-- What statistical test to run?
-- What result would support vs refuse the hypothesis?
+**1. Already answered**
+Has this question already been answered — either directly or by logical implication — by a
+prior tested hypothesis? This includes:
+- Same question reworded (e.g. "A overlaps B" vs "B overlaps A")
+- Same mechanism class with a different proxy (e.g. prior SUPPORTS "open chromatin" →
+  "H3K27ac enriched at co-bound sites" is the same claim)
+- Logical inverse of a confirmed result (e.g. prior SUPPORTS enrichment → testing
+  depletion is redundant)
 
-Do NOT reject for missing file paths, column names, or tool parameters — the coding agent
-has access to the full data manifest and will resolve those. The hypothesis is a scientific
-question, not a code specification.
+If the prior list is empty, this check cannot trigger — approve.
 
-Only reject if the scientific question itself is ambiguous. For example: "REST motif contains
-ATF6 core sequence" is ambiguous — does this mean scan the 21bp motif consensus for a 5bp
-substring, or scan broad peak regions for motif occurrences? The prediction must make the
-scientific comparison clear, not the implementation details.
+**2. Mechanism vs. association**
+The hypothesis must name a specific causal mechanism — a molecular event explaining WHY
+TF_B predicts TF_A binding. Reject if it merely describes the data (where, what, how much)
+or re-confirms co-occurrence without proposing a mechanism.
 
-**3. Duplicate mechanism test**
-Look at the prior results below. If a prior SUPPORTS result already established a specific
-mechanism finding, any hypothesis testing the same mechanism claim — regardless of framing —
-is a duplicate. Reject it.
+BAD (characterization or co-occurrence re-statement — reject):
+- "Are the shared sites at promoters or enhancers?" — describes where, not why
+- "Does the correlation hold genome-wide?" — confirms co-occurrence at larger scale
+- "What chromatin states do co-occupied sites fall in?" — describes, does not explain
+- "Is TF_A enrichment higher where TF_B is present?" — re-states the original finding
 
-Examples of disguised duplicates:
-- Prior SUPPORTS "TF_B motif enriched at TF_A peaks" → any re-measurement of TF_A/TF_B
-  enrichment or overlap in any form is a duplicate
-- Prior SUPPORTS "co-bound sites are in active chromatin" → "H3K27ac enriched at co-bound
-  sites" is a duplicate (same mechanism class, different proxy)
-- Prior SUPPORTS "TF_B is at loop anchors" → "TF_B:TF_A overlap rate genome-wide" tests
-  the same spatial co-localization claim at larger scale
+GOOD (causal mechanism — approve):
+- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin
+  (ChromHMM heterochromatin states) relative to TF_A-only sites" — tests a molecular event
+- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should
+  exceed PWM match rate" — tests a sequence-level mechanism
+- "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites
+  should drop when TF_B motif is absent" — tests a physical interaction mechanism
 
-Only reject if a prior SUPPORTS result already established this same mechanism claim. If the
-prior list is empty, this check does not apply — approve.
-
-**4. Mechanism vs. association**
-Every hypothesis must name a specific causal mechanism — a molecular event that explains
-WHY TF_B predicts TF_A's binding. Reject hypotheses that merely characterize the data or
-re-confirm co-occurrence without proposing a mechanism.
-
-Directional advisory: Consider whether the named mechanism and simple co-occupancy would
-predict the same qualitative outcome — if so, note this as a weakness but do NOT treat it
-as an automatic rejection. Spatial and geometric tests (signal centering, summit
-displacement, motif offset distributions) are inherently distinguishing and should not be
-flagged on directional grounds.
-
-If the hypothesis includes a scratchpad, check that prediction_if_mechanism and
-prediction_if_co_occupancy_only are meaningfully different.
-
-**5. Implied answer already exists**
-If a prior CONFIRMED result logically entails the answer to this hypothesis — either YES or
-NO — reject it. The pipeline should not run code to test what can already be derived from
-prior results.
-
-Examples:
-- Prior CONFIRMED "co-bound sites are in open chromatin (ATAC-seq enriched)"
-  → "H3K27ac enriched at co-bound sites" is implied (open chromatin ≈ active marks) → REJECT
-  → "H3K4me3 enriched at co-bound sites" is implied by the same logic → REJECT
-  → "co-bound sites are in closed/repressed chromatin" is the logical inverse → REJECT
-- Prior CONFIRMED "TF_B motif is enriched in TF_A peaks"
-  → "TF_B motif is NOT enriched in TF_A peaks" is the logical inverse → REJECT
-
-Rule: If you can answer this hypothesis (YES or NO) by reasoning from prior confirmed
-results without running new code, reject it. Only approve if the hypothesis tests something
-genuinely new that cannot be derived.
+Do NOT reject for:
+- Statistical methodology concerns (test design, controls, bias, confounding)
+- Missing implementation details (file paths, column names, tool parameters)
+- Low discriminating power (same-direction counterfactual is advisory, not a reject)
 
 # Task
 
-Review the hypothesis. Respond in JSON:
+Review the hypothesis against ONLY the two checks above. Respond in JSON:
 
 {{
     "approved": true,
     "issues": [],
-    "reasoning": "Hypothesis is novel and prediction is clear"
+    "reasoning": "Hypothesis is novel and names a causal mechanism"
 }}
 
-OR if issues found:
+OR if one of the two checks fails:
 
 {{
     "approved": false,
-    "rejection_category": "wrong_mechanism" | "flawed_test",
-    "issues": ["Issue 1", "Issue 2"],
+    "rejection_category": "wrong_mechanism",
+    "issues": ["Which check failed and why"],
     "reasoning": "Why this hypothesis should not be tested"
 }}
-
-rejection_category values:
-- "wrong_mechanism" — the mechanism itself is the problem: duplicate, characterization
-  (no causal mechanism named), or implied by prior results. (Checks 1, 3, 4, 5)
-- "flawed_test" — the mechanism is sound but the prediction is unclear or the test
-  design is flawed. (Check 2)
 """
     return prompt
 

@@ -306,7 +306,6 @@ class Orchestrator:
                     break
 
                 hypo_id = hypothesis.get("id", len(tested_ids))
-                tested_ids.add(hypo_id)
                 self.state.current_hypothesis_index = hypo_id
 
                 # Stage 1: Review hypothesis before code generation
@@ -388,6 +387,9 @@ class Orchestrator:
                     # Only reset rejection counter on genuine approval (not LLM-unavailable bypass)
                     if hypo_review.approved:
                         consecutive_hypo_rejections = 0
+
+                # Hypothesis passed review — mark as consumed
+                tested_ids.add(hypo_id)
 
                 # Stage 1.5: Deterministic data-availability check
                 data_ok, missing_keys, available_keys = self._check_data_availability(hypothesis)
@@ -899,6 +901,10 @@ class Orchestrator:
             )
             return
 
+        # Store convergence check reasoning even when not converged
+        if self.state.tested_hypotheses:
+            self.state.tested_hypotheses[-1]["convergence_reasoning"] = convergence.get("reasoning", "")
+
         # Step 2: HypothesisAgent proposes next hypothesis
         group_summary = self._build_group_summary(last_hypothesis)
 
@@ -959,7 +965,11 @@ class Orchestrator:
                     "warning"
                 )
             else:
-                for hypo in refinement.get("hypotheses", []):
+                retry_hypos = refinement.get("hypotheses", [])
+                if not retry_hypos:
+                    # LLM didn't return a hypothesis — re-queue the original
+                    retry_hypos = [dict(last_hypothesis)]
+                for hypo in retry_hypos:
                     hypo["_is_retry"] = True  # Skip hypothesis review for technical retries
                     hypo["_technical_issues"] = technical_issues  # Pass to coding agent
                     # Bypass name-dedup in add_hypothesis: retries intentionally

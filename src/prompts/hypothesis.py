@@ -126,9 +126,9 @@ Valid (causal mechanism — propose these):
 - "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should exceed PWM match rate"
 - "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites should drop when TF_B motif is absent"
 
-Tool note: When referencing FIMO motif significance in your prediction, use p-value
-(e.g., "p < 1e-4"), not q-value. For peak-level motif analysis, FIMO's q-value applies
-genome-wide multiple testing correction that is overly conservative for short peak regions.
+Tool note: When referencing FIMO motif significance in your prediction, prefer p-value
+(e.g., "p < 1e-4") over q-value. For peak-level motif analysis, FIMO's q-value applies
+genome-wide multiple testing correction that may be overly conservative for short peak regions.
 
 Your hypothesis should also be motivated by previous results — build on what you've learned,
 don't ignore it. But advancing toward mechanism takes priority over following up on details.
@@ -198,7 +198,7 @@ def build_regeneration_prompt(
         feedback: Reviewer's feedback on why it was rejected
         tested_hypotheses: All previously tested hypotheses
         data_manifest: Available data and tools
-        rejection_category: Structured category from reviewer ("wrong_mechanism" or "flawed_test")
+        rejection_category: Structured category from reviewer ("wrong_mechanism")
         reviewer_rejected: All hypotheses rejected by reviewer this session (with feedback)
         file_summaries: Pre-run file inspection output (from iteration 0)
 
@@ -232,21 +232,10 @@ def build_regeneration_prompt(
     if rejection_category == "wrong_mechanism":
         diagnosis_section = """# Diagnosis: Wrong Mechanism
 
-The reviewer determined that the MECHANISM itself is the problem — it is a duplicate of a
-prior test, a characterization (not causal), or its answer is already implied by prior
-results.
+The reviewer determined that this hypothesis is a duplicate of a prior test, already
+implied by prior results, or a characterization (not causal).
 
 **Action**: ABANDON this mechanism entirely. Propose a DIFFERENT causal mechanism."""
-
-    elif rejection_category == "flawed_test":
-        diagnosis_section = """# Diagnosis: Flawed Test Design
-
-The reviewer determined that the mechanism is reasonable, but the prediction is unclear,
-the verification plan has a flawed null model, or the test logic does not match the
-hypothesis claim.
-
-**Action**: KEEP the same mechanism. Redesign the test with a different experimental
-approach — different comparison groups, different statistical test, or different data."""
 
     else:
         # Fallback when category is unavailable (e.g. data-availability rejection from
@@ -256,15 +245,10 @@ approach — different comparison groups, different statistical test, or differe
 Before generating a replacement, determine WHY the hypothesis was rejected:
 
 **(A) Wrong mechanism** — The rejection says the mechanism is a duplicate, a characterization
-(not causal), or the prediction's answer is implied by the setup. In this case, ABANDON the
-mechanism and propose a different one.
+(not causal), or already implied by prior results. In this case, ABANDON the mechanism and
+propose a different one.
 
-**(B) Flawed test design** — The rejection says the mechanism is reasonable but the prediction
-is unclear, the verification plan has a flawed null model, or the test logic does not match
-the hypothesis claim. In this case, KEEP the same mechanism and redesign the test with a
-different experimental approach.
-
-**(C) Missing data** — The rejection says the required data files or tools are not available
+**(B) Missing data** — The rejection says the required data files or tools are not available
 in the manifest. In this case, KEEP the mechanism idea but redesign the test to use only
 data that IS available, or propose a different mechanism if no viable test exists."""
 
@@ -300,9 +284,9 @@ Generate ONE new hypothesis that:
 
 **Hard rule**: Every hypothesis must propose a specific CAUSAL mechanism — a molecular event that explains WHY TF_B predicts TF_A's binding. Characterization hypotheses (describing what data looks like, confirming co-occurrence, or re-stating the original finding at a different scale) are NOT valid.
 
-Tool note: When referencing FIMO motif significance in your prediction, use p-value
-(e.g., "p < 1e-4"), not q-value. For peak-level motif analysis, FIMO's q-value applies
-genome-wide multiple testing correction that is overly conservative for short peak regions.
+Tool note: When referencing FIMO motif significance in your prediction, prefer p-value
+(e.g., "p < 1e-4") over q-value. For peak-level motif analysis, FIMO's q-value applies
+genome-wide multiple testing correction that may be overly conservative for short peak regions.
 
 Each hypothesis must have exactly ONE prediction tested by exactly ONE statistical test.
 

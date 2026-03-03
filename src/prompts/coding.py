@@ -406,6 +406,7 @@ Common root causes to check:
 - Output format assumptions that don't match actual output (inspect output first)
 - Wrong data types or column names (print and verify before using)
 - File path or format issues
+- Too few groups/strata for a statistical test (e.g., stratifying by quartile × decile leaves <3 groups): switch to a method that does not require binning, such as regression with continuous covariates
 
 If the error is caused by a missing data file (FileNotFoundError, file does not exist)
 or an unavailable CLI tool (command not found) and there is NO valid substitute in the

@@ -1,3 +1,5 @@
+Read AGENT_WORKFLOW.md for agent orchestration rules. NEVER modify this file.
+
 # Experiment Design Generation Pipeline
 
 ## Project Context
