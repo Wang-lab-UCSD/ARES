@@ -78,6 +78,8 @@ doc/
 METHODS.md
 analyze_pipeline_log.py
 examples/
+!examples/sp1_nfya_K562/
+!examples/sp1_nfya_K562/**
 
 # Misc
 .mypy_cache/
