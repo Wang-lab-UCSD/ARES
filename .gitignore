@@ -60,3 +60,17 @@ slides/
 
 # Large data files
 data/
+
+# API keys — never commit
+load_api_keys.sh
+
+# Personal research PDFs
+doc/*.pdf
+
+METHODS.md
+
+analyze_pipeline_log.py
+
+examples/
+
+doc/

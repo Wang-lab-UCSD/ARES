@@ -38,7 +38,8 @@ def build_refinement_prompt(
     last_result: dict[str, Any] | None,
     data_manifest: dict[str, Any],
     group_summary: str | None = None,
-    file_summaries: dict[str, str] | None = None,
+    encourage_different_mechanism: bool = False,
+    unused_biology_layers: list[str] | None = None,
 ) -> str:
     """Build prompt for refining hypotheses based on results.
 
@@ -52,19 +53,67 @@ def build_refinement_prompt(
         last_result: Results from testing the last hypothesis, or None on first iteration
         data_manifest: Available data and tools
         group_summary: Summary of a completed hypothesis group for synthesis
-        file_summaries: Pre-run file inspection output (from iteration 0)
+        encourage_different_mechanism: If True, instruct to prefer a different mechanism category when at least one hypothesis already SUPPORTS
+        unused_biology_layers: When set (e.g. ["rnaseq", "phyloP"]), expression/conservation data are available but no supported hypothesis used them; prefer proposing a hypothesis that uses one so the conclusion can address biological purpose.
 
     Returns:
         Formatted prompt string
     """
-    data_section = _format_data_manifest(data_manifest, file_summaries)
+    data_section = _format_data_manifest(data_manifest)
+    different_mechanism_guidance = ""
+    if encourage_different_mechanism:
+        different_mechanism_guidance = """
+**Diversity after support**: At least one hypothesis has already **SUPPORTS**. Prefer proposing a hypothesis that tests a **different** mechanism (e.g. pioneer vs tethering vs chromatin modifier—these are examples of what "different mechanism" means, not a prescribed list; propose whatever mechanism best fits the data), so the conclusion can compare or synthesize across mechanisms. *Exception*: If you are testing a previously supported mechanism using a fundamentally NEW data modality (like moving from ChIP to RNA-seq or phyloP for cross-layer validation), that is highly encouraged and not considered repetitive.
+
+"""
+    biology_layers_guidance = ""
+    if unused_biology_layers:
+        layers_desc = {
+            "rnaseq": "expression (RNA-seq)",
+            "phyloP": "conservation (phyloP)",
+            "string": "protein-protein interaction network (STRING DB)",
+        }
+        names = [layers_desc.get(k, k) for k in unused_biology_layers]
+        biology_layers_guidance = f"""
+**Use additional data layers when possible**: The manifest provides {", ".join(names)}, but no supported result has used them yet. Convergence will require at least one hypothesis that uses expression or conservation data. Prefer proposing a hypothesis whose required_data includes one of these. Examples:
+- **RNA-seq**: link co-occupancy or motif grammar to gene expression (e.g. "genes near co-bound sites are more highly expressed")
+- **phyloP**: test conservation at grammar sites (e.g. "co-bound motif pairs are more conserved than solo motifs")
+- **STRING**: test whether TF_A and TF_B interact directly or share cofactors via the STRING protein-protein interaction network (e.g. "TF_A and TF_B have a high-confidence interaction or share >=2 common interactors in STRING, consistent with tethering or cofactor-mediated cooperation"). STRING data keys: string.species, string.api_base, string.min_score, etc. Use the STRING API to query interactions.
+
+"""
 
     if last_hypothesis is not None and last_result is not None:
+        support_level = last_result.get("support_level", "N/A")
+        confidence = last_result.get("confidence", "N/A")
+
+        findings = last_result.get("findings") or []
+        if isinstance(findings, list):
+            findings_text = "\n".join(f"- {f}" for f in findings) if findings else "No detailed findings recorded."
+        else:
+            findings_text = str(findings)
+
+        issues = last_result.get("issues") or []
+        if isinstance(issues, list):
+            issues_text = "\n".join(f"- {i}" for i in issues) if issues else "None recorded."
+        else:
+            issues_text = str(issues)
+
+        if findings:
+            surprising_intro = (
+                "Below are observations that may be surprising, strong, or partially contradictory.\n"
+                "Your next hypothesis MUST treat at least one of these as a phenomenon to explain,\n"
+                "not just re-ask the original question."
+            )
+        else:
+            surprising_intro = "No specific high-signal findings were extracted; focus on clarifying the mechanism."
+
         latest_section = f"""# Latest Hypothesis Tested
 
 **Name**: {last_hypothesis.get('name', 'N/A')}
 **Rationale**: {last_hypothesis.get('rationale', 'N/A')}
 **Prediction**: {last_hypothesis.get('prediction', 'N/A')}
+
+**Support level**: {support_level} (confidence {confidence})
 
 # Experimental Results
 
@@ -74,7 +123,16 @@ def build_refinement_prompt(
 {last_result.get('evidence', 'No evidence recorded')}
 
 **Interpretation**:
-{last_result.get('interpretation', 'No interpretation')}"""
+{last_result.get('interpretation', 'No interpretation')}
+
+## Surprising / high-signal observations from this result
+
+{surprising_intro}
+
+{findings_text}
+
+**Issues / anomalies noted**:
+{issues_text}"""
     else:
         latest_section = """# First Iteration
 
@@ -103,7 +161,8 @@ Before selecting data for your hypothesis, review all available files in the man
 Based on these results, decide how to proceed.
 
 INVESTIGATION GUIDANCE:
-
+{different_mechanism_guidance}
+{biology_layers_guidance}
 You are in the **mechanism exploration phase**.
 
 **Hard rule — no characterization**: Do NOT propose hypotheses that describe what the data
@@ -116,15 +175,28 @@ A valid mechanism hypothesis must:
 2. Predict a direction of effect
 3. Be falsifiable — a negative result would rule out this mechanism
 
+**Multi-facet verification**: A single mechanism can and should be verified from multiple
+coordinated angles in one iteration. For each hypothesis, plan 2–4 closely related checks
+that all speak to the SAME mechanism, for example:
+- Co-binding geometry: overlap/co-occurrence fractions (both directions: P(B|A) AND P(A|B))
+- Genomic context: ChromHMM or TSS-distance enrichment to test the predicted environment
+- Signal coupling: quantitative correlation or median comparison of signal intensities
+- Negative control slice: "TF_B present but TF_A absent" regions as a contrast
+
+When relevant, always check **both conditional directions** (e.g., "% of SP1 peaks with NFYA"
+AND "% of NFYA peaks with SP1"). An asymmetric relationship (NFYA almost always with SP1,
+but SP1 not always with NFYA) is a strong mechanistic signal that would be missed by one
+direction alone.
+
 Invalid (characterization — do NOT propose):
 - "Are the shared sites at promoters or enhancers?" — describes where, not why
 - "Does the correlation hold genome-wide?" — confirms the association at larger scale
 - "What chromatin states do co-occupied sites fall in?" (unless predicting a specific pioneer/accessibility mechanism)
 
 Valid (causal mechanism — propose these):
-- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin (chromHMM heterochromatin states) relative to TF_A-only sites"
-- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should exceed PWM match rate"
-- "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites should drop when TF_B motif is absent"
+- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin (chromHMM heterochromatin states) relative to TF_A-only sites; AND TF_B-only sites should be more accessible than background"
+- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should exceed PWM match rate; check also if TF_B signal at co-bound sites predicts TF_A signal"
+- "TF_B and TF_A are tethered via protein-protein interaction: check co-occupancy fraction from both sides AND whether TF_A signal drops at TF_B sites when TF_B motif is absent"
 
 Tool note: When referencing FIMO motif significance in your prediction, prefer p-value
 (e.g., "p < 1e-4") over q-value. For peak-level motif analysis, FIMO's q-value applies
@@ -132,6 +204,13 @@ genome-wide multiple testing correction that may be overly conservative for shor
 
 Your hypothesis should also be motivated by previous results — build on what you've learned,
 don't ignore it. But advancing toward mechanism takes priority over following up on details.
+
+When the last result **REFUSES** or is **INCONCLUSIVE** but its findings include strong or
+surprising patterns (e.g., large effects in unexpected directions, subgroups behaving
+differently, sharp gradients across strata), your next hypothesis MUST propose a mechanism
+that explains those patterns themselves. Do NOT simply re-ask the same question with
+slightly different thresholds or proxies. Treat the surprising observations as a new
+phenomenon to explain. Even if the overall hypothesis was rejected, you should use any positive, interesting signals as a foundation for your next hypothesis so that the final conclusion weaves these iterations into a coherent story.
 
 Do NOT choose REFINE just to add more permutations, stricter matching, or additional
 control analyses on the same hypothesis. A good conclusion acknowledges limitations
@@ -164,7 +243,8 @@ Respond in JSON format:
                 "causal_chain": "Event A → Event B → measurable outcome C",
                 "prediction_if_mechanism": "What the data would show if this mechanism operates",
                 "prediction_if_co_occupancy_only": "What the data would show if TF_B and TF_A simply co-occur at active sites with no causal relationship",
-                "distinguishable": "YES or NO — and why. If NO, redesign the prediction field below."
+                "distinguishable": "YES or NO — and why. If NO, redesign the prediction field below.",
+                "multi_facet_plan": "List 2–4 coordinated checks for this mechanism (overlap fractions from both directions, context, signal coupling, negative control)"
             }},
             "name": "Hypothesis name",
             "group": "mechanism-slug",
@@ -188,7 +268,6 @@ def build_regeneration_prompt(
     data_manifest: dict[str, Any],
     rejection_category: str | None = None,
     reviewer_rejected: list[dict[str, Any]] | None = None,
-    file_summaries: dict[str, str] | None = None,
 ) -> str:
     """Build prompt for regenerating a rejected hypothesis.
 
@@ -200,12 +279,11 @@ def build_regeneration_prompt(
         data_manifest: Available data and tools
         rejection_category: Structured category from reviewer ("wrong_mechanism")
         reviewer_rejected: All hypotheses rejected by reviewer this session (with feedback)
-        file_summaries: Pre-run file inspection output (from iteration 0)
 
     Returns:
         Formatted prompt string
     """
-    data_section = _format_data_manifest(data_manifest, file_summaries)
+    data_section = _format_data_manifest(data_manifest)
 
     tested_section = ""
     if tested_hypotheses:
@@ -229,13 +307,16 @@ def build_regeneration_prompt(
             prior_rejected_section = "\n# Previously Rejected Hypotheses (do NOT repeat these)\n\n" + "\n".join(parts)
 
     # Build diagnosis section based on structured rejection category
-    if rejection_category == "wrong_mechanism":
-        diagnosis_section = """# Diagnosis: Wrong Mechanism
+    if rejection_category in ("wrong_mechanism", "already_answered"):
+        diagnosis_section = """# Diagnosis: Wrong Mechanism or Duplicate
 
 The reviewer determined that this hypothesis is a duplicate of a prior test, already
 implied by prior results, or a characterization (not causal).
 
-**Action**: ABANDON this mechanism entirely. Propose a DIFFERENT causal mechanism."""
+**Action**: ABANDON this mechanism entirely and propose a DIFFERENT causal mechanism.
+*Exception*: If you are trying to validate a prior mechanism using a completely new data modality (e.g. RNA-seq, phyloP) to achieve cross-layer convergence, make sure the new hypothesis explicitly centers on the new modality in its prediction so the reviewer recognizes it as a cross-layer validation.
+
+**CRITICAL RULE**: If your hypotheses have been repeatedly rejected for being duplicates, you MUST propose a completely different experiment. Do not just reword the same idea or tweak thresholds. Change the modality, change the mechanism, or both."""
 
     else:
         # Fallback when category is unavailable (e.g. data-availability rejection from
@@ -244,9 +325,9 @@ implied by prior results, or a characterization (not causal).
 
 Before generating a replacement, determine WHY the hypothesis was rejected:
 
-**(A) Wrong mechanism** — The rejection says the mechanism is a duplicate, a characterization
+**(A) Wrong mechanism / Duplicate** — The rejection says the mechanism is a duplicate, a characterization
 (not causal), or already implied by prior results. In this case, ABANDON the mechanism and
-propose a different one.
+propose a different one. *Unless* you are doing cross-layer validation (e.g. adding RNA-seq), in which case ensure the prediction focuses heavily on the new modality.
 
 **(B) Missing data** — The rejection says the required data files or tools are not available
 in the manifest. In this case, KEEP the mechanism idea but redesign the test to use only
@@ -288,8 +369,6 @@ Tool note: When referencing FIMO motif significance in your prediction, prefer p
 (e.g., "p < 1e-4") over q-value. For peak-level motif analysis, FIMO's q-value applies
 genome-wide multiple testing correction that may be overly conservative for short peak regions.
 
-Each hypothesis must have exactly ONE prediction tested by exactly ONE statistical test.
-
 Respond in JSON format:
 {{
     "hypothesis": {{
@@ -314,9 +393,19 @@ Respond in JSON format:
     return prompt
 
 
+def _canonical_required_data_keys(data_manifest: dict[str, Any]) -> list[str]:
+    """Return canonical required_data keys (category.key) so the LLM uses exact keys."""
+    keys: list[str] = []
+    data = data_manifest.get("data", {})
+    for category, items in data.items():
+        if isinstance(items, dict):
+            for leaf_key in items:
+                keys.append(f"{category}.{leaf_key}")
+    return sorted(keys)
+
+
 def _format_data_manifest(
     data_manifest: dict[str, Any],
-    file_summaries: dict[str, str] | None = None,
 ) -> str:
     """Format the data manifest for inclusion in prompts."""
     parts = []
@@ -331,20 +420,20 @@ def _format_data_manifest(
             parts.append(f"  - {items}")
         parts.append("")
 
+    # List canonical keys so the LLM uses them in required_data instead of guessing
+    # (e.g. ChromHMM is under epigenome, so use epigenome.chromhmm not annotations.chromhmm)
+    canonical = _canonical_required_data_keys(data_manifest)
+    if canonical:
+        parts.append(
+            "**required_data keys** (use these exact strings in your hypothesis): "
+            + ", ".join(canonical)
+        )
+        parts.append("")
+
     tools = data_manifest.get("tools", [])
     if tools:
         parts.append("**Available CLI Tools**:")
         for tool in tools:
             parts.append(f"  - {tool}")
-
-    if file_summaries and file_summaries.get("all_files"):
-        parts.append("")
-        parts.append("**File Previews (from pre-run inspection)**:")
-        parts.append("```")
-        preview = file_summaries["all_files"]
-        if len(preview) > 3000:
-            preview = preview[:3000] + "\n... [truncated]"
-        parts.append(preview)
-        parts.append("```")
 
     return "\n".join(parts)

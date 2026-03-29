@@ -11,6 +11,7 @@ SUMMARY_SYSTEM_PROMPT = """You are a scientific result interpreter specializing 
 3. Extract key findings and statistics
 4. Identify any issues or anomalies in the results
 5. Prepare concise summaries for the hypothesis refinement process
+6. When writing the final report, go beyond the mechanistic explanation (why the ML rule works) to state the likely **biological purpose** of that rule: why the cell might use it and what function or selective advantage it could provide, with appropriate caveats.
 
 Be objective and precise in your interpretations.
 
@@ -23,18 +24,21 @@ job is to check whether that specific prediction was confirmed.
 **SUPPORTS** — ALL of the following must be true:
   1. The predicted effect exists in the data
   2. p < 0.05
-  3. fold change >= 1.5 OR Cohen's d >= 0.4
+  3. fold change >= 1.2 OR Cohen's d >= 0.3
   If all three are met, set support_level = "SUPPORTS" and confidence >= 0.8.
+  Note: ChIP-seq and epigenomic enrichment analyses routinely produce 1.2–1.5× fold
+  changes that are biologically meaningful and reproducible. Do not require 1.5× as
+  a hard threshold for these data types.
 
-**INCONCLUSIVE** — The effect is real but modest:
+**INCONCLUSIVE** — The effect is real but weak:
   1. p < 0.05
-  2. 1.2 <= fold change < 1.5 OR 0.2 <= Cohen's d < 0.4
+  2. 1.1 <= fold change < 1.2 OR 0.15 <= Cohen's d < 0.3
   Set support_level = "INCONCLUSIVE" and confidence 0.4-0.7.
 
 **REFUSES** — ANY of the following:
   1. The predicted effect is absent or reversed (e.g., depletion instead of enrichment)
   2. p >= 0.05 with adequate sample size (N >= 30)
-  3. fold change < 1.2 AND Cohen's d < 0.2
+  3. fold change < 1.1 AND Cohen's d < 0.15
   If clearly refused, set support_level = "REFUSES" and confidence >= 0.7.
 
 **ERROR** — Technical failure prevented analysis (code crashed, wrong file format, etc.)
@@ -53,23 +57,39 @@ rather than action items (e.g., "GC content controls should be added").
 """
 
 
-CONVERGENCE_CHECK_SYSTEM_PROMPT = """You are an independent scientific adjudicator for a bioinformatics hypothesis testing pipeline. Your sole job is to evaluate whether the accumulated experimental evidence is sufficient to declare convergence on a named causal mechanism.
+CONVERGENCE_CHECK_SYSTEM_PROMPT = """You are an independent scientific adjudicator for a bioinformatics hypothesis testing pipeline. Your sole job is to evaluate whether the accumulated experimental evidence is sufficient to declare convergence on a named causal mechanism (or, in observational mode, the best-supported mechanistic interpretation given the data).
 
 You have NO stake in any particular outcome. You were not involved in generating the hypotheses. Evaluate the evidence skeptically and objectively.
 
+## Two convergence modes
+
+**FULL (causal-capable data)**  
+When the user prompt states that the run includes data that can support causal inference (e.g. Perturb-seq, time-series, knockdown), apply ALL FIVE criteria below, including the but-for test. Converge only when the evidence supports a causal mechanism.
+
+**OBSERVATIONAL (observational data only)**  
+When the user prompt states that the run uses only observational data (ChIP-seq, bulk RNA-seq, epigenomics, etc.) and cannot establish causality, do NOT require the but-for test. Instead, declare converged=true when criteria 1, 2, 4, and 5 are met and the evidence supports a named mechanism that is the *best interpretation given the data* (e.g. co-occupancy, promoter platform, chromatin priming, retention). The conclusion MUST state that this is the best-supported interpretation given observational data and that causality is not established.
+
 ## Convergence Criteria
 
-Declare converged=true ONLY when ALL FOUR conditions are met:
+**PREREQUISITE — at least one SUPPORTS**: Convergence is ONLY possible when at least one
+hypothesis in the testing history has support_level = "SUPPORTS". If every hypothesis so
+far has been REFUSES, INCONCLUSIVE, ERROR, or UNTESTABLE, you MUST set converged=false
+regardless of how interesting the individual findings are. Promising sub-findings inside a
+REFUSES result do NOT count — the hypothesis must have been formally SUPPORTED as a whole.
 
-1. **Statistical support**: At least one result shows p < 0.05 with meaningful effect size (fold change >= 1.5 OR Cohen's d >= 0.4).
+1. **Statistical support**: At least one hypothesis with support_level = "SUPPORTS" (i.e., p < 0.05 with fold change >= 1.2 OR Cohen's d >= 0.3, and the predicted effect confirmed). Do NOT cherry-pick individual statistics from a REFUSES result to satisfy this criterion — the overall support_level must be SUPPORTS.
 
-2. **Named mechanism**: The evidence maps to a specific numbered category from the mechanism taxonomy. Co-occurrence and correlation do NOT qualify — you must identify a concrete molecular or structural mechanism.
+2. **Named mechanism**: A mechanism that: (1) names a specific molecular process, (2) states a clear causal chain (or, in observational mode, a clear mechanistic interpretation), and (3) is not merely a re-description of correlation. The mechanism can be **anything** that fits the evidence—it need not match any predefined category. The taxonomy below is for **reference only** (to illustrate what "mechanism" means in terms of specificity); do NOT constrain convergence to those categories.
 
-3. **But-for test**: Ask — "If the proposed causal agent were absent, would the data look different?" If the answer is "not necessarily" (because the result could reflect passive co-occurrence, shared active chromatin, or any confound), do NOT converge.
+3. **But-for test** (apply ONLY when causal-capable data are available): Ask — "If the proposed causal agent were absent, would the data look different?" If the answer is "not necessarily" (because the result could reflect passive co-occurrence, shared active chromatin, or any confound), do NOT converge. When the run is observational-only, skip this criterion.
 
 4. **Cross-layer consistency**: The proposed mechanism must be supported by consistent directional evidence from at least two independent omics layers (e.g., ChIP-seq + DNase-seq, or motif analysis + histone marks, or Hi-C + expression). A single data type is not sufficient — convergence requires cross-validation across independent measurement modalities.
 
-## Mechanism Taxonomy
+5. **Biology layers when available**: If the manifest provides expression (rnaseq) or conservation (phyloP) data, at least one hypothesis must have **tested** at least one of these layers — the result can be SUPPORTS, REFUTES, or INCONCLUSIVE. The purpose is to ensure functional consequence or evolutionary conservation was characterized, not that it must confirm the mechanism. STRING/PPI satisfies the mechanism evidence requirement (Criterion 4) but does NOT substitute for rnaseq or phyloP here. Set converged=false only if rnaseq or phyloP was available but neither was ever attempted.
+
+## Mechanism Taxonomy (examples only — for understanding what "mechanism" means)
+
+The following list illustrates the level of specificity required: a mechanism names a molecular process and causal chain, not just correlation. Use it to judge whether a proposed mechanism is sufficiently specific. The evidence may support a mechanism that matches one of these, or something entirely different—do NOT constrain convergence to these categories.
 
 1. Direct TF–TF contacts
 These involve physical interaction between TF_A and TF_B
@@ -143,12 +163,13 @@ RNA is now recognized as a major scaffold for TF interactions.
 
 ## Common False Convergence Patterns — Do NOT converge on these
 
+- **"All hypotheses REFUSES but the findings are interesting"** — if no hypothesis achieved support_level = "SUPPORTS", you CANNOT converge. Interesting sub-findings within a REFUSES result mean the pipeline should refine the hypothesis (e.g., drop the failed prediction, keep the successful ones) and test again, not declare convergence.
 - "Co-bound sites are in active chromatin" — correlation. Active sites attract many TFs. Does NOT establish mechanism unless pioneer activity is shown (mechanism #3 requires the pioneer to OPEN the site, not merely be present at already-open sites).
 - "TF_B signal is higher where TF_A is present" — restates the original finding. Not a mechanism.
-- "The effect is small but real" — effect sizes below threshold (fold change < 1.5 AND Cohen's d < 0.4) do not meet the statistical support criterion.
+- "The effect is small but real" — effect sizes below threshold (fold change < 1.2 AND Cohen's d < 0.3) do not meet the statistical support criterion.
 - "Data cannot answer the question" — insufficient data is NOT convergence.
 
-Co-occurrence alone maps to no category and does not warrant convergence. Alternatively, if the evidence supports a mechanism not listed here, convergence is permitted provided all three criteria are met AND the proposed mechanism: (1) names a specific molecular process (e.g., a named enzymatic activity, a structural interaction, a defined signal transduction step), (2) states a clear causal chain (what acts on what, in what order), and (3) is not merely a re-description of the observed correlation.
+Co-occurrence alone does not warrant convergence. The mechanism can be anything that fits the evidence. When converged, set mechanism_category_number to null and put a descriptive name in mechanism_category_name. The taxonomy is illustrative only; do not force the mechanism into a category.
 """
 
 
@@ -189,6 +210,10 @@ def build_convergence_check_prompt(
     last_result: dict[str, Any],
     raw_output: str | None = None,
     max_raw_chars: int = 8000,
+    investigation_objective: str | None = None,
+    available_biology_layers: list[str] | None = None,
+    used_biology_layers: list[str] | None = None,
+    causal_capable_data: bool = False,
 ) -> str:
     """Build prompt for the independent convergence check.
 
@@ -198,15 +223,46 @@ def build_convergence_check_prompt(
         last_result: Summary of the most recent result
         raw_output: Raw stdout from the last code execution (will be truncated)
         max_raw_chars: Maximum characters of raw output to include
+        investigation_objective: Optional goal (discovery/synthesis); when set, convergence on a new named mechanism is acceptable.
+        available_biology_layers: Top-level manifest data keys that provide expression/conservation (e.g. rnaseq, phyloP) when present.
+        used_biology_layers: Among SUPPORTED hypotheses, which of those layers were used (from required_data).
+        causal_capable_data: When True, data can support causal inference (e.g. Perturb-seq, time-series); require but-for test. When False, observational only; allow convergence on best-supported mechanism without causality.
 
     Returns:
         Formatted prompt string
     """
+    if causal_capable_data:
+        modality_section = (
+            "\n## Data modality\n\n"
+            "This run includes **causal-capable data** (e.g. perturbation, time-series). "
+            "Apply ALL FIVE convergence criteria, including the **but-for test** (criterion 3). "
+            "Do not converge unless the evidence supports a causal mechanism.\n"
+        )
+        criteria_instruction = "Apply ALL FIVE convergence criteria strictly (including but-for / causality)."
+    else:
+        modality_section = (
+            "\n## Data modality\n\n"
+            "This run uses **observational data only** (e.g. ChIP-seq, bulk RNA-seq, epigenomics). "
+            "No perturbation or time-series data are present, so the data **cannot establish causality**. "
+            "Use **OBSERVATIONAL** convergence: do NOT require the but-for test. "
+            "Converge when criteria 1, 2, 4, and 5 are met and the evidence supports the **best-supported mechanistic interpretation** given the data (e.g. co-occupancy, promoter platform, retention). "
+            "When converged=true, the conclusion MUST state that this is the best-supported interpretation given observational data and that causality is not established.\n"
+        )
+        criteria_instruction = (
+            "Apply criteria 1, 2, 4, and 5. Do NOT require the but-for test (criterion 3). "
+            "Converge on the best-supported mechanism given the data; state in the conclusion that causality is not established."
+        )
+
+    objective_section = ""
+    if investigation_objective and investigation_objective.strip():
+        objective_section = f"\n## Investigation Objective\n\n{investigation_objective.strip()}\n"
     history_lines = []
     for i, th in enumerate(tested_hypotheses):
+        data_used = ", ".join(th.get("required_data", [])) or "not specified"
         history_lines.append(
             f"### Iteration {i + 1}: {th.get('name', 'N/A')}\n"
             f"- Result: {th.get('result', 'N/A')}\n"
+            f"- Data used: {data_used}\n"
             f"- Evidence: {str(th.get('evidence_summary', 'N/A'))[:300]}\n"
             f"- Decision: {th.get('decision', 'N/A')}\n"
         )
@@ -217,14 +273,28 @@ def build_convergence_check_prompt(
         truncated = _truncate_output(raw_output, max_raw_chars)
         raw_section = f"\n## Raw Execution Output (last experiment)\n\n```\n{truncated}\n```\n"
 
+    biology_section = ""
+    if available_biology_layers is not None and used_biology_layers is not None:
+        avail = ", ".join(available_biology_layers) if available_biology_layers else "none"
+        used = ", ".join(used_biology_layers) if used_biology_layers else "none"
+        biology_section = (
+            "\n## Biology layers (expression / conservation / PPI)\n\n"
+            f"- **Available in this run** (from manifest): {avail}\n"
+            f"- **Used in at least one SUPPORTED hypothesis**: {used}\n\n"
+            "If rnaseq or phyloP is available but neither was ever tested in any hypothesis (any result), "
+            "set converged=false. The result of that hypothesis does not need to be SUPPORTS — "
+            "REFUTES or INCONCLUSIVE is fine. STRING/PPI does not substitute for rnaseq or phyloP here.\n"
+        )
+
     prompt = f"""# Scientific Finding Under Investigation
 
 {finding}
-
+{objective_section}
+{modality_section}
 ## Hypothesis Testing History
 
 {history_text}
-
+{biology_section}
 ## Latest Result Summary
 
 **Support level**: {last_result.get('support_level', 'N/A')}
@@ -234,19 +304,24 @@ def build_convergence_check_prompt(
 {raw_section}
 ## Task
 
-Evaluate whether the accumulated evidence is sufficient to declare convergence on a named causal mechanism.
+Evaluate whether the accumulated evidence is sufficient to declare convergence on a named mechanism (or best-supported interpretation in observational mode).
 
-Apply ALL FOUR convergence criteria strictly:
-1. Statistical support (p < 0.05, fold change >= 1.5 or Cohen's d >= 0.4)
-2. Named mechanism from taxonomy (cite category number)
-3. But-for test (causal, not merely correlational)
+{criteria_instruction}
+
+PREREQUISITE: At least one hypothesis must have support_level = "SUPPORTS". If none do, set converged=false immediately.
+1. Statistical support: at least one hypothesis with support_level = "SUPPORTS" (not just promising numbers inside a REFUSES result)
+2. Named mechanism: a specific molecular process with a clear causal/mechanistic interpretation, not merely correlation. The mechanism can be anything that fits the evidence—it need not match any predefined category. Set mechanism_category_number to null and put a descriptive name in mechanism_category_name.
+3. But-for test (only when causal-capable data: causal, not merely correlational)
 4. Cross-layer consistency (consistent directional support from >= 2 independent omics layers)
+5. Biology layers: when rnaseq or phyloP is available, at least one hypothesis must have tested at least one of them (any result — SUPPORTS/REFUTES/INCONCLUSIVE all count); STRING/PPI does not substitute. Set converged=false only if rnaseq or phyloP was available but never attempted.
+
+When converged=true, always fill mechanism_category_name with a descriptive mechanism name. Set mechanism_category_number to null (the taxonomy is for reference only). In observational mode, the conclusion must state that causality is not established.
 
 Respond in JSON format:
 {{
     "converged": true | false,
-    "mechanism_category_number": <integer 1-12, or null if not converged>,
-    "mechanism_category_name": "<string, or null if not converged>",
+    "mechanism_category_number": null or integer 1-12 (use null unless the mechanism clearly matches a taxonomy example),
+    "mechanism_category_name": "<string; when converged, provide a descriptive mechanism name>",
     "confidence": 0.0-1.0,
     "conclusion": "<one-paragraph causal conclusion if converged, else empty string>",
     "reasoning": "<explanation of why each criterion is or is not met>"
@@ -341,6 +416,9 @@ def build_final_report_prompt(
     history_summary: str,
     conclusion: str,
     all_evidence: list[dict[str, Any]],
+    converged: bool,
+    run_status: str | None = None,
+    synthesized: bool = False,
 ) -> str:
     """Build prompt for generating the final report.
 
@@ -350,6 +428,9 @@ def build_final_report_prompt(
         history_summary: Summary of all iterations
         conclusion: Final conclusion
         all_evidence: All accumulated evidence
+        converged: Whether the run strictly converged
+        run_status: Terminal run status
+        synthesized: Whether the run stopped via synthesis
 
     Returns:
         Formatted prompt string
@@ -384,6 +465,12 @@ def build_final_report_prompt(
 
 {conclusion}
 
+## Run Status
+
+- converged: {converged}
+- run_status: {run_status or "unknown"}
+- synthesized: {synthesized}
+
 # Task
 
 Generate a comprehensive final report summarizing the investigation. The report should include:
@@ -392,9 +479,24 @@ Generate a comprehensive final report summarizing the investigation. The report 
 2. **Methodology**: How the investigation was conducted
 3. **Key Findings**: Most important discoveries
 4. **Evidence Summary**: Supporting evidence for the conclusion
-5. **Confidence Level**: How confident we are in the conclusion
-6. **Limitations**: What we couldn't determine or potential issues
-7. **Recommendations**: Suggested follow-up experiments if any
+5. **Synthesis / mechanism comparison**: If multiple hypotheses were tested, provide a short integrative narrative: which mechanism(s) are best supported, which were ruled out, and how they relate (e.g. a small comparison table). The mechanism can be anything that fits the evidence—it need not match any predefined category. Prefer a concise comparison table (e.g. mechanism vs evidence vs outcome) when there are several hypotheses.
+6. **Biological purpose**: Go one step beyond the mechanism: state the **biological purpose** (functional interpretation) of the supported rule. Why might the cell use this rule? What selective or functional advantage could it provide? Consider e.g. precise transcriptional control, cell-type or developmental identity, stress/dynamic response, promoter robustness, or other plausible rationales. Phrase as interpretation with appropriate caveats (e.g. "may serve to…", "consistent with a role in…"). Do not invent evidence; base this on the supported mechanism and the biological roles of the molecules involved.
+7. **Confidence Level**: How confident we are in the conclusion
+8. **Limitations**: What we couldn't determine or potential issues
+9. **Recommendations**: Suggested follow-up experiments if any
+
+**CRITICAL — outcome accuracy**: When describing whether a hypothesis was supported or
+refused, you MUST use the exact **Support Level** recorded in the "Evidence Collected"
+section above (SUPPORTS, REFUSES, INCONCLUSIVE, ERROR, UNTESTABLE). Do NOT upgrade a
+REFUSES/ERROR/INCONCLUSIVE result to "supported" or "confirmed" in the narrative. If no
+hypothesis achieved SUPPORTS, state that clearly. Misrepresenting outcomes is the single
+most harmful error this report can contain.
+
+**CRITICAL — run status accuracy**: The final report MUST respect the run status above.
+If `converged` is false, do NOT present the outcome as settled or fully validated. Use
+language like "best-supported interpretation so far", "non-converged run", or
+"provisional conclusion". If `run_status` is `stopped` or `synthesized_stop`, say that
+explicitly in the Executive Summary and Confidence sections.
 
 Format the report in Markdown.
 """

@@ -51,6 +51,15 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # using <=200K tier as default since most pipeline calls are well under that limit
     "gemini-2.5-pro": ModelPricing(1.25, 10.0, "gemini", "gemini-2.5-pro", context_limit=1000000, cached_input_price=0.125),
     "gemini-2.5-flash": ModelPricing(0.30, 2.50, "gemini", "gemini-2.5-flash", context_limit=1000000, cached_input_price=0.03),
+    # Google (Gemini API / AI Studio) — Gemini 3 Flash Preview
+    # NOTE: Update if your billing page shows different rates.
+    "gemini-3-flash-preview": ModelPricing(0.50, 3.00, "gemini", "gemini-3-flash-preview", context_limit=1000000),
+    # MiniMax
+    "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=200000),
+    # GLM-5 (Z.AI) — $1/1M input, $3.2/1M output; limited-time free tier available
+    "glm-5": ModelPricing(1.0, 3.2, "openai", "glm-5", context_limit=128000),
+    # DeepSeek V3.2 — $0.28/1M input (cache miss), $0.028/1M (cache hit), $0.42/1M output
+    "deepseek-chat": ModelPricing(0.28, 0.42, "deepseek", "deepseek-chat", context_limit=64000, cached_input_price=0.028),
 }
 
 

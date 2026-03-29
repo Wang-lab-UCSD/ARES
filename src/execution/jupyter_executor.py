@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import queue
 import tempfile
@@ -129,6 +130,25 @@ class JupyterExecutor:
         self._km: KernelManager | None = None
         self._kc = None  # Kernel client
         self._execution_count = 0
+        self.project_root = Path(__file__).resolve().parents[2]
+
+    def _build_kernel_bootstrap_code(self) -> str:
+        """Return code that makes project-local imports work inside the kernel."""
+        project_root = json.dumps(str(self.project_root))
+        working_dir = json.dumps(str(self.working_dir))
+        return f"""
+import os
+import sys
+from pathlib import Path
+
+_codex_project_root = {project_root}
+_codex_working_dir = {working_dir}
+if _codex_project_root not in sys.path:
+    sys.path.insert(0, _codex_project_root)
+os.environ["PYTHONPATH"] = _codex_project_root + os.pathsep + os.environ.get("PYTHONPATH", "")
+Path(_codex_working_dir).mkdir(parents=True, exist_ok=True)
+os.chdir(_codex_working_dir)
+""".strip()
 
     async def start(self) -> None:
         """Start the Jupyter kernel."""
@@ -149,6 +169,13 @@ class JupyterExecutor:
 
             # Wait for kernel to be ready
             await self._wait_for_ready()
+
+            bootstrap_result = await self.execute(self._build_kernel_bootstrap_code())
+            if not bootstrap_result.success:
+                raise RuntimeError(
+                    "Failed to initialize Jupyter kernel import path: "
+                    f"{bootstrap_result.error or 'unknown bootstrap error'}"
+                )
 
             self.logger.info("Kernel started successfully")
 

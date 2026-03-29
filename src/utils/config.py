@@ -17,7 +17,12 @@ class LLMModelConfig(BaseModel):
     model: str = Field(description="Model name/ID")
     api_key_env: str = Field(description="Environment variable containing API key")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=4096, gt=0)
+    max_tokens: int | None = Field(default=None, description="Max output tokens. None = use API default (no explicit limit). Set for models with low defaults (e.g. DeepSeek: 8192).")
+    reasoning_effort: str | None = Field(default=None, description="Reasoning effort for OpenAI reasoning models: 'low', 'medium', or 'high'. None = API default (high).")
+    base_url: str | None = Field(
+        default=None,
+        description="Optional custom API base URL (e.g. for Anthropic-compatible third-party endpoints)",
+    )
 
     @field_validator("provider")
     @classmethod
@@ -41,6 +46,10 @@ class LLMConfig(BaseModel):
     hypothesis_model: LLMModelConfig
     coding_model: LLMModelConfig
     summary_model: LLMModelConfig
+    review_model: LLMModelConfig | None = Field(
+        default=None,
+        description="Optional dedicated model for code/hypothesis review. Falls back to coding_model if not set.",
+    )
 
 
 class ExecutionConfig(BaseModel):
@@ -55,6 +64,10 @@ class PipelineConfig(BaseModel):
     """Configuration for the pipeline behavior."""
 
     max_iterations: int = Field(default=10, gt=0)
+    max_consecutive_hypothesis_rejections: int = Field(
+        default=6, ge=1,
+        description="After this many consecutive reviewer rejections, synthesize from supported evidence if any, else stop."
+    )
     log_dir: str = Field(default="logs")
     output_dir: str = Field(default="outputs")
     save_intermediate: bool = Field(default=True)
@@ -106,8 +119,20 @@ class DataManifest(BaseModel):
 
     finding: str = Field(description="The scientific finding to investigate (X predicts Y)")
     context: str = Field(default="", description="Additional context about the finding")
+    investigation_objective: str = Field(
+        default="",
+        description="Goal of the investigation (e.g. discover and synthesize a coherent mechanism, possibly new). When set, prompts emphasize discovery and allow convergence on a new named mechanism.",
+    )
     data: dict[str, Any] = Field(default_factory=dict, description="Available data paths")
     tools: list[str] = Field(default_factory=list, description="Available CLI tools")
+    execution_requirements_path: str | None = Field(
+        default=None,
+        description="Optional path to a requirements file (e.g. requirements.txt) listing Python packages available in the execution environment. Relative paths are resolved from the manifest file's directory. Used to restrict generated code to only import listed packages.",
+    )
+    causal_capable_data: bool = Field(
+        default=False,
+        description="When True, the run includes data that can support causal inference (e.g. Perturb-seq, time-series, knockdown, CRISPRi). Convergence then requires the but-for test. When False (default), data are observational only; convergence is allowed on the best-supported mechanism given the data without requiring causality.",
+    )
 
 
 def load_config(config_path: str | Path) -> Config:
@@ -132,3 +157,37 @@ def load_data_manifest(manifest_path: str | Path) -> DataManifest:
         data = yaml.safe_load(f)
 
     return DataManifest.model_validate(data)
+
+
+def parse_requirements_package_names(requirements_path: str | Path) -> list[str]:
+    """Parse a requirements-style file and return package names (no version specifiers).
+
+    Skips comments, empty lines, and editable installs. Used to tell the coding
+    agent which Python packages are available in the execution environment.
+    """
+    path = Path(requirements_path)
+    if not path.exists():
+        return []
+    names = []
+    for line in path.read_text().splitlines():
+        line = line.strip().split("#")[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        # Skip editable: -e git+... or -e .
+        if line.startswith("-e ") or " -e " in line:
+            continue
+        # First word before ==, >=, <=, <, >, or space
+        for sep in ("==", ">=", "<=", ">", "<", " ", "[", "]"):
+            if sep in line:
+                line = line.split(sep)[0].strip()
+                break
+        if line and not line.startswith("-"):
+            names.append(line)
+    return names
+
+
+# Default packages available in the execution environment when no requirements file is specified.
+# Matches the "Bioinformatics (for code execution)" section of the project requirements.txt.
+DEFAULT_EXECUTION_PACKAGES = [
+    "numpy", "pandas", "scipy", "biopython", "pyBigWig", "pyfaidx", "pybedtools", "matplotlib",
+]

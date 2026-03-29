@@ -14,6 +14,33 @@ from src.prompts.hypothesis import (
 from src.utils.logging import get_logger
 
 
+REFINEMENT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "decision": {
+            "type": "string",
+            "enum": ["REFINE", "NEW_HYPOTHESIS", "TECHNICAL_ERROR", "INSUFFICIENT_DATA"],
+        },
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "reasoning": {"type": "string"},
+        "technical_issues": {"type": "array", "items": {"type": "string"}},
+        "hypotheses": {"type": "array"},
+    },
+    "required": ["decision", "confidence", "reasoning"],
+}
+
+REGENERATION_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "hypothesis": {"type": "object"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["hypothesis"],
+}
+
+
 class HypothesisAgent:
     """Agent for generating and refining scientific hypotheses.
 
@@ -30,7 +57,6 @@ class HypothesisAgent:
             llm: LLM provider for generating hypotheses
         """
         self.llm = llm
-        self.memory = ConversationMemory(system_message=HYPOTHESIS_SYSTEM_PROMPT)
         self.logger = get_logger("hypothesis_agent")
 
     async def refine_hypotheses(
@@ -40,7 +66,8 @@ class HypothesisAgent:
         last_result: dict[str, Any] | None,
         data_manifest: dict[str, Any],
         group_summary: str | None = None,
-        file_summaries: dict[str, str] | None = None,
+        encourage_different_mechanism: bool = False,
+        unused_biology_layers: list[str] | None = None,
     ) -> dict[str, Any]:
         """Generate or refine hypotheses based on experimental results.
 
@@ -53,7 +80,8 @@ class HypothesisAgent:
             last_result: Results from testing the hypothesis, or None on first iteration
             data_manifest: Available data and tools
             group_summary: Summary of completed hypothesis group for synthesis
-            file_summaries: Pre-run file inspection output (from iteration 0)
+            encourage_different_mechanism: If True, prompt asks to prefer a different mechanism category when at least one hypothesis already SUPPORTS
+            unused_biology_layers: When set, expression/conservation data are available but unused in any supported result; prefer a hypothesis that uses one.
 
         Returns:
             Dictionary containing decision and updated hypotheses
@@ -62,6 +90,8 @@ class HypothesisAgent:
             "iteration": state.current_iteration,
             "last_hypothesis": last_hypothesis.get("name", "N/A") if last_hypothesis else "None (first iteration)",
             "group_complete": group_summary is not None,
+            "encourage_different_mechanism": encourage_different_mechanism,
+            "unused_biology_layers": unused_biology_layers,
         })
 
         prompt = build_refinement_prompt(
@@ -71,25 +101,17 @@ class HypothesisAgent:
             last_result=last_result,
             data_manifest=data_manifest,
             group_summary=group_summary,
-            file_summaries=file_summaries,
-        )
-
-        self.memory.add_user_message(
-            prompt,
-            stage="refinement",
-            iteration=state.current_iteration,
+            encourage_different_mechanism=encourage_different_mechanism,
+            unused_biology_layers=unused_biology_layers,
         )
 
         try:
             result = await self.llm.complete_json(
-                self.memory.get_messages(),
-            )
-
-            self.memory.add_assistant_message(
-                str(result),
-                stage="refinement",
-                iteration=state.current_iteration,
-                decision=result.get("decision"),
+                [
+                    Message.system(HYPOTHESIS_SYSTEM_PROMPT),
+                    Message.user(prompt),
+                ],
+                schema=REFINEMENT_RESPONSE_SCHEMA,
             )
 
             self.logger.info("Refinement decision", {
@@ -149,7 +171,6 @@ class HypothesisAgent:
         data_manifest: dict[str, Any],
         rejection_category: str | None = None,
         reviewer_rejected: list[dict[str, Any]] | None = None,
-        file_summaries: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
         """Regenerate a hypothesis that was rejected by review.
 
@@ -160,7 +181,6 @@ class HypothesisAgent:
             data_manifest: Available data and tools
             rejection_category: Structured category from reviewer ("wrong_mechanism")
             reviewer_rejected: All hypotheses rejected by reviewer this session (with feedback)
-            file_summaries: Pre-run file inspection output (from iteration 0)
 
         Returns:
             New hypothesis dict, or None if generation failed
@@ -178,7 +198,6 @@ class HypothesisAgent:
             data_manifest=data_manifest,
             rejection_category=rejection_category,
             reviewer_rejected=reviewer_rejected,
-            file_summaries=file_summaries,
         )
 
         try:
@@ -187,6 +206,7 @@ class HypothesisAgent:
                     Message.system(HYPOTHESIS_SYSTEM_PROMPT),
                     Message.user(prompt),
                 ],
+                schema=REGENERATION_RESPONSE_SCHEMA,
             )
 
             hypothesis = result.get("hypothesis")
@@ -211,6 +231,3 @@ class HypothesisAgent:
             self.logger.error("Failed to regenerate hypothesis", {"error": str(e)})
             return None
 
-    def reset_memory(self) -> None:
-        """Reset conversation memory for a new run."""
-        self.memory.clear()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import signal
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,12 @@ from src.execution.jupyter_executor import JupyterExecutor
 from src.llm.base import create_provider
 from src.memory.conversation import PipelineState
 from src.ui.approval import ApprovalUI, ApprovalDecision, ApprovalResult
-from src.utils.config import Config, DataManifest
+from src.utils.config import (
+    Config,
+    DataManifest,
+    DEFAULT_EXECUTION_PACKAGES,
+    parse_requirements_package_names,
+)
 from src.utils.cost_tracker import CostTracker, CostLimitExceeded, SessionBudgetExceeded, TokenLimitExceeded
 from src.utils.logging import get_logger
 
@@ -37,6 +43,7 @@ class Orchestrator:
         config: Config,
         manifest: DataManifest,
         output_dir: Path | None = None,
+        manifest_path: Path | None = None,
     ):
         """Initialize the orchestrator.
 
@@ -44,19 +51,24 @@ class Orchestrator:
             config: Pipeline configuration
             manifest: Data manifest with finding and data paths
             output_dir: Directory for outputs (overrides config)
+            manifest_path: Path to the manifest file (used to resolve relative execution_requirements_path)
         """
         self.config = config
         self.manifest = manifest
         self.output_dir = Path(output_dir or config.pipeline.output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
         self.logger = get_logger("orchestrator")
+        self._allowed_packages = self._resolve_allowed_packages(manifest_path)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self._shutdown_requested = False
+        self._preflight_check(manifest_path)
 
-        # Initialize state
+        # Initialize state (include investigation_objective in context when set)
+        context = manifest.context
+        if manifest.investigation_objective and manifest.investigation_objective.strip():
+            context = (context.rstrip() + "\n\nInvestigation objective: " + manifest.investigation_objective.strip()).strip()
         self.state = PipelineState(
             finding=manifest.finding,
-            context=manifest.context,
+            context=context,
             max_iterations=config.pipeline.max_iterations,
         )
 
@@ -88,6 +100,151 @@ class Orchestrator:
         # Executor will be initialized when running
         self.executor: JupyterExecutor | None = None
 
+    @staticmethod
+    def _iter_strings(obj: Any):
+        """Yield all string leaf values from an arbitrarily nested structure."""
+        if isinstance(obj, dict):
+            for v in obj.values():
+                yield from Orchestrator._iter_strings(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                yield from Orchestrator._iter_strings(item)
+        elif isinstance(obj, str):
+            yield obj
+
+    def _preflight_check(self, manifest_path: Path | None) -> None:
+        """Fail fast if required CLI tools or critical manifest data are missing.
+
+        This avoids expensive LLM calls + retries when the runtime environment cannot
+        actually run the generated code.
+        """
+        base_dir = Path(manifest_path).parent if manifest_path else Path.cwd()
+
+        # 1) Validate CLI tools listed in the manifest.
+        missing_tools: list[str] = []
+        for tool in (self.manifest.tools or []):
+            if not tool:
+                continue
+            if shutil.which(tool) is None:
+                missing_tools.append(tool)
+
+        # 2) Validate likely data files referenced in the manifest.
+        # Heuristic: only check absolute paths or relative paths that look like
+        # filesystem locations, and only file extensions we expect for genomic inputs.
+        allowed_exts = {
+            ".bed",
+            ".bedpe",
+            ".bw",
+            ".bigwig",
+            ".fa",
+            ".fasta",
+            ".gtf",
+            ".tsv",
+            ".csv",
+            ".meme",
+            ".txt",
+            ".narrowpeak",
+            ".narrowpeak.gz",
+            ".phyloP100way.bw",
+        }
+
+        missing_files: list[str] = []
+        data_section = self.manifest.model_dump().get("data", {}) or {}
+        for s in self._iter_strings(data_section):
+            # Skip non-path strings and metadata.
+            s_stripped = s.strip()
+            if not s_stripped:
+                continue
+
+            is_probably_path = s_stripped.startswith("/") or s_stripped.startswith(".") or s_stripped.startswith("..")
+            if not is_probably_path:
+                continue
+
+            # Resolve relative paths against manifest directory.
+            candidate = Path(s_stripped)
+            if not candidate.is_absolute():
+                candidate = base_dir / candidate
+
+            # Only check files with recognized extensions (cache dirs typically have none).
+            ext = candidate.name.lower()
+            # Special-case: some files include dots in the stem (e.g., .phyloP100way.bw)
+            if candidate.suffix.lower() == ".bw":
+                normalized = ".bw"
+            else:
+                normalized = candidate.suffix.lower()
+            if normalized not in allowed_exts and ext not in allowed_exts:
+                continue
+
+            if not candidate.exists():
+                missing_files.append(str(candidate))
+
+        if missing_tools or missing_files:
+            parts: list[str] = []
+            if missing_tools:
+                parts.append(
+                    "Missing CLI tools (install in your environment before running): " + ", ".join(sorted(set(missing_tools)))
+                )
+            if missing_files:
+                # Keep message readable; list up to 20.
+                head = sorted(set(missing_files))[:20]
+                parts.append(
+                    "Missing manifest data files (check paths in data_manifest.yaml): "
+                    + "; ".join(head)
+                    + ("; ..." if len(set(missing_files)) > 20 else "")
+                )
+            raise RuntimeError("Preflight check failed. " + " ".join(parts))
+
+    def _infer_tools_from_text(self, text: str) -> list[str]:
+        """Infer which CLI tool(s) an issue/error likely refers to."""
+        if not text:
+            return []
+        tools = set((self.manifest.tools or []))
+        # Always consider common CLIs even if not listed explicitly
+        tools.update({"bedtools", "fimo", "meme", "samtools"})
+        found = []
+        t_low = text.lower()
+        for tool in sorted(tools):
+            if not tool:
+                continue
+            if re.search(rf"\b{re.escape(tool.lower())}\b", t_low):
+                found.append(tool.lower())
+        return sorted(set(found))
+
+    @staticmethod
+    def _extract_cli_tools_from_code(code: str) -> list[str]:
+        """Heuristically extract CLI tool names from generated code."""
+        if not code:
+            return []
+        # Matches subprocess.run(["tool", ...]) / run_cmd(["tool", ...]) / subprocess.check_output([...])
+        tools = re.findall(
+            r"(?:subprocess\.(?:run|check_output|check_call)\s*\(\s*\[\s*['\"]([^'\"]+)['\"])|"
+            r"(?:run_cmd\s*\(\s*\[\s*['\"]([^'\"]+)['\"])",
+            code,
+        )
+        flat = []
+        for a, b in tools:
+            if a:
+                flat.append(a)
+            if b:
+                flat.append(b)
+        return sorted({t.strip().lower() for t in flat if t and t.strip()})
+
+    @staticmethod
+    def _extract_good_invocation_snippets(code: str, tool: str) -> list[str]:
+        """Extract short invocation examples for a specific tool from code."""
+        if not code or not tool:
+            return []
+        # Find list-literal subprocess calls that start with the tool
+        pattern = rf"(subprocess\.(?:run|check_output|check_call)\s*\(\s*\[\s*['\"]{ re.escape(tool) }['\"][^\]]*\])"
+        matches = re.findall(pattern, code)
+        snippets = []
+        for m in matches[:2]:
+            s = " ".join(m.strip().split())
+            if len(s) > 220:
+                s = s[:217] + "..."
+            snippets.append(s)
+        return snippets
+
     def _init_providers(self) -> None:
         """Initialize LLM providers based on configuration."""
         self.logger.info("Initializing LLM providers")
@@ -100,6 +257,8 @@ class Orchestrator:
             api_key=llm_config.hypothesis_model.get_api_key(),
             temperature=llm_config.hypothesis_model.temperature,
             max_tokens=llm_config.hypothesis_model.max_tokens,
+            base_url=llm_config.hypothesis_model.base_url,
+            reasoning_effort=llm_config.hypothesis_model.reasoning_effort,
         )
 
         self.coding_llm = create_provider(
@@ -108,6 +267,8 @@ class Orchestrator:
             api_key=llm_config.coding_model.get_api_key(),
             temperature=llm_config.coding_model.temperature,
             max_tokens=llm_config.coding_model.max_tokens,
+            base_url=llm_config.coding_model.base_url,
+            reasoning_effort=llm_config.coding_model.reasoning_effort,
         )
 
         self.summary_llm = create_provider(
@@ -116,13 +277,30 @@ class Orchestrator:
             api_key=llm_config.summary_model.get_api_key(),
             temperature=llm_config.summary_model.temperature,
             max_tokens=llm_config.summary_model.max_tokens,
+            base_url=llm_config.summary_model.base_url,
+            reasoning_effort=llm_config.summary_model.reasoning_effort,
         )
+
+        if llm_config.review_model is not None:
+            self.review_llm = create_provider(
+                provider_name=llm_config.review_model.provider,
+                model=llm_config.review_model.model,
+                api_key=llm_config.review_model.get_api_key(),
+                temperature=llm_config.review_model.temperature,
+                max_tokens=llm_config.review_model.max_tokens,
+                base_url=llm_config.review_model.base_url,
+                reasoning_effort=llm_config.review_model.reasoning_effort,
+            )
+        else:
+            self.review_llm = self.coding_llm
 
         # Inject cost tracker into all providers
         if self.cost_tracker is not None:
             self.hypothesis_llm.set_cost_tracker(self.cost_tracker)
             self.coding_llm.set_cost_tracker(self.cost_tracker)
             self.summary_llm.set_cost_tracker(self.cost_tracker)
+            if llm_config.review_model is not None:
+                self.review_llm.set_cost_tracker(self.cost_tracker)
 
     def _init_agents(self) -> None:
         """Initialize agents with their respective LLM providers."""
@@ -130,8 +308,28 @@ class Orchestrator:
 
         self.hypothesis_agent = HypothesisAgent(self.hypothesis_llm)
         self.coding_agent = CodingAgent(self.coding_llm)
-        self.review_agent = ReviewAgent(self.coding_llm)
+        self.review_agent = ReviewAgent(self.review_llm)
         self.summary_agent = SummaryAgent(self.summary_llm)
+
+    def _resolve_allowed_packages(self, manifest_path: Path | None) -> list[str]:
+        """Resolve allowed Python packages from manifest or default."""
+        req_path = getattr(self.manifest, "execution_requirements_path", None)
+        if not req_path or not manifest_path:
+            return DEFAULT_EXECUTION_PACKAGES
+        resolved = Path(manifest_path).parent / req_path
+        if not resolved.exists():
+            self.logger.warning("Execution requirements file not found, using default packages", {
+                "path": str(resolved),
+            })
+            return DEFAULT_EXECUTION_PACKAGES
+        names = parse_requirements_package_names(resolved)
+        if names:
+            self.logger.info("Using allowed packages from requirements file", {
+                "path": str(resolved),
+                "count": len(names),
+            })
+            return names
+        return DEFAULT_EXECUTION_PACKAGES
 
     async def _approve_hypothesis(
         self,
@@ -256,6 +454,10 @@ class Orchestrator:
             )
             await self.executor.start()
 
+            # Inject data_files into the kernel as a flat dict so generated code
+            # can access paths with data_files['aff1_peaks'] without hardcoding ENCFF IDs.
+            await self._inject_data_files()
+
             # Iteration 0: familiarize with all files (does not count toward max_iterations)
             await self._run_file_familiarization(run_dir)
 
@@ -266,7 +468,6 @@ class Orchestrator:
                 last_hypothesis=None,
                 last_result=None,
                 data_manifest=self.manifest.model_dump(),
-                file_summaries=self.state.file_summaries or None,
             )
 
             # Store hypotheses
@@ -285,7 +486,7 @@ class Orchestrator:
             # Main loop
             tested_ids: set[int] = set()
             consecutive_hypo_rejections = 0
-            max_hypo_rejections = 6
+            max_hypo_rejections = self.config.pipeline.max_consecutive_hypothesis_rejections
             last_tested_hypothesis: dict[str, Any] | None = None
             reviewer_rejected: list[dict[str, Any]] = []  # accumulate all reviewer rejections
             consecutive_data_rejections = 0
@@ -347,6 +548,11 @@ class Orchestrator:
                             "warning"
                         )
 
+                        # IMPORTANT: Mark this hypothesis as consumed so we don't repeatedly
+                        # re-review the same rejected hypothesis. Regenerated hypotheses are
+                        # appended to self.state.hypotheses and will be selected next.
+                        tested_ids.add(hypo_id)
+
                         # Record rejection so regeneration prompt knows what was already tried
                         reviewer_rejected.append({
                             "name": hypothesis.get("name", "N/A"),
@@ -359,15 +565,34 @@ class Orchestrator:
                             self.logger.warning("Max consecutive hypothesis rejections reached", {
                                 "count": consecutive_hypo_rejections,
                             })
-                            self._display_message(
-                                f"Pipeline stopping: {max_hypo_rejections} consecutive hypothesis rejections",
-                                "error"
-                            )
-                            self.state.conclusion = (
-                                f"Pipeline stopped: hypothesis reviewer rejected "
-                                f"{max_hypo_rejections} consecutive hypotheses. "
-                                f"The hypothesis agent may be stuck generating duplicates or vague predictions."
-                            )
+                            supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS"]
+                            if supported:
+                                names = ", ".join(h.get("name", "?") for h in supported)
+                                self._display_message(
+                                    f"Max rejections reached; synthesizing from supported evidence: {names}",
+                                    "warning"
+                                )
+                                self.state.mark_synthesized_stop(
+                                    reason="Max consecutive hypothesis rejections; synthesizing from supported evidence",
+                                    confidence=0.7,
+                                    conclusion=(
+                                        f"Max consecutive hypothesis rejections; synthesizing from supported evidence. "
+                                        f"Supported: {names}. Rejected hypotheses were duplicates or insufficiently distinct. "
+                                        f"The final report should summarize the best-supported mechanism and contrast with ruled-out alternatives."
+                                    ),
+                                    mechanism_category_number=None,
+                                    mechanism_category_name=None,
+                                )
+                            else:
+                                self._display_message(
+                                    f"Pipeline stopping: {max_hypo_rejections} consecutive hypothesis rejections",
+                                    "error"
+                                )
+                                self.state.conclusion = (
+                                    f"Pipeline stopped: hypothesis reviewer rejected "
+                                    f"{max_hypo_rejections} consecutive hypotheses. "
+                                    f"The hypothesis agent may be stuck generating duplicates or vague predictions."
+                                )
                             break
 
                         # Ask hypothesis agent to regenerate
@@ -378,7 +603,6 @@ class Orchestrator:
                             rejection_category=hypo_review.rejection_category,
                             reviewer_rejected=reviewer_rejected,
                             data_manifest=self.manifest.model_dump(),
-                            file_summaries=self.state.file_summaries or None,
                         )
                         if new_hypo:
                             self.state.add_hypothesis(new_hypo)
@@ -424,7 +648,6 @@ class Orchestrator:
                         feedback=data_feedback,
                         reviewer_rejected=reviewer_rejected,
                         data_manifest=self.manifest.model_dump(),
-                        file_summaries=self.state.file_summaries or None,
                     )
                     if new_hypo:
                         self.state.add_hypothesis(new_hypo)
@@ -471,6 +694,9 @@ class Orchestrator:
                     **hypothesis,
                     "result": result.get("support_level", "UNKNOWN"),
                     "evidence_summary": result.get("summary", ""),
+                    "review_rejections_before_success": result.get("_review_rejections", 0),
+                    "executed_after_review_approval": result.get("_executed_after_review_approval", False),
+                    "execution_attempt": result.get("_execution_attempt"),
                 })
 
                 self.state.add_evidence({
@@ -480,19 +706,33 @@ class Orchestrator:
                     "support_level": result.get("support_level", "UNKNOWN"),
                     "confidence": result.get("confidence", 0.0),
                     "summary": result.get("summary", ""),
+                    "review_rejections_before_success": result.get("_review_rejections", 0),
+                    "executed_after_review_approval": result.get("_executed_after_review_approval", False),
+                    "execution_attempt": result.get("_execution_attempt"),
                 })
 
                 # Check for convergence or refinement
                 if not self._check_shutdown():
                     # If all retries failed, stop the pipeline
                     if result.get("support_level") == "ERROR":
-                        self.state.mark_converged(
-                            reason="Max retries exceeded - execution failed",
+                        reasoning = result.get("reasoning", "Unknown error")
+                        # Give an accurate stop reason instead of always saying "max retries exceeded".
+                        # Static pre-gate cap and code review cap fire before any execution attempt,
+                        # so "max retries exceeded" is misleading in those cases.
+                        if any(
+                            tag in reasoning
+                            for tag in ("Static pre-gate cap", "Code review cap", "pre-gate")
+                        ):
+                            stop_reason = reasoning
+                        else:
+                            stop_reason = f"max retries ({self.config.execution.max_retries}) exceeded"
+                        self.state.mark_stopped(
+                            reason=stop_reason,
                             confidence=0.0,
-                            conclusion=f"Pipeline stopped: {result.get('reasoning', 'Unknown error')}",
+                            conclusion=f"Pipeline stopped: {reasoning}",
                         )
                         self._display_message(
-                            f"Stopping pipeline: max retries ({self.config.execution.max_retries}) exceeded",
+                            f"Stopping pipeline: {stop_reason}",
                             "error"
                         )
                     else:
@@ -509,8 +749,8 @@ class Orchestrator:
                 supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS"]
                 refused = [h for h in self.state.tested_hypotheses if h.get("result") == "REFUSES"]
                 if supported:
-                    names = ", ".join(h["name"] for h in supported)
-                    refused_names = ", ".join(h["name"] for h in refused)
+                    names = ", ".join(h.get("name", "unnamed") for h in supported)
+                    refused_names = ", ".join(h.get("name", "unnamed") for h in refused)
                     self.state.conclusion = (
                         f"Max iterations reached. Supported mechanism evidence found "
                         f"({names}), but no mechanism achieved full convergence. "
@@ -518,6 +758,17 @@ class Orchestrator:
                     )
                 else:
                     self.state.conclusion = "Max iterations reached without finding a supported hypothesis."
+
+            if (
+                not self.state.converged
+                and not self.state.synthesized
+                and self.state.run_status == "running"
+            ):
+                self.state.mark_stopped(
+                    reason="Max iterations reached without convergence",
+                    confidence=self.state.confidence_level,
+                    conclusion=self.state.conclusion or "Investigation incomplete",
+                )
 
             # Generate final report
             final_result = await self._generate_final_output(run_dir)
@@ -572,6 +823,42 @@ class Orchestrator:
             if self.executor:
                 await self.executor.stop()
 
+    async def _inject_data_files(self) -> None:
+        """Inject a flat data_files dict into the kernel.
+
+        Flattens the manifest data section so generated code can access any file as
+        data_files['aff1_peaks'] instead of hardcoding ENCFF IDs or absolute paths.
+        Leaf values that are strings are included directly; nested dicts are flattened
+        one level with the leaf key name taking precedence over category.key notation.
+        """
+        data = (self.manifest.model_dump().get("data") or {})
+        flat: dict[str, str] = {}
+        for category, items in data.items():
+            if isinstance(items, dict):
+                for name, path in items.items():
+                    if isinstance(path, str):
+                        flat[name] = path
+                        flat[f"{category}.{name}"] = path  # also expose category.name form
+            elif isinstance(items, str):
+                flat[category] = items
+
+        # Serialize as a Python literal and execute in the kernel
+        import json as _json
+        lines = ["data_files = {"]
+        for k, v in flat.items():
+            lines.append(f"    {_json.dumps(k)}: {_json.dumps(v)},")
+        lines.append("}")
+        injection_code = "\n".join(lines)
+
+        result = await self.executor.execute(injection_code)
+        if not result.success:
+            raise RuntimeError(
+                f"data_files injection failed — cannot continue: "
+                f"all generated code expects data_files to be defined. "
+                f"stderr: {result.stderr}"
+            )
+        self.logger.info("Injected data_files into kernel", {"keys": list(flat.keys())})
+
     async def _run_file_familiarization(self, run_dir: Path) -> None:
         """Run iteration 0: inspect all manifest files and store summaries in state.
 
@@ -583,11 +870,6 @@ class Orchestrator:
             code = await self.coding_agent.generate_inspection_code(
                 self.manifest.model_dump(),
             )
-            is_valid, err = self.coding_agent.validate_code(code)
-            if not is_valid:
-                self.logger.warning("File inspection code invalid, skipping", {"error": err})
-                return
-
             # Save code for debugging
             code_path = run_dir / "file_inspection.py"
             code_path.write_text(code)
@@ -611,7 +893,11 @@ class Orchestrator:
         hypothesis: dict[str, Any],
         run_dir: Path,
     ) -> dict[str, Any]:
-        """Run a single verification cycle for a hypothesis.
+        """Run a single verification cycle for a hypothesis using the REPL agent.
+
+        The coding agent runs an incremental execute-observe loop until it reaches
+        a conclusion.  No static pre-gate or LLM code review — errors are fed back
+        to the model as observations and it fixes them in place.
 
         Args:
             hypothesis: The hypothesis to verify
@@ -624,194 +910,55 @@ class Orchestrator:
             "hypothesis": hypothesis.get("name", "N/A"),
         })
 
-        max_retries = self.config.execution.max_retries
-        last_code = None
-        last_error = None
-        last_stdout = ""
-        last_stderr = ""
+        max_repl_iterations = self.config.execution.max_retries * 4  # generous budget
 
-        for attempt in range(max_retries + 1):
-            # Generate code
-            code = await self.coding_agent.generate_with_retry(
-                hypothesis=hypothesis,
-                data_manifest=self.manifest.model_dump(),
-                previous_code=last_code,
-                previous_error=last_error,
-                previous_stdout=last_stdout,
-                previous_stderr=last_stderr,
-                prior_evidence=self.state.evidence,
-            )
+        # Tell the coding agent which hypothesis iteration we're on (for debug filenames)
+        self.coding_agent.state_iter = self.state.current_iteration
 
-            # Check for UNTESTABLE escape hatch (regex handles multiple code blocks)
-            untestable_match = re.search(r"^#\s*UNTESTABLE:\s*(.+)$", code, re.MULTILINE)
-            if untestable_match:
-                reason = untestable_match.group(1).strip()
-                self.logger.warning("Coding agent signaled UNTESTABLE", {
-                    "reason": reason,
-                    "hypothesis": hypothesis.get("name", "N/A"),
-                })
-                self._display_message(
-                    f"Coding agent: hypothesis untestable — {reason}",
-                    "warning"
-                )
-                return {
-                    "execution_success": False,
-                    "findings": [],
-                    "support_level": "UNTESTABLE",
-                    "confidence": 0.0,
-                    "reasoning": f"Hypothesis cannot be tested: {reason}",
-                    "issues": [reason],
-                    "summary": f"Untestable: {reason}",
-                    "_raw_output": "",
-                }
+        result = await self.coding_agent.run_repl(
+            hypothesis=hypothesis,
+            executor=self.executor,
+            data_manifest=self.manifest.model_dump(),
+            run_dir=run_dir,
+            prior_evidence=self.state.evidence,
+            file_summaries=self.state.file_summaries or None,
+            allowed_packages=self._allowed_packages,
+            max_iterations=max_repl_iterations,
+        )
 
-            # Validate code
-            is_valid, validation_error = self.coding_agent.validate_code(code)
-            if not is_valid:
-                self.logger.warning("Code validation failed", {
-                    "error": validation_error,
-                    "attempt": attempt + 1,
-                })
-                last_code = code
-                last_error = validation_error
-                continue
+        # Save combined output
+        raw_output = result.get("_raw_output", "")
+        output_file = run_dir / f"output_iter_{self.state.current_iteration}.txt"
+        output_file.write_text(raw_output)
 
-            # Review code for rule violations
-            review_result = await self.review_agent.review_code(
-                code=code,
-                hypothesis=hypothesis,
-                data_manifest=self.manifest.model_dump(),
-                tested_hypotheses=self.state.tested_hypotheses,
-            )
+        self.logger.info("REPL verification complete", {
+            "support_level": result.get("support_level"),
+            "confidence": result.get("confidence"),
+        })
+        return result
 
-            if not review_result.approved:
-                # If LLM review failed, fall back to static rule check
-                if any("REVIEW_UNAVAILABLE" in issue for issue in review_result.issues_found):
-                    self.logger.warning("LLM code review unavailable, falling back to static check")
-                    review_result = self.review_agent.static_review_code(code)
 
-                if not review_result.approved:
-                    self.logger.info("Code review found issues", {
-                        "issues": review_result.issues_found,
-                        "attempt": attempt + 1,
-                    })
-                    self._display_message(
-                        f"Code review: {'; '.join(review_result.issues_found[:3])}",
-                        "warning"
-                    )
-                    if review_result.corrected_code:
-                        code = review_result.corrected_code
-                        # Re-validate the corrected code
-                        is_valid, validation_error = self.coding_agent.validate_code(code)
-                        if not is_valid:
-                            last_code = code
-                            last_error = validation_error
-                            continue
-                    else:
-                        last_code = code
-                        last_error = f"Code review issues: {'; '.join(review_result.issues_found)}"
-                        continue
+    BIOLOGY_LAYERS = ("rnaseq", "phyloP", "string")  # expression / conservation / PPI; tracked for convergence nudge
 
-            # Request approval for code if interactive mode
-            code_approval = await self._approve_code(
-                code, hypothesis.get("name", "")
-            )
+    def _biology_layers_for_convergence(self) -> tuple[list[str], list[str]]:
+        """Compute which biology layers are available and which were used in any tested hypothesis.
 
-            if code_approval.decision == ApprovalDecision.ABORT:
-                self._display_message("Pipeline aborted by user", "warning")
-                return {
-                    "execution_success": False,
-                    "findings": [],
-                    "support_level": "ABORTED",
-                    "confidence": 0.0,
-                    "reasoning": "User aborted pipeline",
-                    "issues": [],
-                    "summary": "Pipeline aborted by user during code review",
-                }
-            elif code_approval.decision == ApprovalDecision.SKIP:
-                self._display_message("Code execution skipped by user", "info")
-                return {
-                    "execution_success": False,
-                    "findings": [],
-                    "support_level": "SKIPPED",
-                    "confidence": 0.0,
-                    "reasoning": "User skipped code execution",
-                    "issues": [],
-                    "summary": "Code execution skipped by user",
-                }
-            elif code_approval.decision == ApprovalDecision.REJECT:
-                self._display_message(
-                    f"Code rejected, regenerating with feedback: {code_approval.feedback}",
-                    "warning"
-                )
-                last_code = code
-                last_error = f"User feedback: {code_approval.feedback}"
-                continue
+        "Used" includes any support level (SUPPORTS, REFUTES, INCONCLUSIVE) — the goal is to
+        ensure the pipeline at least attempts functional/conservation characterization, not
+        that it must succeed.
 
-            # Save code
-            code_file = run_dir / f"code_iter_{self.state.current_iteration}_attempt_{attempt}.py"
-            code_file.write_text(code)
-
-            # Execute code
-            self.logger.info("Executing verification code", {
-                "attempt": attempt + 1,
-            })
-
-            result = await self.executor.execute(code)
-
-            # Save execution output
-            output_file = run_dir / f"output_iter_{self.state.current_iteration}_attempt_{attempt}.txt"
-            output_file.write_text(result.get_display_output())
-
-            # Save any images
-            if result.images:
-                await self.executor.save_images(
-                    result,
-                    run_dir / f"images_iter_{self.state.current_iteration}",
-                )
-
-            if result.success:
-                # Summarize results
-                summary = await self.summary_agent.summarize_results(
-                    hypothesis=hypothesis,
-                    code=code,
-                    execution_result=result,
-                )
-                if summary.get("support_level") == "ERROR":
-                    # Code ran but produced errors (caught by try/except) — retry
-                    self.logger.warning("Summary agent detected ERROR in output, retrying", {
-                        "attempt": attempt + 1,
-                        "reasoning": summary.get("reasoning", ""),
-                    })
-                    last_code = code
-                    last_error = summary.get("reasoning", "Analysis produced errors")
-                    last_stdout = result.stdout
-                    last_stderr = result.stderr
-                    continue
-                # Attach raw stdout for independent convergence check
-                summary["_raw_output"] = result.stdout or ""
-                return summary
-            else:
-                self.logger.warning("Execution failed", {
-                    "error": result.error,
-                    "attempt": attempt + 1,
-                })
-                last_code = code
-                last_error = result.error or "Unknown error"
-                last_stdout = result.stdout
-                last_stderr = result.stderr
-
-        # All retries failed
-        return {
-            "execution_success": False,
-            "findings": [],
-            "support_level": "ERROR",
-            "confidence": 0.0,
-            "reasoning": f"Code execution failed after {max_retries + 1} attempts",
-            "issues": [last_error],
-            "summary": f"Failed to verify hypothesis due to execution errors: {last_error}",
-            "_raw_output": "",
-        }
+        Returns:
+            (available_biology_layers, used_biology_layers)
+        """
+        data = self.manifest.model_dump().get("data", {}) or {}
+        available = [k for k in self.BIOLOGY_LAYERS if k in data]
+        used_set: set[str] = set()
+        for th in self.state.tested_hypotheses:
+            for key in th.get("required_data", []):
+                top = key.split(".", 1)[0].split(":", 1)[0]
+                if top in self.BIOLOGY_LAYERS:
+                    used_set.add(top)
+        return available, sorted(used_set)
 
     def _build_group_summary(self, hypothesis: dict[str, Any]) -> str | None:
         """Build a summary if the hypothesis's group is now fully tested.
@@ -874,12 +1021,34 @@ class Orchestrator:
 
         # Step 1: Independent convergence check — SummaryAgent uses a fresh context
         raw_output = last_result.pop("_raw_output", None)
+        available_biology_layers, used_biology_layers = self._biology_layers_for_convergence()
         convergence = await self.summary_agent.check_convergence(
             finding=self.state.finding,
             tested_hypotheses=self.state.tested_hypotheses,
             last_result=last_result,
             raw_output=raw_output,
+            investigation_objective=self.manifest.investigation_objective or None,
+            available_biology_layers=available_biology_layers,
+            used_biology_layers=used_biology_layers,
+            causal_capable_data=getattr(self.manifest, "causal_capable_data", False),
         )
+
+        has_any_supports = any(
+            h.get("result") == "SUPPORTS" for h in self.state.tested_hypotheses
+        )
+
+        if convergence.get("converged", False) and not has_any_supports:
+            self.logger.warning(
+                "Convergence check returned converged=true but no hypothesis has "
+                "support_level=SUPPORTS — overriding to converged=false",
+                {"tested_count": len(self.state.tested_hypotheses)},
+            )
+            convergence["converged"] = False
+            convergence["reasoning"] = (
+                f"[OVERRIDDEN] LLM declared convergence but no hypothesis achieved "
+                f"SUPPORTS (all are REFUSES/INCONCLUSIVE/ERROR/UNTESTABLE). "
+                f"Original reasoning: {convergence.get('reasoning', '')}"
+            )
 
         if convergence.get("converged", False):
             if self.state.tested_hypotheses:
@@ -907,6 +1076,9 @@ class Orchestrator:
 
         # Step 2: HypothesisAgent proposes next hypothesis
         group_summary = self._build_group_summary(last_hypothesis)
+        has_support = any(h.get("result") == "SUPPORTS" for h in self.state.tested_hypotheses)
+        available_bl, used_bl = self._biology_layers_for_convergence()
+        unused_biology_layers = [k for k in available_bl if k not in used_bl] if available_bl else None
 
         refinement = await self.hypothesis_agent.refine_hypotheses(
             state=self.state,
@@ -914,7 +1086,8 @@ class Orchestrator:
             last_result=last_result,
             data_manifest=self.manifest.model_dump(),
             group_summary=group_summary,
-            file_summaries=self.state.file_summaries or None,
+            encourage_different_mechanism=has_support,
+            unused_biology_layers=unused_biology_layers or None,
         )
 
         decision = refinement.get("decision", "CONTINUE")
@@ -1002,6 +1175,9 @@ class Orchestrator:
             history_summary=self.state.get_history_summary(),
             conclusion=self.state.conclusion or "Investigation incomplete",
             all_evidence=evidence,
+            converged=self.state.converged,
+            run_status=getattr(self.state, "run_status", None),
+            synthesized=getattr(self.state, "synthesized", False),
         )
 
         # Save report
@@ -1013,6 +1189,8 @@ class Orchestrator:
 
         self.logger.info("Pipeline complete", {
             "converged": self.state.converged,
+            "run_status": getattr(self.state, "run_status", None),
+            "synthesized": getattr(self.state, "synthesized", None),
             "iterations": self.state.current_iteration,
             "report_file": str(report_file),
         })
@@ -1020,6 +1198,9 @@ class Orchestrator:
         return {
             "converged": self.state.converged,
             "convergence_reason": self.state.convergence_reason,
+            "run_status": getattr(self.state, "run_status", None),
+            "stop_reason": getattr(self.state, "stop_reason", None),
+            "synthesized": getattr(self.state, "synthesized", None),
             "confidence": self.state.confidence_level,
             "conclusion": self.state.conclusion,
             "iterations": self.state.current_iteration,

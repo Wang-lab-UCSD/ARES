@@ -1,5 +1,5 @@
 # Example: Multi-Model Configuration
-# Uses different LLM providers for different tasks as Hanbei requested
+# Uses different LLM providers for different tasks
 
 llm:
   # Gemini for hypothesis generation (good at reasoning)

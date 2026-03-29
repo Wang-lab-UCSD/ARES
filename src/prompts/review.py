@@ -62,15 +62,24 @@ def build_review_prompt(
 
 Check the code for these specific issues:
 
-**1. FIMO --motif flag**
-If the code calls `fimo` and the hypothesis only needs specific motif(s), the command MUST include `--motif <MOTIF_ID>`. Without it, FIMO scans all 800+ motifs in JASPAR which takes hours instead of seconds.
+**1. FIMO --motif and --no-pgc flags**
+If the code calls `fimo` directly as a CLI command (via subprocess):
+- The command MUST include `--motif <MOTIF_ID>` when the hypothesis only needs specific motif(s). Without it, FIMO scans all 800+ motifs in JASPAR which takes hours instead of seconds.
+- The command MUST include `--no-pgc`. Without it, FIMO parses FASTA headers as genomic coordinates and reports `sequence_name` as chromosome (e.g. chr7) instead of your peak ID (e.g. ATF3_000000). Merging FIMO output to peaks by peak_id then matches nothing → 0 motif hits even when motifs are present.
 - If `--motif` is missing and the hypothesis names specific motifs → FIX: add `--motif`
-- If the hypothesis genuinely requires scanning all motifs → APPROVE as-is
+- If `--no-pgc` is missing → FIX: add `--no-pgc` so sequence_name stays as the FASTA header (peak ID).
+- If the hypothesis genuinely requires scanning all motifs → APPROVE as-is for --motif only; still require --no-pgc.
+- **EXCEPTION: If the code uses `run_fimo_on_peaks()` from `src.utils.bioio`, do NOT flag missing flags.** That helper always passes `--no-pgc` and `--motif` internally. Asking the model to bypass the helper and call FIMO manually is counterproductive.
 
-**2. Single statistical test**
-The code should perform ONE primary statistical test that directly answers the hypothesis prediction. If it performs multiple unrelated tests (e.g., distance + GC% + expression), remove the extras and keep only the one matching the prediction.
+**2. Focused statistical testing**
+The code should have ONE primary statistical test that directly answers the hypothesis prediction.
+However, additional closely related tests ARE ALLOWED when:
+- They are part of the same verification plan (e.g., testing in promoter AND enhancer strata as specified by the hypothesis)
+- They serve as internal controls or specificity checks explicitly required by the prediction
+- They share the same input data and test the same mechanism from complementary angles
+
+Only REJECT for this rule if the code runs truly UNRELATED tests (e.g., distance + GC% + expression when the hypothesis only asks about one of them). Do NOT reject for having stratified tests, meta-analyses across strata, or matched controls that the hypothesis verification plan explicitly requires.
 - Data loading, FIMO scanning, file parsing are fine — those are setup, not extra tests
-- One Fisher's test OR one Mann-Whitney test is the goal
 
 **3. Column selection**
 When reading tabular data (TSV/CSV), columns should be selected by name (e.g., `df['TPM']`), not by position (e.g., `columns[0]`, `value_cols[0]`). Positional selection often picks the wrong column.
@@ -91,6 +100,14 @@ do NOT flag it as an issue.
 - Wrong file paths (not matching the data manifest)
 - Missing imports
 - Using chromosome names instead of peak IDs for counting
+- `data_files` is injected by the pipeline runtime before the script runs. Do NOT flag
+  `data_files` as undefined merely because it is not created inside the script.
+  Only flag this area if the script redefines `data_files` / `data_manifest` locally,
+  hardcodes paths or ENCFF IDs, or uses keys that do not exist in the manifest.
+- Using `bash -lc`, `shell=True`, or `>` redirection for tool commands such as
+  `bedtools`, `samtools`, `cut`, or `fimo`. This is a real runtime bug because a
+  login shell can reset `PATH` and lose the active conda environment. Prefer
+  `subprocess.run([...], stdout=fh, text=True, check=True)` with `shell=False`.
 
 **7. Code matches hypothesis**
 Read the hypothesis prediction carefully. Does the code actually test that specific claim? For example, if the hypothesis says "the REST motif (21bp) contains the ATF6 motif (5bp) as a substring," the code must scan the motif sequence itself — NOT scan broad peak regions (hundreds of bp) for the pattern, which would test a different question. If the code tests something different from what the prediction states → REJECT (do not fix — the mismatch is too fundamental).
@@ -102,9 +119,102 @@ conservative for short peak regions — legitimate hits in control/shuffled regi
 q > 0.05, producing zero results. If the code filters on q-value and gets zero or
 suspiciously few hits, flag it and suggest switching to p-value filtering.
 
+**9. Shared parser helpers**
+For these fragile parsing tasks, prefer the shared helpers in `src.utils.bioio` over
+hand-rolled parsing code:
+- narrowPeak summit parsing → `read_narrowpeak`
+- FIMO TSV parsing → `parse_fimo_tsv`
+- ChromHMM intersect parsing → `parse_chromhmm_intersect`
+- named-column RNA-seq loading → `load_rnaseq_with_gene_id`
+- `bedtools closest -d` parsing → `parse_bedtools_closest`
+- STRING protein interaction files → `load_string_links`
+
+If the script re-implements one of these parsers manually and the replacement is brittle
+(e.g. positional column slicing, manual summit fallback, fixed-width truncation), REJECT
+and suggest using the shared helper instead.
+
+**10. Known-correct patterns — DO NOT flag these**
+
+The following patterns are correct by design. Flagging them wastes review attempts:
+
+- **`read_narrowpeak()` returns `summit` as an absolute genomic coordinate** (computed as
+  `start + peak_offset`), NOT a raw offset. It also handles negative peak offsets
+  (peak = -1) by falling back to the interval midpoint. The `summit` column is ALWAYS
+  a valid absolute genomic coordinate. Do NOT flag summit calculations as incorrect
+  when the code uses `read_narrowpeak()` or `make_integer_summit_windows()`.
+
+- **`make_integer_summit_windows()` handles the `summit` column correctly.** When a column
+  named `summit` exists, it treats it as an absolute genomic coordinate (which is what
+  `read_narrowpeak()` provides). Do NOT flag this as an offset/coordinate confusion.
+
+- **`read_narrowpeak()` does NOT return a `name` column.** It returns:
+  `chrom, start, end, score, strand, signal_value, p_value, q_value, peak,
+  peak_offset, summit`. The narrowPeak `name` field (col 4) is dropped because ENCODE
+  files use `'.'` for all peaks. Code cannot merge on `name` because the column does
+  not exist.
+
+- **Fabricating `peak_00000` sequential IDs to match FIMO output is CORRECT.**
+  `run_fimo_on_peaks()` auto-assigns sequential IDs (`peak_00000`, `peak_00001`, ...)
+  whenever the name column is missing or uniform. Specifically: (a) if the input has
+  fewer than 4 columns (BED3), the helper treats names as all `'.'`; (b) if col 4 exists
+  but is uniform (e.g. all `'.'` in ENCODE files), sequential IDs are assigned. In both
+  cases `fimo_hits['peak_id']` contains `peak_00000`-style values. Code that assigns
+  `peaks["_peak_id"] = [f"peak_{{i:05d}}" for i in range(len(peaks))]` and then joins
+  on `_peak_id` is the correct pattern. Do NOT flag BED3 input or `peak_00000` IDs as
+  a mismatch — the helper handles this internally.
+
+- **`intersect_peaks(..., mode='flag'/'count')` preserves input row order AND column names
+  when given DataFrames.** When the A input is a DataFrame, the output is a copy of that
+  DataFrame with an extra `overlaps_b` (flag) or `overlap_count` (count) column appended.
+  All original columns (`chrom`, `start`, `end`, `summit`, etc.) are preserved. The code
+  CAN safely reference `result["chrom"]`, `result["start"]`, `result["summit"]`, etc.
+  Do NOT flag column-name mismatches or row-order alignment for these modes.
+
+- **`count_overlapping_peaks()` always returns a dict**, never a float or scalar. The
+  return value has keys: `'fraction'`, `'n_query'`, `'n_overlapping'`, `'n_nonoverlapping'`.
+  Access results as `result['fraction']`, `result['n_overlapping']`, etc. Do NOT flag
+  `count_overlapping_peaks()` as potentially returning a float or ambiguous type.
+
+- **`count_overlapping_peaks()` and `intersect_peaks()` are coordinate-based join
+  helpers.** They use `bedtools intersect` internally. If the code uses these instead of
+  `.merge()`, that is CORRECT. Do NOT suggest replacing them with pandas merges.
+
+- **`extract_bigwig_signals()` defaults to `chrom='chrom'`, `start='start'`, `end='end'`.**
+  Both explicit calls (`extract_bigwig_signals(df, bw_path, chrom='chrom', ...)`) and
+  implicit calls (`extract_bigwig_signals(df, bw_path)`) are valid — the column names
+  are the same. Do NOT flag "inconsistent" explicit vs implicit calls to this function
+  as a real issue.
+
+- **NEVER suggest `.merge(on='name')` in corrected_code.** ENCODE narrowPeak files have
+  `'.'` as the name for ALL peaks. Merging on `name` produces a cartesian product and
+  will be rejected by the static checker. Use `intersect_peaks()` or
+  `count_overlapping_peaks()` instead.
+
+- **`load_string_links(path, min_score=400)` is the correct way to load STRING files.**
+  STRING protein-protein interaction files use variable whitespace separators and
+  inconsistent headers. `load_string_links()` handles all format variants robustly.
+  Do NOT flag this helper as incorrect or suggest `pd.read_csv(sep=' ')` instead.
+  Code that calls `load_string_links()` is correct by design — do NOT reject it.
+
+- **Genome-wide FIMO scans are NOT feasible.** Running FIMO on the full hg38 genome FASTA
+  takes hours and will time out (the execution limit is 15 minutes). Do NOT require or
+  suggest genome-wide FIMO scans. Instead, scanning the union of relevant peak sets
+  (e.g., all ChIP-seq peaks merged together) is the correct approximation for finding
+  motif instances across the genome. Scanning only within relevant peak windows using
+  `run_fimo_on_peaks()` is also acceptable. Do NOT reject code solely because it scans
+  peak windows instead of the full genome.
+
 # Task
 
-Review the code against the checklist above. Respond in JSON format:
+**Read the ENTIRE script against ALL checklist items before writing your response.**
+Do not stop after finding the first problem. The coding model gets exactly one chance to fix
+everything you report; returning issues one at a time wastes a review attempt per bug and
+the pipeline hits its rejection cap before receiving a clean script.
+
+Scan for every applicable checklist violation, collect them all, then respond once with the
+complete list and a single corrected script that fixes all of them.
+
+Respond in JSON format:
 
 {{
     "approved": true,
@@ -117,12 +227,15 @@ OR if issues are found:
 
 {{
     "approved": false,
-    "issues": ["Issue 1 description", "Issue 2 description"],
-    "corrected_code": "... the full corrected Python code ...",
-    "reasoning": "Explanation of what was fixed"
+    "issues": ["Issue 1 description", "Issue 2 description", "Issue 3 description"],
+    "corrected_code": "... the full corrected Python code with ALL issues fixed ...",
+    "reasoning": "Explanation of every fix made"
 }}
 
-If you fix the code, return the COMPLETE corrected script (not just the changed lines).
+If you fix the code, return the COMPLETE corrected script (not just the changed lines),
+with ALL issues addressed — not just the first one you noticed.
+Never "fix" code by adding a local `data_files = {...}` or `data_manifest = {...}` block;
+those are injected by the pipeline runtime and must remain external.
 """
     return prompt
 
@@ -186,10 +299,11 @@ You have exactly TWO checks. Apply ONLY these. Do not invent additional criteria
 Has this question already been answered — either directly or by logical implication — by a
 prior tested hypothesis? This includes:
 - Same question reworded (e.g. "A overlaps B" vs "B overlaps A")
-- Same mechanism class with a different proxy (e.g. prior SUPPORTS "open chromatin" →
-  "H3K27ac enriched at co-bound sites" is the same claim)
+- Same mechanism class using the exact same data layers/modalities as a prior test.
 - Logical inverse of a confirmed result (e.g. prior SUPPORTS enrichment → testing
   depletion is redundant)
+
+**CRITICAL EXCEPTION**: Testing the *same* mechanism class using a fundamentally *different data modality* (e.g. moving from ChIP-seq binding to RNA-seq expression, phyloP conservation, or Hi-C looping) is NOT a duplicate. In fact, it is REQUIRED for cross-layer convergence. If the new hypothesis tests an existing mechanism idea but uses RNA-seq, phyloP, or a different major data layer to provide cross-layer validation, you MUST APPROVE it.
 
 If the prior list is empty, this check cannot trigger — approve.
 

@@ -1,4 +1,4 @@
-"""Experiment Design Generation Pipeline.
+"""ARES — Automated Regulatory Solver.
 
 Multi-agent pipeline for automated hypothesis generation and verification.
 """

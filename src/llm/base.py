@@ -62,7 +62,7 @@ class LLMProvider(ABC):
         self.model = model
         self.api_key = api_key
         self.default_temperature = kwargs.get("temperature", 0.7)
-        self.default_max_tokens = kwargs.get("max_tokens", 4096)
+        self.default_max_tokens = kwargs.get("max_tokens")  # None = no explicit limit
         self._cost_tracker: CostTracker | None = None
 
     def set_cost_tracker(self, tracker: CostTracker) -> None:
@@ -140,9 +140,13 @@ class LLMProvider(ABC):
         """Get temperature, using default if not specified."""
         return temperature if temperature is not None else self.default_temperature
 
-    def _get_max_tokens(self, max_tokens: int | None) -> int:
-        """Get max tokens, using default if not specified."""
-        return max_tokens if max_tokens is not None else self.default_max_tokens
+    def _get_max_tokens(self, max_tokens: int | None, fallback: int = 4096) -> int:
+        """Get max tokens, using default if not specified, or fallback if no default set."""
+        if max_tokens is not None:
+            return max_tokens
+        if self.default_max_tokens is not None:
+            return self.default_max_tokens
+        return fallback
 
 
 def create_provider(

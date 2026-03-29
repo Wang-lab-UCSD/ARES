@@ -1,6 +1,6 @@
 Read AGENT_WORKFLOW.md for agent orchestration rules. NEVER modify this file.
 
-# Experiment Design Generation Pipeline
+# ARES — Automated Regulatory Solver
 
 ## Project Context
 Multi-agent pipeline for automated hypothesis generation and verification in bioinformatics.
@@ -19,31 +19,87 @@ User provides a finding (X predicts Y) + data paths, pipeline runs until converg
 - `src/memory/` - Conversation history management
 - `src/prompts/` - Prompt templates (hypothesis, coding, review, summary, tool_quirks)
 
-## Available Models (February 2026)
+## Available Models (March 2026)
 - **OpenAI**: `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.1`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5.2-codex`, `gpt-5.1-codex`, `gpt-5-codex`
 - **Anthropic**: `claude-sonnet-4`, `claude-opus-4`
-- **Google**: `gemini-2.5-pro`, `gemini-2.5-flash`
+- **Google**: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3-flash-preview`
+- **Z.AI (GLM-5, OpenAI-compatible)**: `glm-5` via `base_url: "https://api.z.ai/api/paas/v4/"` with `api_key_env: "Z_AI_API_KEY"`. Use `provider: "openai"` in config — the OpenAI client handles it transparently.
+- **DeepSeek (OpenAI-compatible)**: `deepseek-chat` via `base_url: "https://api.deepseek.com"` with `api_key_env: "DEEPSEEK_API_KEY"`. Set `max_tokens: 8192` — DeepSeek default is 4096, too low for long scripts.
+
+## MiniMax Model Quirks
+- **Set `max_tokens` >= 16000 for MiniMax-M2.7**: Thinking tokens count against the `max_tokens` budget. The default of 4096 is too low — the model truncates code mid-string (e.g., unterminated string literals, unclosed parentheses), then its fix is also truncated, creating an endless loop of syntax errors. Set `max_tokens: 16000` or higher.
 
 ## OpenAI Model Quirks
-- **Do NOT set `max_tokens` for OpenAI models**: GPT-5.2 and newer models use internal reasoning tokens that count against the `max_completion_tokens` budget. Setting a limit (e.g., 4096) can cause the model to exhaust tokens on "thinking" before producing any visible output, resulting in empty responses.
+- **Do NOT set `max_tokens` for OpenAI reasoning models (gpt-5.2, etc.)**: Reasoning tokens count against the `max_completion_tokens` budget. Setting a low limit causes the model to exhaust tokens on "thinking" before producing visible output. If gpt-5.2 still hits "model output limit reached" even without `max_tokens`, set it very high (e.g., `max_tokens: 32768`) rather than omitting it — the model's own default can also be too low for complex JSON+reasoning outputs.
 - **gpt-5.2-codex uses completions API**: This model requires the `/v1/completions` endpoint, not `/v1/chat/completions`. Use `gpt-5.2` for chat-based tasks.
 - **gpt-5-mini only supports temperature=1**: Do not set custom temperature values for this model.
+
+## GLM-5 (Z.AI) Quirks
+- **"No tags" responses**: GLM-5 sometimes responds with plain-text narration instead of a `<execute>` block, wasting a REPL step. This appears at roughly 25% frequency on complex iterations. The REPL loop handles it gracefully (logs a WARNING, increments iteration, re-prompts), but it reduces effective REPL budget. No fix needed — just be aware that `max_retries: 5` budgets 20 REPL steps, and GLM-5 may consume 25% on narration-only turns.
+- **Do NOT set `max_tokens` for GLM-5**: Same reasoning as OpenAI reasoning models — thinking tokens count against the budget. Omit `max_tokens` in config for GLM-5.
+
+## Convergence Criterion 5 — Biology Layers (March 2026 Fix)
+Criterion 5 requires that if `rnaseq` or `phyloP` data is available in the manifest, at least one hypothesis must have **tested** one of them. The test result can be SUPPORTS, REFUTES, or INCONCLUSIVE — any attempt satisfies the criterion.
+
+**Why this distinction matters:**
+- `rnaseq`/`phyloP` = functional consequence / evolutionary conservation (did the interaction have a biological effect?)
+- `STRING`/PPI = protein–protein interaction mechanism (are these proteins physically linked?)
+- STRING/PPI satisfies a different criterion (Criterion 4, mechanism evidence). It does NOT substitute for rnaseq/phyloP in Criterion 5.
+
+**Code change**: `_biology_layers_for_convergence()` in `src/orchestrator.py` tracks layers used in ANY tested hypothesis (previously filtered to SUPPORTS-only, which caused the pipeline to keep running after a REFUTES/INCONCLUSIVE result on phyloP).
 
 ## API Keys
 - **OpenAI API key**: `api_key.txt` (in project root, gitignored)
 - To run the pipeline: `export OPENAI_API_KEY=$(cat api_key.txt)`
 
 ## Environment Setup
-Use conda for environment management (includes bioinformatics tools):
-```bash
-# Activate environment
-conda activate pipeline
 
-# Run pipeline
-python -m src.main --config config/config.yaml --manifest examples/atf6_rest/data_manifest.yaml
+Use conda for environment management (includes bioinformatics tools). Do this once before running the pipeline.
+
+### 1. Create and activate the environment
+
+```bash
+# Create env with Python 3.10+ (project requires >=3.10)
+conda create -n pipeline python=3.11 -y
+conda activate pipeline
 ```
 
-Required conda packages: `meme`, `ucsc-bigwigaverageoverbed`, `bedtools`
+### 2. Install conda bioinformatics tools
+
+```bash
+conda install -c bioconda -c conda-forge meme bedtools samtools -y
+```
+
+Add UCSC tools if needed (e.g. `ucsc-bigwigaverageoverbed`); exact package names may vary on bioconda.
+
+### 3. Install Python dependencies
+
+From the pipeline repo root:
+
+```bash
+cd /path/to/ares
+pip install -r requirements.txt
+```
+
+If `pip install` fails building **pybedtools** (error: `g++` not found), either:
+
+- **Option A** — install a C++ compiler, then re-run pip:
+  ```bash
+  conda install -c conda-forge cxx-compiler -y
+  pip install -r requirements.txt
+  ```
+- **Option B** — install pybedtools from conda (pre-built), then pip the rest:
+  ```bash
+  conda install -c bioconda pybedtools -y
+  pip install -r requirements.txt
+  ```
+
+### 4. Run the pipeline
+
+```bash
+conda activate pipeline
+python -m src.main --config config/config.yaml --manifest examples/atf6_rest/data_manifest.yaml
+```
 
 ## Running the Pipeline
 ```bash

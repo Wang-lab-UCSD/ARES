@@ -3,57 +3,82 @@
 
 finding: >
   The USF1 motif is the most important feature for predicting ATF3 binding signal.
-  This is surprising because USF1 and ATF3 are different transcription factors.
-  The goal is to explain the biological mechanism behind this relationship.
+  The goal is to explain the biomolecular mechanism behind this relationship.
 
 context: |
-  I aim to comprehend how various transcription factors interact with one another
-  to regulate gene expression. I currently only download the ChIP-seq data from
-  ENCODE for various transcription factors in diverse cell lines. It is possible
-  to download other publicly available data to verify if needed.
+  I want to understand the mechanism of how different transcription factors cooperate
+  with other transcription factors to regulate gene expression. I currently download the ChIP-seq 
+  data from ENCODE for various transcription factors in diverse cell lines, also I 
+  download RNA-seq, Hi-C data, ChromHMM, H3K27ac, H3K4me3 ChIP-seq, DNase-seq, phyloP score,
+  WGBS. It is possible to download other public available data to verify if needed.
 
-  My ML model suggests that for the ATF3 binding signal prediction task, the
-  occurrence of the USF1 motif plays the most important role.
+  My ML model currently suggests that for ATF3 binding affinity prediction task, 
+  USF1 motif plays the most significant role in GM12878.
+
+# Goal of this run: discovery and synthesis (convergence on a new named mechanism is acceptable)
+investigation_objective: >
+  Characterize the mechanism linking TF_B (motif) to TF_A binding; synthesize a coherent
+  causal narrative, possibly identifying a new mechanism not in the predefined taxonomy.
 
 data:
   # ChIP-seq peak files (GM12878 cell line)
   # IMPORTANT: Use absolute paths for Jupyter kernel compatibility
   chipseq:
-    atf3_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF882AEU.bed"
-    atf3_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF243XPP.bigWig"
-    usf1_peaks: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF879TPT.bed"
-    usf1_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/atf3_usf1/ENCFF029MAS.bigWig"
+    ATF3_peaks: "/new-stg/home/hanbei/data/TF_ENCODE4/GM12878/ATF3_human/ENCFF882AEU.bed"
+    ATF3_peaks_format: "narrowPeak (hg38)"
+    ATF3_bigwig_fold_change_over_control: "/new-stg/home/hanbei/data/TF_ENCODE4/GM12878/ATF3_human/ENCFF243XPP.bigWig"
+
+    USF1_peaks: "/new-stg/home/hanbei/data/TF_ENCODE4/GM12878/USF1_human/ENCFF879TPT.bed"
+    USF1_peaks_format: "narrowPeak (hg38)"
+    USF1_bigwig_fold_change_over_control: "/new-stg/home/hanbei/data/TF_ENCODE4/GM12878/USF1_human/ENCFF029MAS.bigWig"
 
   # Position Weight Matrices (JASPAR 2022)
   pwm:
-    jaspar_meme: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/JASPAR2022_CORE_non-redundant_pfms_meme.txt"
-    atf3_motif_id: "MA0605.2"
-    usf1_motif_id: "MA0093.3"
+    jaspar_meme: "/new-stg/home/hanbei/HanX/data/JASPAR/JASPAR2022_CORE_vertebrates_non-redundant_v2.meme"
+    ATF3_motif_id: "MA1988.1"
+    USF1_motif_id: "MA0093.3"
 
   # Reference genome
   genome:
-    fasta: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/hg38.fa"
+    fasta: "/new-stg/home/hanbei/data/hg38.fa"
 
   # Gene expression data (GM12878)
   rnaseq:
-    gm12878_expression: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF345SHY.tsv"
+    gene_quantification: "/new-stg/home/hanbei/data/RNAseq_ENCODE/GM12878.tsv"
+    gene_quantification_id_type: "Ensembl gene IDs (ENSG...); TPM column available"
 
   # Gene annotations
   annotations:
-    gencode: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/gencode.v24.primary_assembly.annotation.gtf"
+    gencode: "/new-stg/home/hanbei/data/gencode.v38.annotation.gtf"
 
   # Epigenomic data (GM12878)
   epigenome:
-    dnase_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF594DFV.bigWig"
-    h3k27ac_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF716VWO.bigWig"
-    h3k4me3_signal: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/ENCFF287HAO.bigWig"
-    chromhmm: "/mnt/c/Users/28702/Desktop/work_space/experiment_designs_generation_multi_agents_pipeline/data/E116_18_core_K27ac_hg38lift_mnemonics.bed.gz"
+    dnase_signal: "/new-stg/home/hanbei/data/DNaseseq_ENCODE/GM12878.bigWig"
+    dnase_signal_role: "Chromatin accessibility; higher = more open"
+    h3k27ac_signal: "/new-stg/home/hanbei/data/histone/GM12878/H3K27ac/ENCFF469WVA.bigWig"
+    h3k27ac_signal_role: "Active enhancer/promoter mark"
+    h3k4me3_signal: "/new-stg/home/hanbei/data/histone/GM12878/H3K4me3/ENCFF287HAO.bigWig"
+    h3k4me3_signal_role: "Active promoter mark; enriched at TSS"
+    chromhmm: "/new-stg/home/hanbei/data/chromHMM/E116_18_core_K27ac_hg38lift_mnemonics.bed"
+    chromhmm_format: "BED, 4 columns: chrom, start, end, state_mnemonic (e.g. 9_EnhA1). State is 4th column; match against chromhmm_promoter/chromhmm_enhancer lists."
+    chromhmm_promoter_state: ["1_TssA", "2_TssFlnk", "3_TssFlnkU", "4_TssFlnkD", "14_TssBiv"]
+    chromhmm_enhancer_state: ["7_EnhG1", "8_EnhG2", "9_EnhA1", "10_EnhA2", "11_EnhWk", "15_EnhBiv"]
+    chromhmm_transcription_state: ["5_Tx", "6_TxWk"]
+    chromhmm_znf_repeats_state: ["12_ZNF/Rpts"]
+    chromhmm_heterochromatin_state: ["13_Het"]
+    chromhmm_polycomb_repressed_state: ["16_ReprPC", "17_ReprPCWk"]
+    chromhmm_quiescent_state: ["18_Quies"]
 
-# Data statistics
-stats:
-  atf3_peak_count: 4024
-  usf1_peak_count: 8461
-  jaspar_motif_count: 841
+  phyloP:
+    phyloP_score: "/new-stg/home/hanbei/data/phyloP/hg38.phyloP100way.bw"
+    phyloP_score_role: "Vertebrate evolutionary conservation per base (100-way); higher = more conserved"
+
+  hic:
+    hic_loops: "/new-stg/home/hanbei/data/HiC/GM12878/ENCFF041XLP.bedpe"
+    hic_loops_role: "Chromatin loop calls; treat endpoints as loop anchors"
+    hic_chromatin_strips: "/new-stg/home/hanbei/data/HiC/GM12878/ENCFF237ASV.bedpe"
+
+execution_requirements_path: "/new-stg/home/hanbei/experiment_designs_generation_multi_agents_pipeline/requirements.txt"
 
 # Available bioinformatics tools
 tools:

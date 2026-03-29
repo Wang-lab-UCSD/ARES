@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from src.llm.base import LLMProvider, LLMResponse, Message, Role
@@ -140,10 +141,27 @@ class GeminiProvider(LLMProvider):
                 model = self._get_client()
 
             # Configure generation
-            generation_config = genai.GenerationConfig(
-                temperature=self._get_temperature(temperature),
-                max_output_tokens=self._get_max_tokens(max_tokens),
-            )
+            # Some google-generativeai versions support response_mime_type="application/json"
+            # which improves structured output reliability. We pass it through when provided.
+            response_mime_type = kwargs.pop("response_mime_type", None)
+            try:
+                if response_mime_type:
+                    generation_config = genai.GenerationConfig(
+                        temperature=self._get_temperature(temperature),
+                        max_output_tokens=self._get_max_tokens(max_tokens),
+                        response_mime_type=response_mime_type,
+                    )
+                else:
+                    generation_config = genai.GenerationConfig(
+                        temperature=self._get_temperature(temperature),
+                        max_output_tokens=self._get_max_tokens(max_tokens),
+                    )
+            except TypeError:
+                # Older library version: ignore response_mime_type
+                generation_config = genai.GenerationConfig(
+                    temperature=self._get_temperature(temperature),
+                    max_output_tokens=self._get_max_tokens(max_tokens),
+                )
 
             # Start chat with history (excluding the last user message)
             chat = model.start_chat(history=history[:-1] if len(history) > 1 else [])
@@ -191,6 +209,9 @@ class GeminiProvider(LLMProvider):
             self.logger.error("Completion failed", {"error": str(e)})
             raise
 
+    # How many times to re-call the LLM when JSON parsing fails
+    JSON_PARSE_RETRIES = 2
+
     async def complete_json(
         self,
         messages: list[Message],
@@ -199,7 +220,11 @@ class GeminiProvider(LLMProvider):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Generate a JSON completion using Gemini API."""
+        """Generate a JSON completion using Gemini API.
+
+        Retries the full LLM call up to JSON_PARSE_RETRIES times when the
+        response is not valid JSON (truncated output, extra prose, etc.).
+        """
         self.logger.debug("Sending JSON completion request", {
             "model": self.model,
             "has_schema": schema is not None,
@@ -222,28 +247,74 @@ class GeminiProvider(LLMProvider):
                 "You must respond with valid JSON only, no other text." + schema_instruction
             ))
 
-        response = await self.complete(
-            json_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
-        )
+        last_parse_error: Exception | None = None
 
-        # Parse JSON from response
-        content = response.content.strip()
+        for json_attempt in range(1 + self.JSON_PARSE_RETRIES):
+            response = await self.complete(
+                json_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_mime_type="application/json",
+                **kwargs,
+            )
 
-        # Handle markdown code blocks
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1])
+            content = response.content.strip()
 
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError as e:
-            self.logger.error("Failed to parse JSON response", {
-                "error": str(e),
-                "content": content[:500],
-            })
-            raise ValueError(f"Invalid JSON response: {e}")
+            # Handle markdown code blocks
+            if content.startswith("```"):
+                lines = content.split("\n")
+                content = "\n".join(lines[1:-1])
 
-        return result
+            # Attempt 1: direct parse
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                last_parse_error = e
+
+            # Attempt 2: extract {...} substring and clean trailing commas
+            extracted = self._extract_json_object(content)
+            if extracted is not None:
+                try:
+                    return json.loads(extracted)
+                except json.JSONDecodeError:
+                    pass
+
+            if json_attempt < self.JSON_PARSE_RETRIES:
+                delay = RETRY_DELAY_BASE * (json_attempt + 1)
+                self.logger.warning(
+                    "JSON parse failed, retrying LLM call",
+                    {
+                        "error": str(last_parse_error),
+                        "attempt": json_attempt + 1,
+                        "max_retries": self.JSON_PARSE_RETRIES,
+                        "content_preview": content[:300],
+                    },
+                )
+                await asyncio.sleep(delay)
+
+        self.logger.error("Failed to parse JSON response after retries", {
+            "error": str(last_parse_error),
+            "content": content[:500],
+        })
+        raise ValueError(f"Invalid JSON response after {1 + self.JSON_PARSE_RETRIES} attempts: {last_parse_error}")
+
+    @staticmethod
+    def _extract_json_object(text: str) -> str | None:
+        """Extract a likely JSON object from a text blob.
+
+        Gemini may prepend/append commentary even when instructed to return JSON only.
+        This tries to salvage the first top-level {...} block.
+        """
+        if not text:
+            return None
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        candidate = text[start : end + 1].strip()
+        # Quick sanity check: avoid returning huge non-JSON with no quotes/colons
+        if ":" not in candidate:
+            return None
+        # Remove common trailing commas before } or ]
+        candidate = re.sub(r",(\s*[}\]])", r"\1", candidate)
+        return candidate

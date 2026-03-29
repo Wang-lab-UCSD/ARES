@@ -1,34 +1,67 @@
-# Experiment Design Generation Pipeline Configuration
+# ARES — Automated Regulatory Solver Configuration
 
 llm:
   # Model for generating and refining hypotheses
+  # hypothesis_model:
+  #   provider: "openai"  # Options: openai, anthropic, gemini
+  #   model: "gpt-5.2"
+  #   api_key_env: "OPENAI_API_KEY"
+    # Do NOT set max_tokens for gpt-5.2 — reasoning tokens count against the budget;
+    # a cap causes the model to exhaust tokens on thinking before producing visible output.
+
   hypothesis_model:
     provider: "openai"  # Options: openai, anthropic, gemini
-    model: "gpt-5.2"
-    api_key_env: "OPENAI_API_KEY"
-    # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
+    model: "glm-5"
+    api_key_env: "Z_AI_API_KEY"
+    base_url: "https://api.z.ai/api/paas/v4/"
+  # # Model for writing verification code
 
-  # Model for writing verification code
   coding_model:
     provider: "openai"
-    model: "gpt-5.2"
-    api_key_env: "OPENAI_API_KEY"
-    # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
+    model: "glm-5"
+    api_key_env: "Z_AI_API_KEY"
+    base_url: "https://api.z.ai/api/paas/v4/"
+  #   # Note: Do NOT set max_tokens for GLM-5 reasoning models
 
+  # coding_model:
+  #   provider: "openai"
+  #   model: "deepseek-chat"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   base_url: "https://api.deepseek.com"
+  #   max_tokens: 8192  # DeepSeek API default is 4096 — too low for long scripts
+  # coding_model:
+  #   provider: "openai"
+  #   model: "gpt-5.2"
+  #   api_key_env: "OPENAI_API_KEY"
+
+  # Model for reviewing code and hypotheses (needs reliable JSON output)
+  review_model:
+    # provider: "openai"
+    # model: "gpt-5.2"
+    # api_key_env: "OPENAI_API_KEY"
+    # #max_tokens: 4096
+    # reasoning_effort: "low"
+    provider: "openai"  # Options: openai, anthropic, gemini
+    model: "glm-5"
+    api_key_env: "Z_AI_API_KEY"
+    base_url: "https://api.z.ai/api/paas/v4/"
+    
   # Model for summarizing results
   summary_model:
-    provider: "openai"
-    model: "gpt-5.2"
-    api_key_env: "OPENAI_API_KEY"
-    # Note: Do NOT set max_tokens for OpenAI models - they use tokens for internal reasoning
+    provider: "gemini"
+    model: "gemini-3-flash-preview"
+    api_key_env: "GOOGLE_API_KEY"
+    max_tokens: 8192  # Gemini Flash truncates JSON mid-string at the 4096 fallback when reasoning is long (e.g. 2+ SUPPORTS results requiring full 5-criteria evaluation)
 
 execution:
   type: "jupyter"
-  timeout_seconds: 0  # No timeout - bioinformatics analyses can take significant time
-  max_retries: 5  # Retry code execution on failure
+  timeout_seconds: 900  # 15 min max per execution — covers FIMO + bigWig; kernel death is detected
+  max_retries: 5  # Each retry = 4 REPL iterations; total REPL budget = max_retries * 4 = 20
+  # max_static_rejections removed — v2 uses REPL loop, no static pre-gate
 
 pipeline:
-  max_iterations: 15  # Maximum hypothesis-verification loops
+  max_iterations: 8  # Maximum hypothesis-verification loops
+  max_consecutive_hypothesis_rejections: 6  # If reached and any SUPPORTS exist, synthesize and report; else stop
   log_dir: "logs"
   output_dir: "outputs"
   save_intermediate: true  # Save state after each iteration

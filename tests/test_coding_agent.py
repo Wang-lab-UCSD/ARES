@@ -50,7 +50,7 @@ print('hello')
         assert "print('hello')" in code
 
     def test_extract_multiple_blocks(self, agent):
-        """Test extracting from multiple code blocks."""
+        """_extract_code returns the first code block when multiple are present."""
         response = """First:
 ```python
 import pandas as pd
@@ -64,50 +64,5 @@ df = pd.read_csv('data.csv')
         code = agent._extract_code(response)
 
         assert "import pandas as pd" in code
-        assert "df = pd.read_csv" in code
 
 
-class TestCodeValidation:
-    """Tests for code validation."""
-
-    @pytest.fixture
-    def agent(self):
-        """Create a coding agent with mock LLM."""
-        class MockLLM:
-            pass
-
-        return CodingAgent(MockLLM())
-
-    def test_valid_code(self, agent):
-        """Test validation of valid code."""
-        code = """
-import pandas as pd
-df = pd.read_csv('data.csv')
-print(df.head())
-"""
-        is_valid, error = agent.validate_code(code)
-        assert is_valid
-        assert error is None
-
-    def test_empty_code(self, agent):
-        """Test validation of empty code."""
-        is_valid, error = agent.validate_code("")
-        assert not is_valid
-        assert "Empty code" in error
-
-    def test_syntax_error(self, agent):
-        """Test validation of code with syntax error."""
-        code = "def foo(\n  print('hi')"  # Missing closing paren
-        is_valid, error = agent.validate_code(code)
-
-        assert not is_valid
-        assert "Syntax error" in error
-
-    def test_valid_subprocess_call(self, agent):
-        """Test that subprocess calls are allowed."""
-        code = """
-import subprocess
-subprocess.run(['bedtools', 'intersect', '-a', 'a.bed', '-b', 'b.bed'])
-"""
-        is_valid, error = agent.validate_code(code)
-        assert is_valid

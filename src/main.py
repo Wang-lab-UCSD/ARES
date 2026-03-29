@@ -1,4 +1,4 @@
-"""Main entry point for the Experiment Design Generation Pipeline."""
+"""Main entry point for ARES (Automated Regulatory Solver)."""
 
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         # Initialize and run orchestrator
         from src.orchestrator import Orchestrator
 
-        orchestrator = Orchestrator(config, manifest, output_dir)
+        orchestrator = Orchestrator(config, manifest, output_dir, manifest_path=manifest_path)
 
         # Register shutdown handler with orchestrator
         def shutdown_handler(signum, frame):
@@ -155,6 +155,8 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
 
         logger.info("Pipeline completed", {
             "converged": result.get("converged"),
+            "run_status": result.get("run_status"),
+            "synthesized": result.get("synthesized"),
             "iterations": result.get("iterations"),
             "conclusion": (result.get("conclusion") or "")[:200],
         })
@@ -163,7 +165,10 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         print("\n" + "=" * 60)
         print("PIPELINE COMPLETE")
         print("=" * 60)
-        print(f"Converged: {result.get('converged')}")
+        print(f"Run status: {result.get('run_status')}")
+        print(f"Converged (strict): {result.get('converged')}")
+        if result.get("run_status") and result.get("run_status") != "converged":
+            print(f"Stop reason: {result.get('stop_reason') or 'N/A'}")
         print(f"Iterations: {result.get('iterations')}")
         print(f"Confidence: {result.get('confidence', 0):.2f}")
         print(f"\nConclusion:\n{result.get('conclusion') or 'N/A'}")
@@ -187,7 +192,7 @@ def main() -> int:
     setup_logging(level=level)
 
     logger = get_logger("main")
-    logger.info("Starting Experiment Design Generation Pipeline")
+    logger.info("Starting ARES (Automated Regulatory Solver)")
 
     # Register signal handler for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)

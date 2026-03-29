@@ -151,6 +151,10 @@ class PipelineState(BaseModel):
     converged: bool = False
     convergence_reason: str | None = None
     confidence_level: float = 0.0
+    # Completion status (distinguish true convergence vs synthesized stop)
+    run_status: str = "running"  # running | converged | synthesized_stop | stopped
+    stop_reason: str | None = None
+    synthesized: bool = False
 
     # Named mechanism at convergence (item 17)
     mechanism_category_number: int | None = None
@@ -191,6 +195,49 @@ class PipelineState(BaseModel):
         self.conclusion = conclusion
         self.mechanism_category_number = mechanism_category_number
         self.mechanism_category_name = mechanism_category_name
+        self.run_status = "converged"
+        self.stop_reason = None
+        self.synthesized = False
+
+    def mark_synthesized_stop(
+        self,
+        reason: str,
+        confidence: float,
+        conclusion: str,
+        mechanism_category_number: int | None = None,
+        mechanism_category_name: str | None = None,
+    ) -> None:
+        """Stop early and synthesize from supported evidence.
+
+        This is NOT true convergence: the convergence criteria were not fully satisfied,
+        but the pipeline cannot progress (e.g. repeated duplicate hypothesis rejections).
+        """
+        self.converged = False
+        self.convergence_reason = None
+        self.stop_reason = reason
+        self.confidence_level = confidence
+        self.conclusion = conclusion
+        self.mechanism_category_number = mechanism_category_number
+        self.mechanism_category_name = mechanism_category_name
+        self.run_status = "synthesized_stop"
+        self.synthesized = True
+
+    def mark_stopped(
+        self,
+        reason: str,
+        confidence: float,
+        conclusion: str,
+    ) -> None:
+        """Mark the pipeline as stopped without convergence."""
+        self.converged = False
+        self.convergence_reason = None
+        self.stop_reason = reason
+        self.confidence_level = confidence
+        self.conclusion = conclusion
+        self.mechanism_category_number = None
+        self.mechanism_category_name = None
+        self.run_status = "stopped"
+        self.synthesized = False
 
     def get_history_summary(self) -> str:
         """Get a summary of all iterations for the hypothesis model."""

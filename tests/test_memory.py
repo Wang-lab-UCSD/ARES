@@ -133,6 +133,24 @@ class TestPipelineState:
         assert state.convergence_reason == "Hypothesis confirmed"
         assert state.confidence_level == 0.9
         assert state.conclusion == "X causes Y through mechanism Z"
+        assert state.run_status == "converged"
+        assert not state.synthesized
+
+    def test_mark_stopped(self):
+        """Test marking pipeline as stopped without convergence."""
+        state = PipelineState(finding="X predicts Y")
+        state.mark_stopped(
+            reason="Max iterations reached",
+            confidence=0.4,
+            conclusion="Best-supported interpretation so far",
+        )
+
+        assert not state.converged
+        assert state.stop_reason == "Max iterations reached"
+        assert state.confidence_level == 0.4
+        assert state.conclusion == "Best-supported interpretation so far"
+        assert state.run_status == "stopped"
+        assert not state.synthesized
 
     def test_history_summary_empty(self):
         """Test history summary when empty."""

@@ -25,9 +25,16 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(self, model: str, api_key: str, **kwargs: Any):
         super().__init__(model, api_key, **kwargs)
-        # Set long timeout for GPT-5.2 which uses reasoning tokens
-        self.client = AsyncOpenAI(api_key=api_key, timeout=600.0)
+        client_kwargs: dict = {"api_key": api_key, "timeout": 600.0}
+        base_url = kwargs.get("base_url")
+        if base_url is not None:
+            client_kwargs["base_url"] = base_url
+        self.client = AsyncOpenAI(**client_kwargs)
         self.logger = get_logger("openai")
+        # Third-party OpenAI-compatible APIs (DeepSeek, GLM-5, etc.) use the legacy
+        # "max_tokens" parameter name; native OpenAI uses "max_completion_tokens".
+        self._max_tokens_param = "max_tokens" if base_url is not None else "max_completion_tokens"
+        self.default_reasoning_effort: str | None = kwargs.get("reasoning_effort")
 
     async def _retry_with_backoff(self, operation, operation_name: str):
         """Execute an operation with exponential backoff retry on transient errors.
@@ -91,9 +98,14 @@ class OpenAIProvider(LLMProvider):
         # Only add temperature if explicitly set (gpt-5-mini only supports default)
         if temperature is not None:
             request_params["temperature"] = temperature
-        # Only add max_completion_tokens if explicitly passed (not from defaults)
-        if max_tokens is not None:
-            request_params["max_completion_tokens"] = max_tokens
+        # Set max_completion_tokens only when an explicit limit is configured.
+        # GPT-5.2+ must NOT have this set (reasoning tokens eat the budget).
+        # Other models (DeepSeek, GLM-5, etc.) need it set to avoid API defaults that are too low.
+        effective_max = max_tokens if max_tokens is not None else self.default_max_tokens
+        if effective_max is not None:
+            request_params[self._max_tokens_param] = effective_max
+        if self.default_reasoning_effort is not None:
+            request_params["reasoning_effort"] = self.default_reasoning_effort
         request_params.update(kwargs)
 
         async def _make_request():
@@ -170,8 +182,11 @@ class OpenAIProvider(LLMProvider):
         # Only add temperature if explicitly set (gpt-5-mini only supports default)
         if temperature is not None:
             request_params["temperature"] = temperature
-        if max_tokens is not None:
-            request_params["max_completion_tokens"] = max_tokens
+        effective_max = max_tokens if max_tokens is not None else self.default_max_tokens
+        if effective_max is not None:
+            request_params[self._max_tokens_param] = effective_max
+        if self.default_reasoning_effort is not None:
+            request_params["reasoning_effort"] = self.default_reasoning_effort
         request_params.update(kwargs)
 
         async def _make_request():

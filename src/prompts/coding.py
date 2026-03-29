@@ -5,164 +5,183 @@ from __future__ import annotations
 from typing import Any
 
 from src.prompts.tool_quirks import DEFAULT_QUIRKS, get_quirks_for_tools
+from src.utils.config import DEFAULT_EXECUTION_PACKAGES
 
 # =============================================================================
 # Main coding system prompt (tool-agnostic)
 # =============================================================================
-CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Your role is to write Python code to verify scientific hypotheses using available data.
+CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Write Python code to verify scientific hypotheses using the data provided.
 
-Guidelines:
-- Write clean, well-commented Python code
-- Use appropriate bioinformatics libraries (pandas, numpy, pybedtools, biopython, etc.)
-- Handle errors gracefully with try/except blocks
-- Print clear, interpretable results
-- For CLI tools, use subprocess.run() with proper error handling
+=== HARD BANS — every item below causes automatic review rejection ===
 
-=== CRITICAL: LARGE FILE HANDLING ===
+1. `pd.qcut()` on any DataFrame column → use `matched_bin(fg, bg, col)` instead
+2. `subprocess` call to `bedtools closest` → use `run_bedtools_closest_to_tss()` instead
+3. `.merge(... on='name' ...)` on narrowPeak frames → ENCODE `name` column is always `'.'`; join on coordinates or `peak_id`
+4. `bw.stats()` directly → use `extract_bigwig_signals(df, bw_path)` instead
+5. `bedtools getfasta`, `fimo`, or `bw.stats()` inside any `for`/`while` loop → call each ONCE outside all loops
+6. `subprocess.run(..., shell=True)` or `bash -lc` for CLI tools → use `subprocess.run([...], shell=False)`
+7. Hardcoded ENCFF IDs anywhere in the script → use `data_files['key']` (pre-injected dict)
+8. `matplotlib` / `seaborn` imports → output statistics only, no plots
+9. More than 100 permutation replicates → hard cap is 100; ignore any higher number in the hypothesis
+10. Tiling the genome or annotation for background → use `bedtools shuffle -i peaks.bed -g chrom.sizes`
+11. Scanning all FIMO motifs when hypothesis names specific ones → pass `--motif <ID>`; use `find_motif_ids_for_tf()` to look up the ID
+12. Custom multi-file concat helpers (e.g. `_concat_files()`, `_merge_files()`) → use `pd.concat([pd.read_csv(f, ...) for f in files])` inline
+13. `pd.read_csv(string_file, sep=' ')` or `sep='\t'` for STRING files → STRING uses variable whitespace; always use `load_string_links(path)`
 
-Biological data files can be VERY large (100MB-10GB). You MUST handle them carefully:
+=== REQUIRED HELPERS — use these; hand-rolled alternatives are banned ===
 
-**STEP 0 - ALWAYS START BY LISTING FILES AND CHECKING SIZES**:
+| Operation | Required helper | Never use |
+|-----------|----------------|-----------|
+| FIMO motif scan | `run_fimo_on_peaks(peaks, genome, meme, motif_id)` | manual getfasta + fimo |
+| Peak overlap fraction | `count_overlapping_peaks(query, subject)` | manual `-a`/`-b` or hand-count |
+| bigWig signal | `extract_bigwig_signals(df, bw_path)` | `bw.stats()` or row loops |
+| Signal-matched controls | `matched_bin(fg, bg, signal_col)` | `pd.qcut()` |
+| Nearest TSS + expression | `link_peaks_to_expression(peaks, rnaseq, gtf)` | chained TSS calls |
+| Nearest TSS distance only | `run_bedtools_closest_to_tss(peaks, tss)` | subprocess bedtools closest |
+| ChromHMM annotation | `annotate_peaks_with_chromhmm(peaks, chromhmm)` | manual intersect |
+| narrowPeak loading | `read_narrowpeak(path)` | `pd.read_csv` with column guesses |
+| FIMO TSV parsing | `parse_fimo_tsv(path)` | manual `read_csv` |
+| bedtools `-wa -wb` output | `parse_bedtools_wa_wb(path, a_col_count, b_col_count)` | positional indexing |
+| bedtools `closest -d` output | `parse_bedtools_closest(path, a_col_count, b_col_count)` | positional indexing |
+| Look up motif IDs by TF name | `find_motif_ids_for_tf(tf_name, meme_file)` | hardcoded IDs |
+| RNA-seq loading | `load_rnaseq_with_gene_id(path)` or `load_rnaseq_expression(path)` | manual column parsing |
+| STRING PPI links | `load_string_links(path, min_score=400)` | `pd.read_csv(sep=' ')`, manual parsing |
+
+All helpers are in `src.utils.bioio`. Only bypass a helper if it genuinely cannot produce the output shape you need, and explain why in a comment.
+
+=== API REFERENCE ===
+
 ```python
-import os
-print("=== FILE SIZE CHECK ===")
-data_files = [
-    # List ALL data files you will use
-]
-for f in data_files:
-    if os.path.exists(f):
-        size_mb = os.path.getsize(f) / (1024 * 1024)
-        print(f"{f}: {size_mb:.1f} MB")
-    else:
-        print(f"{f}: FILE NOT FOUND")
-print("=" * 50)
+from src.utils.bioio import (
+    find_motif_ids_for_tf, run_fimo_on_peaks, count_overlapping_peaks,
+    extract_bigwig_signals, matched_bin, link_peaks_to_expression,
+    annotate_peaks_with_chromhmm, create_tss_bed_from_gencode, load_gencode_genes,
+    load_rnaseq_expression, merge_rnaseq_with_nearest_genes, read_narrowpeak,
+    run_bedtools_closest_to_tss, parse_fimo_tsv, parse_chromhmm_intersect,
+    load_rnaseq_with_gene_id, parse_bedtools_closest, parse_bedtools_wa_wb,
+    load_string_links,
+)
+
+# find_motif_ids_for_tf
+motif_ids = find_motif_ids_for_tf(
+    "NFYA", meme_file,
+    allowed_sources=["jaspar", "hocomoco12", "cisbp"],  # optional
+    match_prefix=True,  # default; False for exact match
+)
+# → list[str], e.g. ["NFYA|jaspar|MA0060.3"]
+
+# run_fimo_on_peaks  (parameter names matter — use exactly these)
+fimo_df = run_fimo_on_peaks(
+    peaks_bed=peaks_bed,        # file path (str/Path), NOT a DataFrame
+    genome_fasta=data_files['fasta'],
+    meme_file=data_files['motif_meme'],
+    motif_id=motif_id,          # exact string from find_motif_ids_for_tf()
+    p_value_threshold=1e-4,     # NOT pval_thresh, NOT pvalue_threshold
+    summit_window=150,          # optional: scan summit ± N bp
+)
+# → DataFrame: motif_id, sequence_name, start, stop, p-value, peak_id
+# peak_id matches col-4 (name) of peaks_bed — use for peak assignment
+
+# count_overlapping_peaks
+result = count_overlapping_peaks(query_bed, subject_bed)
+# query = set you are asking ABOUT (defines denominator)
+# → dict: {n_query, n_overlapping, n_nonoverlapping, fraction}
+
+# extract_bigwig_signals — returns a Series, NOT a DataFrame
+# Assign directly to a column; do NOT call .columns or .merge() on the result
+df["h3k4me3"] = extract_bigwig_signals(intervals_df, data_files["h3k4me3_bigwig_fold_change_over_control"])
+df["h3k27ac"] = extract_bigwig_signals(intervals_df, data_files["h3k27ac_bigwig_fold_change_over_control"])
+# stat kwarg: "mean" | "max" | "min" | "std" (default: "mean")
+
+# matched_bin
+fg_binned, bg_binned = matched_bin(fg_df, bg_df, signal_col, n_bins=4)
+# → (fg_copy, bg_copy) each with added "bin" int column (0-based)
+# BG rows outside FG range get bin=NaN — drop with .dropna(subset=["bin"])
+# ALIGNMENT: fg_binned shares fg_df's index but may differ in row order.
+# Never assign fg_binned["bin"].values back to fg_df positionally.
+# Use index alignment: fg_df = fg_df.loc[fg_binned.index].copy(); fg_df["bin"] = fg_binned["bin"]
+
+# link_peaks_to_expression
+merged_df, expr_col = link_peaks_to_expression(
+    peaks_bed, rnaseq_path, gtf_path, max_distance=50000,
+)
+# → merged_df cols: peak_chrom, peak_start, peak_end, peak_name,
+#                   gene_id, gene_id_clean, distance, <expr_col>
+# Peaks with no nearby TSS get NaN in expr_col
+
+# read_narrowpeak
+peaks_df = read_narrowpeak(path_or_df)
+# → DataFrame: chrom, start, end, name, score, strand,
+#              signal_value, p_value, q_value, peak, peak_offset, summit
+
+# parse_fimo_tsv
+fimo_df = parse_fimo_tsv(path, p_value_threshold=1e-4, motif_ids=["MA0139.1"])
+# → DataFrame: motif_id, sequence_name, start, stop, p-value, peak_id
+
+# parse_chromhmm_intersect
+ix_df = parse_chromhmm_intersect(path_or_df, a_col_count=4, chromhmm_cols=4, state_col_in_b=3)
+# → DataFrame with A+B cols + "state" column
+
+# load_rnaseq_with_gene_id
+rnaseq_df, gene_id_col = load_rnaseq_with_gene_id(path_or_df)
+
+# load_rnaseq_expression
+rnaseq_df, gene_id_col, clean_col, expr_col = load_rnaseq_expression(path_or_df)
+# clean_col = "gene_id_clean" (version-stripped); expr_col usually "TPM"
+
+# load_gencode_genes
+genes_df = load_gencode_genes(gtf_path, protein_coding_only=True)
+# → DataFrame: gene_id, gene_id_clean, gene_name, gene_type, chrom, start, end, strand
+
+# create_tss_bed_from_gencode
+tss_df = create_tss_bed_from_gencode(gtf_path, upstream=2000, downstream=2000)
+# → BED DataFrame: chrom, start, end, gene_id, score, strand, gene_name, gene_type
+
+# run_bedtools_closest_to_tss
+closest_df = run_bedtools_closest_to_tss(peaks_bed, tss_bed, max_distance=50000)
+# → DataFrame: peak_chrom, peak_start, peak_end, peak_name (A-side, "peak_*" prefix)
+#              tss_chrom, tss_start, tss_end, gene_id, score, strand (B-side)
+#              distance
+
+# merge_rnaseq_with_nearest_genes
+merged_df, expr_col = merge_rnaseq_with_nearest_genes(closest_df, rnaseq_path)
+
+# annotate_peaks_with_chromhmm
+chrom_df = annotate_peaks_with_chromhmm(
+    peaks_bed, chromhmm_bed,
+    promoter_states=["1_TssA", "2_TssFlnk"],
+    enhancer_states=["9_EnhA1", "10_EnhA2"],
+)
+# → DataFrame: chrom, start, end, name, ..., state, is_promoter_state, is_enhancer_state
+# Column counts auto-detected — do not specify peak_cols or chromhmm_cols
+
+# parse_bedtools_closest
+closest_df = parse_bedtools_closest(path_or_df, a_col_count=4, b_col_count=4)
+# → DataFrame with A-side cols, B-side cols, distance
+
+# parse_bedtools_wa_wb
+ix_df = parse_bedtools_wa_wb(path_or_df, a_col_count=4, b_col_count=4)
+# → DataFrame with A-side and B-side columns in order
+
+# load_string_links
+string_df = load_string_links(path, min_score=400)
+# → DataFrame: protein1, protein2, combined_score (+ any extra score columns)
+# Handles space-separated STRING files with or without header; filters to combined_score >= min_score
+# NEVER parse STRING files manually — separator is variable whitespace, headers are inconsistent
 ```
 
-**Large file strategies** (use when file > 50MB):
-1. **For TSV/CSV**: Use `chunksize` parameter in pandas:
-   ```python
-   chunks = pd.read_csv(file, sep='\\t', chunksize=100000)
-   results = []
-   for chunk in chunks:
-       # Process each chunk
-       results.append(chunk_result)
-   ```
+=== PRE-SUBMISSION SELF-CHECK ===
 
-2. **For BED files**: Use bedtools for operations instead of loading into memory:
-   ```python
-   # Don't do: pd.read_csv(huge.bed) then filter in Python
-   # Do: Use bedtools intersect/filter first, then load result
-   subprocess.run(['bedtools', 'intersect', '-a', peaks, '-b', regions, '-wa'], ...)
-   ```
+Your code will be reviewed against these checks before execution. Verify:
 
-3. **NEVER scan the whole genome**: Do NOT run FIMO (or any motif scanner) on the
-   full genome FASTA (~3GB, takes hours). Instead, extract only the regions you need
-   with `bedtools getfasta`, then run the scanner on that small FASTA. Scanning a
-   few thousand peak sequences takes seconds; scanning the whole genome takes hours.
+1. Does the code test what the hypothesis ACTUALLY predicts? Read each prediction verbatim.
+2. Are peak overlaps computed with `count_overlapping_peaks()` or `bedtools intersect` — NEVER by merging DataFrames on the `name` column?
+3. When the hypothesis says "summit", does the code use summit-window BEDs (from `make_integer_summit_windows()`), not full peak intervals?
+4. Are all expensive operations (fimo, getfasta, bigWig) called ONCE outside all loops?
+5. Is `data_files` used as-is (never redefined, no hardcoded ENCFF IDs)?
+6. Does every `pd.read_csv()` on bedtools output use `safe_read_csv()` to handle empty files?
+7. Does FIMO scanning use `run_fimo_on_peaks()` (or explicit `--motif` + `--no-pgc` flags)?
 
-=== CODE STRUCTURE ===
-
-1. **STEP 0: List files and check sizes** (see above - MANDATORY)
-
-2. **STEP 1: Load and inspect data**
-   - Print shape, columns, sample rows
-   - For large files, inspect first without loading fully: `head -n 5 file.tsv`
-
-3. **STEP 2: Verify pre-conditions**
-   - Check expected columns exist
-   - Verify data types are correct
-   - Count input items (e.g., "Starting with 7906 peaks")
-
-4. **STEP 3: Process incrementally**
-   - Print intermediate results
-   - After each major step, print counts and verify they make sense
-
-5. **STEP 4: Summarize findings**
-   - Clear CONCLUSION section
-   - Include key statistics
-
-=== SANITY CHECKS (MANDATORY) ===
-
-Before reporting ANY count or statistic:
-- If counting unique items from N inputs, count should be reasonable (not 23 for 7906 inputs)
-- If a count seems wrong, print WARNING and investigate:
-  ```python
-  if unique_count < input_count * 0.01:
-      print(f"WARNING: Only {unique_count} unique values for {input_count} inputs!")
-      print(f"Sample values: {df['column'].unique()[:10]}")
-      print("This suggests a data parsing issue - investigating...")
-  ```
-
-=== COMPUTATIONAL COMPLEXITY LIMITS (code MUST finish within 10 minutes) ===
-
-***These rules are mandatory. Ignoring them will cause the pipeline to hang for hours.***
-
-1. **NEVER put expensive operations inside loops**. The following are BANNED inside
-   any `for`/`while` loop:
-   - `bedtools getfasta` (reads entire genome ~3GB per call)
-   - `fimo` (scans all sequences per call)
-   - `pyBigWig` / `bigWigAverageOverBed` signal extraction over full peak sets
-   - Any operation that processes a large file (>50MB)
-
-   These operations MUST be called ONCE, outside any loop. If you need to compare
-   against a null distribution, use analytical tests (see rule 2) or permute labels
-   in memory instead of reprocessing files.
-
-2. **You MUST use analytical statistical tests, NOT permutations**, for these comparisons:
-   - Signal comparison between two groups → Mann-Whitney U test (instant)
-   - Overlap significance → Fisher's exact test on a 2×2 table (instant)
-   - Motif enrichment → Fisher's exact test on presence/absence counts (instant)
-   - Proportion comparison → Chi-square or Fisher's exact test (instant)
-
-   Permutation tests (bedtools shuffle) are ONLY allowed when you need to control for
-   genomic biases (GC content, chromosome distribution) that analytical tests cannot
-   handle. If you use a permutation test, you may have AT MOST one per script, with
-   at most 100 replicates, and it may ONLY involve `bedtools shuffle` + `bedtools intersect`
-   (counting overlaps). NEVER extract signals or run FIMO inside a permutation loop.
-   **Even if the hypothesis specifies more than 100 replicates, cap at 100.** This is a
-   hard pipeline limit that overrides the hypothesis.
-
-3. **Background sets must use `bedtools shuffle` — never bin the genome**.
-   When you need a random background to compare against foreground peaks, use:
-   ```bash
-   bedtools shuffle -i peaks.bed -g chrom.sizes > background.bed
-   ```
-   This takes 1-2 seconds. NEVER construct a background by:
-   - Binning the entire genome into windows (e.g., 50bp bins over hg38 = 60 million bins)
-   - Running `bigWigAverageOverBed` over genome-wide intervals
-   - Scanning all accessible regions genome-wide
-   These approaches take hours and are never necessary for a simple enrichment test.
-
-4. **One statistical test per script**. Your script should answer ONE specific question
-   with ONE primary statistical test. Additional analyses belong in follow-up iterations.
-
-   BAD (script does 5 things):
-   - Permutation test for overlap
-   - BigWig signal extraction + comparison
-   - FIMO motif scan + enrichment
-   - Nearest-gene expression analysis
-   - Motif-stratified signal comparison
-   → 650 lines, runs for 45 minutes
-
-   GOOD (script does 1 thing):
-   - Compute overlap between ATF6 and REST peaks
-   - Fisher's exact test for significance
-   - Print result
-   → 80 lines, runs in 2 minutes. Other analyses go in the next iteration.
-
-4. **No downloading external files**: Do not download blacklists, annotations, or other
-   files from the internet. Use only the data files provided in the manifest.
-
-=== OUTPUT FORMAT ===
-
-- Print a clear summary of findings at the end
-- Include statistical tests where appropriate
-- NO matplotlib/seaborn visualizations (they often cause errors) - focus on statistics
-
-Common patterns:
-- Loading BED files: Use pandas or pybedtools
-- Motif analysis: Use MEME Suite via subprocess or biopython
-- Statistical tests: Use scipy.stats
 """
 
 
@@ -185,10 +204,6 @@ def build_coding_system_prompt(tools: list[str] | None = None) -> str:
     if quirks:
         return CODING_SYSTEM_PROMPT_BASE + "\n" + quirks
     return CODING_SYSTEM_PROMPT_BASE
-
-
-# For backward compatibility - includes default quirks
-CODING_SYSTEM_PROMPT = build_coding_system_prompt()
 
 
 def _format_prior_evidence(prior_evidence: list[dict[str, Any]]) -> str:
@@ -217,216 +232,271 @@ def _format_prior_evidence(prior_evidence: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
-def build_verification_code_prompt(
+# =============================================================================
+# Code skeleton generator
+# =============================================================================
+
+_SKELETON_SAFETY_HELPERS = '''\
+def safe_read_csv(path, expected_columns=None, **kwargs):
+    """Read CSV/TSV; return empty DataFrame if file is empty (common with bedtools)."""
+    if os.path.getsize(path) == 0:
+        return pd.DataFrame(columns=expected_columns or [])
+    return pd.read_csv(path, **kwargs)
+
+def make_integer_summit_windows(peaks_df, window_bp=250):
+    """Build summit-centred BED intervals with integer coordinates."""
+    if "summit" in peaks_df.columns:
+        s = peaks_df["summit"]
+    elif "peak" in peaks_df.columns:
+        s = peaks_df["start"] + peaks_df["peak"].fillna(0).astype(int)
+    else:
+        s = (peaks_df["start"] + peaks_df["end"]) // 2
+    s = s.astype(int)
+    return pd.DataFrame({
+        "chrom": peaks_df["chrom"],
+        "start": (s - window_bp).clip(lower=0),
+        "end": s + window_bp,
+    })'''
+
+_SKELETON_FILE_SIZE_CHECK = '''\
+for _key, _val in data_files.items():
+    if isinstance(_val, str) and os.path.isfile(_val):
+        print(f"  {_key}: {os.path.getsize(_val)/1e6:.1f} MB")'''
+
+
+def _generate_code_skeleton(
     hypothesis: dict[str, Any],
     data_manifest: dict[str, Any],
-    previous_code: str | None = None,
-    previous_error: str | None = None,
-    prior_evidence: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Build prompt for generating verification code.
+    """Generate a code skeleton dynamically from hypothesis and manifest.
 
-    Args:
-        hypothesis: The hypothesis to verify
-        data_manifest: Available data paths and tools
-        previous_code: Code from previous attempt (if retrying)
-        previous_error: Error from previous attempt (if retrying)
-        prior_evidence: Evidence from previously tested hypotheses
-
-    Returns:
-        Formatted prompt string
+    Provides correct imports, data-file unpacking, and safety helpers so the LLM
+    only needs to write the analysis logic.
     """
-    data_section = _format_data_for_coding(data_manifest)
-    prior_section = _format_prior_evidence(prior_evidence or [])
+    required_data = hypothesis.get("required_data") or []
+    required_blob = " ".join(required_data) if isinstance(required_data, list) else str(required_data)
+    text = " ".join([
+        str(hypothesis.get("name", "")),
+        str(hypothesis.get("prediction", "")),
+        str(hypothesis.get("verification_plan", "")),
+        required_blob,
+    ]).lower()
 
-    retry_section = ""
-    if previous_code and previous_error:
-        retry_section = f"""
-# Previous Attempt (Failed)
+    imports: set[str] = {"read_narrowpeak", "extract_bigwig_signals"}
 
-The previous code resulted in an error. Please fix it.
+    if any(k in text for k in ("fimo", "motif", "pwm", "jaspar", "hocomoco", "cisbp", "motifs", "binding site")):
+        imports.update(["run_fimo_on_peaks", "find_motif_ids_for_tf"])
 
-**Previous Code**:
-```python
-{previous_code}
-```
+    if any(k in text for k in ("overlap", "co-occur", "co-occupied", "shared", "intersect", "fraction of")):
+        imports.update(["count_overlapping_peaks", "intersect_peaks"])
 
-**Error**:
-```
-{previous_error}
-```
+    if any(k in text for k in ("match", "control", "confound", "dnase-match", "accessibility-match")):
+        imports.add("matched_bin")
 
-Please identify and fix the issue in the code.
-"""
+    if any(k in text for k in ("rnaseq", "expression", "tpm", "tss", "gene", "gencode", "promoter", "nearest")):
+        imports.update(["link_peaks_to_expression", "load_rnaseq_expression", "create_tss_bed_from_gencode"])
 
-    technical_issues_section = ""
-    technical_issues = hypothesis.get("_technical_issues")
-    if technical_issues:
-        issues_text = "\n".join(f"- {issue}" for issue in technical_issues)
-        technical_issues_section = f"""
-# Known Technical Issues to Fix
+    if any(k in text for k in ("chromhmm", "chromatin state", "promoter state", "enhancer state")):
+        imports.add("annotate_peaks_with_chromhmm")
 
-The previous attempt at this hypothesis failed due to these specific bugs. You MUST fix all of them:
+    # Also check manifest data keys
+    data = data_manifest.get("data") or {}
+    manifest_keys = " ".join(
+        k.lower() for d in data.values() if isinstance(d, dict) for k in d
+    ) + " " + " ".join(k.lower() for k in data)
 
-{issues_text}
+    if any(k in manifest_keys for k in ("meme", "motif", "pwm")):
+        imports.update(["run_fimo_on_peaks", "find_motif_ids_for_tf"])
+    if any(k in manifest_keys for k in ("rnaseq", "rna", "expression", "gtf", "gencode")):
+        imports.update(["link_peaks_to_expression", "load_rnaseq_expression"])
+    if "chromhmm" in manifest_keys:
+        imports.add("annotate_peaks_with_chromhmm")
 
-Write code that explicitly avoids these issues.
-"""
+    import_list = sorted(imports)
+    import_block = (
+        "from src.utils.bioio import (\n    "
+        + ",\n    ".join(import_list)
+        + ",\n)"
+    )
 
-    prompt = f"""# Hypothesis to Verify
+    # Flatten manifest data section to get file paths
+    file_vars: list[tuple[str, str]] = []
+    for _category, items in data.items():
+        if not isinstance(items, dict):
+            continue
+        for name, value in items.items():
+            if not isinstance(value, str):
+                continue
+            if not value.startswith("/"):
+                continue
+            var_name = name.lower().replace("-", "_")
+            file_vars.append((var_name, name))
 
-**Name**: {hypothesis.get('name', 'N/A')}
-**Prediction**: {hypothesis.get('prediction', 'N/A')}
+    unpack_lines = "\n".join(
+        f'{var} = data_files["{key}"]' for var, key in file_vars
+    ) if file_vars else "# (no file paths detected in manifest)"
 
-{prior_section}
+    # Detect if peak overlap / motif joining is likely
+    needs_peak_overlap = any(k in text for k in (
+        "overlap", "co-occur", "co-occupied", "shared", "intersect",
+        "motif", "fimo", "bound", "unbound", "recruit", "tether",
+    ))
 
-**Verification Plan**:
-{_format_verification_plan(hypothesis.get('verification_plan', []))}
+    peak_warning = ""
+    if needs_peak_overlap:
+        imports.add("intersect_peaks")
+        peak_warning = '''\
 
-# Available Data
+# !!! CRITICAL — DO NOT use .merge(on='name') !!!
+# read_narrowpeak() drops the 'name' column (it is '.' for ALL ENCODE peaks).
+# .merge(on='name') will raise KeyError or cause a cartesian product → WILL BE REJECTED.
+#
+# USE THESE INSTEAD:
+#
+# (A) Join two peak sets by coordinate overlap → returns paired DataFrame:
+#     overlap_df = intersect_peaks(peaks_a_df_or_bed, peaks_b_df_or_bed)
+#     # overlap_df has columns a_0..a_3, b_0..b_3 (one row per overlap pair)
+#
+# (B) Flag which A-peaks overlap any B-peak → boolean column:
+#     flagged = intersect_peaks(peaks_a_df, peaks_b_df, mode="flag")
+#     # When inputs are DataFrames, ALL original columns are preserved:
+#     # flagged has chrom, start, end, ..., summit, overlaps_b
+#     # Use flagged["chrom"], flagged["start"], flagged["summit"], etc.
+#
+# (C) Count overlaps per A-peak:
+#     counted = intersect_peaks(peaks_a_df, peaks_b_df, mode="count")
+#     # counted has chrom, start, end, ..., summit, overlap_count
+#
+# (D) Get overlap fraction/counts:
+#     stats = count_overlapping_peaks(query_bed, subject_bed)
+#
+# (E) Split peaks into motif-positive / motif-negative:
+#     fimo_df = run_fimo_on_peaks(peaks_bed, genome, meme, motif_id)
+#     peaks = peaks.reset_index(drop=True)
+#     peaks["_peak_id"] = [f"peak_{i:05d}" for i in range(len(peaks))]
+#     motif_pos = peaks[peaks["_peak_id"].isin(fimo_df["peak_id"])]
+#     motif_neg = peaks[~peaks["_peak_id"].isin(fimo_df["peak_id"])]'''
 
-{data_section}
-{technical_issues_section}{retry_section}
+    parts = [
+        "# === AUTO-GENERATED SKELETON — extend with your analysis ===",
+        "import os, tempfile, subprocess",
+        "import numpy as np",
+        "import pandas as pd",
+        "from scipy import stats",
+        "",
+        import_block,
+        "",
+        "# ---- Safety helpers (use these in your code) ----",
+        _SKELETON_SAFETY_HELPERS,
+        "",
+        "# ---- STEP 0: Data file paths and sizes ----",
+        unpack_lines,
+        peak_warning,
+        "",
+        _SKELETON_FILE_SIZE_CHECK,
+    ]
 
-# Task
-
-Write Python code to test this hypothesis. The code MUST follow this structure:
-
-**STEP 0 (MANDATORY): List all data files and check their sizes first**
-- Print each file path and its size in MB
-- If any file > 50MB, plan to handle it with chunked reading or filtering
-
-**STEP 1: Load and inspect data**
-- Print shape, columns, first few rows
-- Count input items (e.g., "Starting with N peaks")
-
-**STEP 2: Perform analysis**
-- Follow the verification plan
-- Print intermediate results after each major operation
-- SANITY CHECK: Verify counts make sense (not 23 items when expecting 7906)
-
-**STEP 3: Statistical tests**
-- Use scipy.stats for significance testing
-- Report p-values and effect sizes
-
-**STEP 4: CONCLUSION section**
-- Clear summary of findings
-- Support level for hypothesis
-
-***CRITICAL REMINDERS — read before writing code:***
-- Use the exact file paths provided above
-- NEVER trust FIMO's sequence_name column for counting peaks - use bedtools intersect instead
-- If using FIMO output, filter by motif_id immediately to reduce memory usage
-- NO matplotlib/seaborn visualizations - focus on statistics only
-- Print intermediate results for debugging
-- If any count seems wrong (e.g., 23 instead of thousands), STOP and investigate
-- Your code MUST finish within 10 minutes. You MUST use analytical tests (Fisher's, Mann-Whitney) instead of permutations. Permutations are only allowed for overlap counting (shuffle + intersect), max 100 reps, max one per script.
-- NEVER put bigWig extraction, getfasta, or FIMO inside a loop. Call them ONCE.
-- Your script should have ONE statistical test answering ONE question. Keep it under 150 lines. Other analyses go in the next iteration.
-- Do NOT download external files (blacklists, annotations, etc.) — use only the provided data.
-- Only use CLI flags listed in the tool_quirks section above. Never invent or guess flags.
-- When selecting columns from a data file, always use column names (e.g., `df['TPM']`), never positional indexing (e.g., `columns[0]` or `value_cols[0]`). Inspect column names first and pick the correct one.
-
-Respond with ONLY the Python code, no explanations. The code should be ready to execute.
-"""
-    return prompt
+    return "\n".join(parts)
 
 
-def build_error_fix_prompt(
-    original_code: str,
-    error_message: str,
-    error_traceback: str,
-    data_manifest: dict[str, Any],
-    stdout: str = "",
-    stderr: str = "",
+def _build_review_constraints_block(issues: list[str]) -> str:
+    """Convert reviewer blocker issue strings into a machine-readable constraint block.
+
+    Returns a formatted code block string (or empty string if no constraints apply).
+    """
+    if not issues:
+        return ""
+
+    joined = " ".join(issues).lower()
+
+    forbidden: list[str] = []
+    required: list[str] = []
+
+    if "qcut" in joined:
+        forbidden.append("pd.qcut(")
+        required.append("matched_bin(fg_df, bg_df, signal_col)  # from src.utils.bioio")
+
+    if "bedtools closest" in joined:
+        forbidden.append("subprocess call to 'bedtools closest'")
+        required.append("run_bedtools_closest_to_tss(peaks_bed, tss_bed)  # from src.utils.bioio")
+
+    if "link_peaks_to_expression" in joined or (
+        "nearest" in joined and "gene" in joined and "expression" in joined
+    ):
+        required.append("link_peaks_to_expression(peaks_bed, rnaseq_path, gtf_path)  # from src.utils.bioio")
+
+    if "merg" in joined and "name" in joined and (
+        "narrowpeak" in joined or "encode" in joined or "'.'" in joined
+        or "cartesian" in joined
+    ):
+        forbidden.append(".merge(... on='name' ...)  # narrowPeak name col is always '.'")
+        forbidden.append("pd.merge(df_a, df_b, on='name')")
+        required.append("intersect_peaks(peaks_a, peaks_b)  # from src.utils.bioio — coordinate-based join via bedtools")
+        required.append("intersect_peaks(peaks_a, peaks_b, mode='flag')  # boolean overlaps_b column")
+        required.append("count_overlapping_peaks(query_bed, subject_bed)  # fraction/counts")
+
+    if "bw.stats" in joined:
+        forbidden.append("bw.stats(  # direct pyBigWig call")
+        required.append("extract_bigwig_signals(df, bw_path)  # from src.utils.bioio")
+
+    if "empty bedtools output" in joined or "no columns to parse from file" in joined:
+        required.append("Use safe_read_csv_0_safe(...) for any bedtools output file reads to avoid EmptyDataError / empty-file crashes")
+
+    if "fractional" in joined and "median" in joined and "peak" in joined:
+        forbidden.append("['peak'].median(")
+        required.append("Compute summit offsets per-row: summit = start + peak_offset; then cast to int (never use median() peak offsets)")
+
+    if "motif+" in joined and "unbound" in joined:
+        required.append("Construct motif_positive set from FIMO hits and construct unbound/background set from lack of ChIP overlap; ensure background comparisons enforce motif+ if the prediction says REST-motif+")
+
+    if "shell=true" in joined or "bash -lc" in joined or "bash−lc" in joined or "shell-wrapped" in joined:
+        forbidden.append("subprocess.run(..., shell=<BANNED>)  — loses conda PATH")
+        forbidden.append("subprocess.run('bash -lc ...', ...)  — loses conda PATH")
+        required.append("subprocess.run([...], shell=False, stdout=fh, text=True, check=True)")
+
+    if "encff" in joined:
+        forbidden.append("hardcoded ENCFF IDs (anywhere in the code)")
+        required.append("data_files['key']  # pre-injected dict — never hardcode paths")
+
+    if "--motif" in joined or "--no-pgc" in joined or (
+        "fimo" in joined and ("flag" in joined or "missing" in joined)
+    ):
+        forbidden.append("fimo CLI without --motif and --no-pgc flags")
+        required.append("run_fimo_on_peaks(peaks_bed, genome_fasta, meme_file, motif_id)  # from src.utils.bioio")
+
+    if "loop" in joined and any(k in joined for k in ("getfasta", "fimo", "bigwig", "bw.stats")):
+        forbidden.append("bedtools getfasta / fimo / bw.stats inside any for/while loop")
+        required.append("call these operations ONCE outside all loops")
+
+    if not forbidden and not required:
+        return ""
+
+    lines = [
+        "⚠️  AUTOMATIC REJECTION — your previous code violated these rules.",
+        "    Read carefully before writing a single line of code.",
+        "",
+        "NEVER use (any of these causes instant rejection):",
+    ]
+    for f in forbidden:
+        lines.append(f"  ✗  {f}")
+    lines += [
+        "",
+        "ALWAYS use instead:",
+    ]
+    for r in required:
+        lines.append(f"  ✓  {r}")
+    lines += [
+        "",
+        "Your new code MUST NOT contain any of the NEVER patterns above.",
+    ]
+
+    return "\n" + "\n".join(lines) + "\n"
+
+
+def _format_data_for_coding(
+    data_manifest: dict[str, Any], file_summaries: dict[str, str] | None = None
 ) -> str:
-    """Build prompt for fixing code errors.
-
-    Args:
-        original_code: The code that failed
-        error_message: The error message
-        error_traceback: Full traceback
-        data_manifest: Available data paths
-        stdout: Standard output (may contain debug info)
-        stderr: Standard error (may contain warnings)
-
-    Returns:
-        Formatted prompt string
-    """
-    data_section = _format_data_for_coding(data_manifest)
-
-    # Build execution output section
-    output_section = ""
-    if stdout or stderr:
-        output_section = "\n# Execution Output (before error)\n\n"
-        if stdout:
-            # Truncate if too long
-            stdout_truncated = stdout[-3000:] if len(stdout) > 3000 else stdout
-            if len(stdout) > 3000:
-                stdout_truncated = "...(truncated)...\n" + stdout_truncated
-            output_section += f"**stdout**:\n```\n{stdout_truncated}\n```\n\n"
-        if stderr:
-            stderr_truncated = stderr[-1500:] if len(stderr) > 1500 else stderr
-            if len(stderr) > 1500:
-                stderr_truncated = "...(truncated)...\n" + stderr_truncated
-            output_section += f"**stderr**:\n```\n{stderr_truncated}\n```\n\n"
-
-    prompt = f"""# Code That Failed
-
-```python
-{original_code}
-```
-
-# Error
-
-**Message**: {error_message}
-
-**Traceback**:
-```
-{error_traceback}
-```
-{output_section}
-# Available Data
-
-{data_section}
-
-# Task
-
-First, diagnose the root cause of the error. Write a brief comment at the top of your
-code (1-2 lines) explaining:
-1. What specifically went wrong (not just "an error occurred")
-2. Why the previous code caused this (the root cause, not the symptom)
-
-Then write the corrected code. Your fix MUST address the root cause you identified.
-If the same tool or command failed, you MUST use a different approach — do not retry
-the same command with minor flag variations.
-
-Common root causes to check:
-- Tool CLI flags not supported by the installed version (check --help or use a different tool)
-- Output format assumptions that don't match actual output (inspect output first)
-- Wrong data types or column names (print and verify before using)
-- File path or format issues
-- Too few groups/strata for a statistical test (e.g., stratifying by quartile × decile leaves <3 groups): switch to a method that does not require binning, such as regression with continuous covariates
-
-If the error is caused by a missing data file (FileNotFoundError, file does not exist)
-or an unavailable CLI tool (command not found) and there is NO valid substitute in the
-data manifest above, do NOT attempt a workaround. Instead respond with ONLY:
-
-```python
-# UNTESTABLE: <one-line explanation of what resource is missing>
-```
-
-Use this ONLY for genuinely missing files or tools — NOT for "I don't know how to write
-this code." If the error is a bug in your code (wrong column, wrong flag, type error),
-you MUST fix it.
-
-Otherwise, respond with the corrected Python code (the diagnostic comment should be inside the code).
-"""
-    return prompt
-
-
-def _format_data_for_coding(data_manifest: dict[str, Any]) -> str:
-    """Format data manifest for coding prompts."""
+    """Format data manifest and optionally append file summaries for coding prompts."""
     parts = []
 
     data = data_manifest.get("data", {})
@@ -444,6 +514,17 @@ def _format_data_for_coding(data_manifest: dict[str, Any]) -> str:
         parts.append("## Available CLI Tools (use via subprocess)")
         for tool in tools:
             parts.append(f"- `{tool}`")
+            
+    if file_summaries and file_summaries.get("all_files"):
+        parts.append("")
+        parts.append("## File Previews (from pre-run inspection)")
+        parts.append("Use these column names and formats exactly as shown below:")
+        parts.append("```")
+        preview = file_summaries["all_files"]
+        if len(preview) > 4000:
+            preview = preview[:4000] + "\n... [truncated]"
+        parts.append(preview)
+        parts.append("```")
 
     return "\n".join(parts)
 
@@ -453,3 +534,145 @@ def _format_verification_plan(plan: list[str]) -> str:
     if not plan:
         return "No specific plan provided."
     return "\n".join([f"{i+1}. {step}" for i, step in enumerate(plan)])
+
+
+def _format_allowed_packages(packages: list[str]) -> str:
+    """Format allowed Python packages for coding prompts."""
+    if not packages:
+        return ""
+    pkg_list = ", ".join(sorted(packages))
+    return (
+        "# Allowed Python packages\n\n"
+        f"Use ONLY these Python packages: {pkg_list}. "
+        "Do not use other packages (e.g. pyranges); they are not installed in the execution environment.\n\n"
+    )
+
+
+# =============================================================================
+# V2: REPL-style prompts
+# =============================================================================
+
+def build_inspection_prompt(data_manifest: dict[str, Any]) -> str:
+    """One-shot prompt for file familiarisation (no hypothesis)."""
+    data_section = _format_data_for_coding(data_manifest, file_summaries=None)
+    return f"""# Task: Inspect All Data Files
+
+Generate Python code to inspect every file listed in the data manifest below.
+
+For each file:
+1. Print the file path as a header
+2. Print the number of lines (or rows for tabular files)
+3. If tabular (TSV, CSV, BED, narrowPeak): print column names and 3 sample rows using pandas
+4. If binary (bigWig, bam): print the file size in MB
+5. If FASTA or GTF: print line count and first 3 non-comment lines
+
+Print clearly labeled output per file. Do not perform any analysis or statistics.
+Do not import matplotlib or generate any plots.
+Use try/except around each file so one failure doesn't stop the rest.
+
+# Available Data
+
+{data_section}
+"""
+
+
+def build_repl_system_prompt() -> str:
+    """System prompt for the REPL coding agent (v2)."""
+    return """You are an expert bioinformatics programmer working in a persistent Python REPL.
+
+## How this works
+
+You reason and execute code in small, incremental steps:
+
+- Use <think>...</think> to reason about what to do next (optional but encouraged).
+- Use <execute>...</execute> to run Python code. The kernel is persistent — variables
+  set in one block are available in the next. Always use exactly `<execute>` with no
+  attributes (not `<execute code>`, `<execute python>`, etc.).
+  **Send exactly ONE <execute> block per message.** Wait for the observation before
+  writing the next block. Do NOT send multiple <execute> blocks in one response —
+  only the first will be executed.
+- Use <solution>...</solution> ONLY when you have enough evidence to conclude, and
+  NEVER in the same message as an <execute> block. First run code, observe results,
+  then in a later message emit <solution>.
+
+## Solution format
+
+<solution>
+support_level: SUPPORTS|REFUTES|INCONCLUSIVE|ERROR|UNTESTABLE
+confidence: 0.0-1.0
+finding: <one concise sentence stating the key result>
+reasoning: <explanation of the evidence and why it supports/refutes the hypothesis>
+</solution>
+
+## Guidelines
+
+- Run small steps: load data → inspect → compute → conclude. Do not write one huge script.
+- Always print key intermediate results so you can verify them before proceeding.
+- If a step fails, read the error, fix just that part, and try again.
+- No matplotlib or seaborn — print statistics only.
+- Max 100 permutation replicates.
+- Use data_files['key'] to access files — it is pre-injected into the kernel.
+
+""" + CODING_SYSTEM_PROMPT_BASE
+
+
+def build_repl_initial_prompt(
+    hypothesis: dict[str, Any],
+    data_manifest: dict[str, Any],
+    prior_evidence: list[dict[str, Any]] | None = None,
+    file_summaries: dict[str, str] | None = None,
+    allowed_packages: list[str] | None = None,
+) -> str:
+    """Initial user message for the REPL verification loop."""
+    parts: list[str] = []
+
+    # Hypothesis
+    parts.append("# Hypothesis to verify")
+    parts.append(f"**Name**: {hypothesis.get('name', 'N/A')}")
+    parts.append(f"**Prediction**: {hypothesis.get('prediction', 'N/A')}")
+    vplan = hypothesis.get("verification_plan", [])
+    if vplan:
+        parts.append("\n**Verification plan**:")
+        for i, step in enumerate(vplan, 1):
+            parts.append(f"  {i}. {step}")
+
+    # Prior evidence
+    if prior_evidence:
+        parts.append("\n# Prior evidence from earlier iterations")
+        parts.append(_format_prior_evidence(prior_evidence))
+
+    # Data
+    parts.append("\n# Available data")
+    parts.append(_format_data_for_coding(data_manifest, file_summaries=file_summaries))
+
+    # Allowed packages
+    if allowed_packages:
+        parts.append("\n# Allowed packages")
+        parts.append(_format_allowed_packages(allowed_packages))
+
+    # API reference (abridged)
+    parts.append("""
+# Key helper functions (src.utils.bioio)
+
+```python
+from src.utils.bioio import (
+    read_narrowpeak, find_motif_ids_for_tf, run_fimo_on_peaks,
+    count_overlapping_peaks, extract_bigwig_signals, matched_bin,
+    annotate_peaks_with_chromhmm, run_bedtools_closest_to_tss,
+    link_peaks_to_expression, load_string_links,
+)
+# data_files dict is already injected — use data_files['key'] for all paths
+```
+
+Important:
+- FIMO: always pass `--motif <id>` and `--no-pgc`; use run_fimo_on_peaks()
+- bigWig: use extract_bigwig_signals(df, bw_path) not bw.stats() in loops
+- narrowPeak: use read_narrowpeak(path) — name column is always '.' in ENCODE files
+""")
+
+    parts.append(
+        "\nStart by loading and inspecting the relevant data, then run your analysis "
+        "step by step. When you have sufficient evidence, emit <solution>.</solution>."
+    )
+
+    return "\n".join(parts)

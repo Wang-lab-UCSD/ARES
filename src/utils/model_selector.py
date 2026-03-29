@@ -217,6 +217,13 @@ def selections_to_config(selections: dict[str, ModelOption]) -> dict:
                 "temperature": 0.3,
                 "max_tokens": 2048,
             },
+            "review_model": {
+                "provider": selections["coding"].provider,
+                "model": selections["coding"].model_id,
+                "api_key_env": selections["coding"].api_key_env,
+                "temperature": 0.2,
+                "max_tokens": 4096,
+            },
         },
         "execution": {
             "type": "jupyter",
