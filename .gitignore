@@ -4,6 +4,9 @@
 .venv/
 venv/
 env/
+.envrc
+env.bak/
+venv.bak/
 
 # Python
 __pycache__/
@@ -23,9 +26,11 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # Runtime
 logs/
@@ -42,9 +47,17 @@ outputs/
 # Testing
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .tox/
 .nox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+cover/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -53,24 +66,37 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project-specific
 api_key.txt
 .claude/settings.local.json
-
 slides/
-
-# Large data files
 data/
-
-# API keys — never commit
 load_api_keys.sh
-
-# Personal research PDFs
 doc/*.pdf
-
+doc/
 METHODS.md
-
 analyze_pipeline_log.py
-
 examples/
 
-doc/
+# Misc
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+.ruff_cache/
+.pypirc
+.ropeproject
+.pdm-python
+.pdm-build/
+celerybeat-schedule
+celerybeat.pid
+*.sage.py
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+db.sqlite3
+db.sqlite3-journal
