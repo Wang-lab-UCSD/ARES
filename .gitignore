@@ -75,6 +75,8 @@ data/
 load_api_keys.sh
 doc/*.pdf
 doc/
+docs/
+scripts/
 METHODS.md
 analyze_pipeline_log.py
 examples/
