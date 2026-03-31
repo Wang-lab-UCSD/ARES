@@ -240,9 +240,9 @@ those are injected by the pipeline runtime and must remain external.
     return prompt
 
 
-HYPOTHESIS_REVIEW_SYSTEM_PROMPT = """You review scientific hypotheses before they are tested. Your job is to catch duplicates and association/characterization hypotheses BEFORE expensive code generation and execution.
+HYPOTHESIS_REVIEW_SYSTEM_PROMPT = """You review scientific hypotheses before they are tested. Your job is to catch duplicates, association/characterization hypotheses, and verification steps that are irrelevant to the stated mechanism — all BEFORE expensive code generation and execution.
 
-You have exactly TWO checklist items. Reject ONLY when one of them is violated. Do NOT evaluate statistical methodology, test design, control groups, or causal inference validity — that is not your job."""
+You have exactly THREE checklist items. Reject ONLY when one of them is violated. Do NOT evaluate statistical methodology (test choice, power, controls, causal inference validity) — that is not your job. Your job is to check whether the hypothesis is novel, causal, and whether each verification step is testing the right thing for the stated mechanism."""
 
 
 def build_hypothesis_review_prompt(
@@ -293,7 +293,7 @@ def build_hypothesis_review_prompt(
 
 # Review Checklist
 
-You have exactly TWO checks. Apply ONLY these. Do not invent additional criteria.
+You have exactly THREE checks. Apply ONLY these. Do not invent additional criteria.
 
 **1. Already answered**
 Has this question already been answered — either directly or by logical implication — by a
@@ -326,14 +326,24 @@ GOOD (causal mechanism — approve):
 - "TF_B and TF_A are tethered via protein-protein interaction: TF_A signal at TF_B sites
   should drop when TF_B motif is absent" — tests a physical interaction mechanism
 
+**3. Verification plan — each step must directly test the stated mechanism**
+
+For each step in `verification_plan`, ask: "If this step came back negative, would it falsify or significantly undermine this specific hypothesis?" If the answer is no for any step, reject and name the offending step(s).
+
+Common irrelevant steps to catch:
+- STRING/PPI query in a hypothesis about DNA-sequence or chromatin architecture — protein interaction data cannot falsify a DNA-level mechanism
+- GO enrichment or gene expression in a hypothesis about motif co-occurrence or pioneer activity — functional annotation describes context, does not test the mechanism
+- ChromHMM or TSS-distance annotation in a hypothesis about protein-protein interaction — genomic context does not falsify a PPI claim
+
 Do NOT reject for:
+- The number of steps (1–3 steps are all fine)
 - Statistical methodology concerns (test design, controls, bias, confounding)
 - Missing implementation details (file paths, column names, tool parameters)
 - Low discriminating power (same-direction counterfactual is advisory, not a reject)
 
 # Task
 
-Review the hypothesis against ONLY the two checks above. Respond in JSON:
+Review the hypothesis against ONLY the three checks above. Respond in JSON:
 
 {{
     "approved": true,

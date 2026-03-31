@@ -193,13 +193,20 @@ A valid mechanism hypothesis must:
 2. Predict a direction of effect
 3. Be falsifiable — a negative result would rule out this mechanism
 
-**Multi-facet verification**: A single mechanism can and should be verified from multiple
-coordinated angles in one iteration. For each hypothesis, plan 2–4 closely related checks
-that all speak to the SAME mechanism, for example:
-- Co-binding geometry: overlap/co-occurrence fractions (both directions: P(B|A) AND P(A|B))
-- Genomic context: ChromHMM or TSS-distance enrichment to test the predicted environment
-- Signal coupling: quantitative correlation or median comparison of signal intensities
-- Negative control slice: "TF_B present but TF_A absent" regions as a contrast
+**Verification plan — start from 1, justify each addition.**
+
+Default: **1 step** — the single most decisive test that, if negative, falsifies the mechanism.
+Add a second step only if the mechanism has a second genuinely independent, non-redundant component that the first step cannot capture.
+Add a third step only if there is a third such component. 3 is the hard cap.
+
+Before writing each step, ask: "If this came back negative, would it falsify the hypothesis?" If no, it does not belong. Do not add steps to be thorough, to characterize context, or to satisfy convergence criteria — add them only if they are independently falsifying.
+
+Check type alignment (only use when directly required by the mechanism):
+- Spatial co-occurrence or overlap fractions → for co-binding / composite-element mechanisms
+- Signal enrichment comparison → for mechanisms predicting quantitative differences
+- Negative control slice ("TF_B present, TF_A absent") → for any mechanism claiming specificity
+- STRING/PPI → only for protein-interaction mechanisms, never for DNA-sequence or chromatin hypotheses
+- ChromHMM / TSS-distance / GO enrichment → only when the prediction explicitly involves chromatin state, promoter proximity, or gene function
 
 When relevant, always check **both conditional directions** (e.g., "% of SP1 peaks with NFYA"
 AND "% of NFYA peaks with SP1"). An asymmetric relationship (NFYA almost always with SP1,
@@ -262,7 +269,7 @@ Respond in JSON format:
                 "prediction_if_mechanism": "What the data would show if this mechanism operates",
                 "prediction_if_co_occupancy_only": "What the data would show if TF_B and TF_A simply co-occur at active sites with no causal relationship",
                 "distinguishable": "YES or NO — and why. If NO, redesign the prediction field below.",
-                "multi_facet_plan": "List 2–4 coordinated checks for this mechanism (overlap fractions from both directions, context, signal coupling, negative control)"
+                "multi_facet_plan": "Start with 1: what is the single most decisive test? Then: is there a second independent, non-redundant component the first step cannot capture? Only if yes, add it. Repeat for a third (hard cap). Do not add steps to be thorough or to check convergence criteria."
             }},
             "name": "Hypothesis name",
             "group": "mechanism-slug",

@@ -27,6 +27,7 @@ from src.utils.config import (
 )
 from src.utils.cost_tracker import CostTracker, CostLimitExceeded, SessionBudgetExceeded, TokenLimitExceeded
 from src.utils.logging import get_logger
+from src.utils.narrative import NarrativeLog
 
 
 class Orchestrator:
@@ -447,6 +448,13 @@ class Orchestrator:
         run_dir = self.output_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        narrative = NarrativeLog(run_dir)
+        narrative.write_header(
+            finding=self.state.finding,
+            run_id=run_id,
+            started_at=datetime.now().isoformat(timespec="seconds"),
+        )
+
         try:
             # Start Jupyter executor
             self.executor = JupyterExecutor(
@@ -683,6 +691,7 @@ class Orchestrator:
                     continue
 
                 # Run verification cycle
+                narrative.write_hypothesis(self.state.current_iteration, hypothesis)
                 result = await self._run_verification_cycle(
                     hypothesis, run_dir
                 )
@@ -711,6 +720,7 @@ class Orchestrator:
                     "executed_after_review_approval": result.get("_executed_after_review_approval", False),
                     "execution_attempt": result.get("_execution_attempt"),
                 })
+                narrative.write_result(result)
 
                 # Check for convergence or refinement
                 if not self._check_shutdown():
@@ -738,6 +748,7 @@ class Orchestrator:
                         )
                     else:
                         await self._check_and_refine(hypothesis, result)
+                        narrative.write_decision(self.state.tested_hypotheses[-1])
 
                 # Save intermediate state after refinement so decision/reasoning are included
                 if self.config.pipeline.save_intermediate:
@@ -772,6 +783,10 @@ class Orchestrator:
                 )
 
             # Generate final report
+            narrative.finalize(
+                conclusion=self.state.conclusion or "",
+                converged=self.state.converged,
+            )
             final_result = await self._generate_final_output(run_dir)
 
             return final_result

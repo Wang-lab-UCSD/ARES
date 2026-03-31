@@ -19,6 +19,8 @@ CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Writ
 3. `.merge(... on='name' ...)` on narrowPeak frames → ENCODE `name` column is always `'.'`; join on coordinates or `peak_id`. Never pass a `lambda` as a `merge` key — pandas does not support it and raises `KeyError`
 4. `bw.stats()` directly → use `extract_bigwig_signals(df, bw_path)` instead
 5. `bedtools getfasta`, `fimo`, or `bw.stats()` inside any `for`/`while` loop → call each ONCE outside all loops
+5a. Direct `subprocess` call to `fimo` or `bedtools getfasta` when `run_fimo_on_peaks()` can handle it → always use `run_fimo_on_peaks(peaks_df, genome_fa, meme_file, motif_id)`. Direct FIMO calls without `--motif` scan all 800+ JASPAR motifs and time out in 15 minutes.
+5b. Running `fimo`, `bedtools getfasta`, or `bigWigAverageOverBed` on the full dataset as the first attempt → always test on `peaks.head(200)` first to confirm correct output format and timing, then run on the full dataset.
 6. `subprocess.run(..., shell=True)` or `bash -lc` for CLI tools → use `subprocess.run([...], shell=False)`
 7. Hardcoded ENCFF IDs anywhere in the script → use `data_files['key']` (pre-injected dict)
 8. `matplotlib` / `seaborn` imports → output statistics only, no plots
@@ -184,7 +186,18 @@ partners_df, shared = fetch_shared_partners(
     min_dscore=0.3,             # require curated DB evidence
 )
 # shared → set of gene symbols that interact with BOTH TF_A and TF_B
-# partners_df → full DataFrame with queryItem, preferredName_B, score, ...
+# partners_df → DataFrame with columns: preferredName_A, preferredName_B, score
+#               (plus stringId_A, stringId_B, escore, dscore when present)
+#   NOTE: `queryItem` column may or may not be present — do NOT rely on it for filtering.
+#
+# To check if TF_A and TF_B directly interact with each other:
+#   direct = partners_df[
+#       (partners_df["preferredName_A"].isin(["TF_A", "TF_B"])) &
+#       (partners_df["preferredName_B"].isin(["TF_A", "TF_B"]))
+#   ]
+# To find proteins that partner with TF_A (regardless of TF_B):
+#   nfya_partners = set(partners_df[partners_df["preferredName_A"] == "TF_A"]["preferredName_B"])
+# To find shared cofactors (proteins that partner with BOTH), just use the `shared` set directly.
 
 # intersect_peaks  (coordinate-based peak join — use instead of .merge(on='name'))
 from src.utils.bioio import intersect_peaks
