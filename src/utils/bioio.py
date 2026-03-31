@@ -439,29 +439,29 @@ def run_bedtools_closest_to_tss(
         closest_out = td_path / "closest.tsv"
 
         with open(sorted_peaks, "w", encoding="utf-8") as out:
-            subprocess.run(
+            _p = subprocess.run(
                 ["bedtools", "sort", "-i", peaks_bed],
-                stdout=out,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
+                stdout=out, stderr=subprocess.PIPE, text=True,
             )
+            if _p.returncode != 0:
+                print(f"[run_bedtools_closest_to_tss] ERROR: bedtools sort peaks failed (rc={_p.returncode}): {_p.stderr[:300]}")
+                raise RuntimeError(f"bedtools sort peaks failed: {_p.stderr[:200]}")
         with open(sorted_tss, "w", encoding="utf-8") as out:
-            subprocess.run(
+            _p = subprocess.run(
                 ["bedtools", "sort", "-i", tss_bed],
-                stdout=out,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
+                stdout=out, stderr=subprocess.PIPE, text=True,
             )
+            if _p.returncode != 0:
+                print(f"[run_bedtools_closest_to_tss] ERROR: bedtools sort tss failed (rc={_p.returncode}): {_p.stderr[:300]}")
+                raise RuntimeError(f"bedtools sort tss failed: {_p.stderr[:200]}")
         with open(closest_out, "w", encoding="utf-8") as out:
-            subprocess.run(
+            _p = subprocess.run(
                 ["bedtools", "closest", "-a", str(sorted_peaks), "-b", str(sorted_tss), "-d", "-t", tie_mode],
-                stdout=out,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
+                stdout=out, stderr=subprocess.PIPE, text=True,
             )
+            if _p.returncode != 0:
+                print(f"[run_bedtools_closest_to_tss] ERROR: bedtools closest failed (rc={_p.returncode}): {_p.stderr[:300]}")
+                raise RuntimeError(f"bedtools closest failed: {_p.stderr[:200]}")
 
         df = parse_bedtools_closest(
             closest_out,
@@ -626,13 +626,13 @@ def annotate_peaks_with_chromhmm(
         td_path = Path(td)
         intersect_out = td_path / "chromhmm_intersect.tsv"
         with open(intersect_out, "w", encoding="utf-8") as out:
-            subprocess.run(
+            _p = subprocess.run(
                 ["bedtools", "intersect", "-a", peaks_bed, "-b", chromhmm_bed, "-wa", "-wb"],
-                stdout=out,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
+                stdout=out, stderr=subprocess.PIPE, text=True,
             )
+            if _p.returncode != 0:
+                print(f"[annotate_peaks_with_chromhmm] ERROR: bedtools intersect failed (rc={_p.returncode}): {_p.stderr[:300]}")
+                raise RuntimeError(f"bedtools intersect failed: {_p.stderr[:200]}")
 
         df = parse_chromhmm_intersect(
             intersect_out,
@@ -871,6 +871,14 @@ def run_fimo_on_peaks(
         genome_fasta = Path(genome_fasta)
         meme_file = Path(meme_file)
 
+        if not peaks_bed.exists():
+            print(f"[run_fimo_on_peaks] ERROR: peaks_bed not found: {peaks_bed}")
+            raise FileNotFoundError(f"peaks_bed not found: {peaks_bed}")
+        if peaks_bed.stat().st_size == 0:
+            print(f"[run_fimo_on_peaks] ERROR: peaks_bed is empty (0 bytes): {peaks_bed}")
+            print("  Hint: if you wrote to a NamedTemporaryFile, call .flush() or .close() before passing its path")
+            raise ValueError(f"peaks_bed is empty: {peaks_bed}")
+
         with TemporaryDirectory() as td:
             td_path = Path(td)
             scan_bed = td_path / "scan_regions.bed"
@@ -919,19 +927,20 @@ def run_fimo_on_peaks(
                 peaks_df.iloc[:, :4].to_csv(scan_bed, sep="\t", header=False, index=False)
 
             # Step 2: bedtools getfasta with -name (encodes peak name into header)
-            with open(fasta_out, "w") as fasta_fh:
-                subprocess.run(
-                    ["bedtools", "getfasta", "-fi", str(genome_fasta), "-bed", str(scan_bed),
-                     "-fo", "/dev/stdout", "-name"],
-                    stdout=fasta_fh,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=True,
-                )
+            getfasta_proc = subprocess.run(
+                ["bedtools", "getfasta", "-fi", str(genome_fasta), "-bed", str(scan_bed),
+                 "-fo", str(fasta_out), "-name"],
+                capture_output=True,
+                text=True,
+            )
+            if getfasta_proc.returncode != 0:
+                print(f"[run_fimo_on_peaks] ERROR: bedtools getfasta failed (rc={getfasta_proc.returncode})")
+                print(f"[run_fimo_on_peaks] stderr: {getfasta_proc.stderr[:500]}")
+                raise RuntimeError(f"bedtools getfasta failed: {getfasta_proc.stderr[:300]}")
 
             # Step 3: FIMO — --no-pgc prevents sequence_name from being parsed as
             # genomic coordinates (which would return chromosome names, not peak IDs)
-            subprocess.run(
+            fimo_proc = subprocess.run(
                 [
                     "fimo",
                     "--no-pgc",
@@ -941,10 +950,13 @@ def run_fimo_on_peaks(
                     str(meme_file),
                     str(fasta_out),
                 ],
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
-                check=True,
             )
+            if fimo_proc.returncode != 0:
+                print(f"[run_fimo_on_peaks] ERROR: fimo failed (rc={fimo_proc.returncode})")
+                print(f"[run_fimo_on_peaks] stderr: {fimo_proc.stderr[:500]}")
+                raise RuntimeError(f"fimo failed: {fimo_proc.stderr[:300]}")
 
             # Step 4: parse output
             fimo_tsv = fimo_out_dir / "fimo.tsv"
@@ -1022,15 +1034,21 @@ def count_overlapping_peaks(
     # Count total query peaks
     result_total = subprocess.run(
         ["wc", "-l", query_bed],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True,
     )
+    if result_total.returncode != 0:
+        print(f"[count_overlapping_peaks] ERROR: wc -l failed (rc={result_total.returncode}): {result_total.stderr[:200]}")
+        raise RuntimeError(f"wc -l failed: {result_total.stderr[:200]}")
     n_query = int(result_total.stdout.strip().split()[0])
 
     # Count query peaks that have ≥1 overlap with subject (-u: unique, count each query once)
     result_overlap = subprocess.run(
         ["bedtools", "intersect", "-a", _intersect_a, "-b", subject_bed, "-u"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True,
     )
+    if result_overlap.returncode != 0:
+        print(f"[count_overlapping_peaks] ERROR: bedtools intersect failed (rc={result_overlap.returncode}): {result_overlap.stderr[:300]}")
+        raise RuntimeError(f"bedtools intersect failed: {result_overlap.stderr[:200]}")
     if _tmp_flank is not None:
         import os as _os; _os.unlink(_tmp_flank.name)
     n_overlapping = len([l for l in result_overlap.stdout.splitlines() if l.strip()])
@@ -1132,8 +1150,11 @@ def intersect_peaks(
         if mode == "wa-wb":
             result = subprocess.run(
                 ["bedtools", "intersect", "-a", path_a, "-b", path_b, "-wa", "-wb"],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True,
             )
+            if result.returncode != 0:
+                print(f"[intersect_peaks] ERROR: bedtools intersect wa-wb failed (rc={result.returncode}): {result.stderr[:300]}")
+                raise RuntimeError(f"bedtools intersect failed: {result.stderr[:200]}")
             if not result.stdout.strip():
                 a_names = [f"a_{i}" for i in range(ncols_a)]
                 b_names = [f"b_{i}" for i in range(ncols_b)]
@@ -1147,8 +1168,11 @@ def intersect_peaks(
         elif mode == "count":
             result = subprocess.run(
                 ["bedtools", "intersect", "-a", path_a, "-b", path_b, "-c"],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True,
             )
+            if result.returncode != 0:
+                print(f"[intersect_peaks] ERROR: bedtools intersect count failed (rc={result.returncode}): {result.stderr[:300]}")
+                raise RuntimeError(f"bedtools intersect failed: {result.stderr[:200]}")
             counts = _parse_bedtools_c_column(result.stdout, ncols_a)
             if a_is_df:
                 out = peaks_a.copy().reset_index(drop=True)
@@ -1161,8 +1185,11 @@ def intersect_peaks(
         else:  # mode == "flag"
             result = subprocess.run(
                 ["bedtools", "intersect", "-a", path_a, "-b", path_b, "-c"],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True,
             )
+            if result.returncode != 0:
+                print(f"[intersect_peaks] ERROR: bedtools intersect flag failed (rc={result.returncode}): {result.stderr[:300]}")
+                raise RuntimeError(f"bedtools intersect failed: {result.stderr[:200]}")
             counts = _parse_bedtools_c_column(result.stdout, ncols_a)
             if a_is_df:
                 out = peaks_a.copy().reset_index(drop=True)
@@ -1442,3 +1469,72 @@ def load_string_links(
         df = df[df[score_col] >= min_score].reset_index(drop=True)
 
     return df
+
+
+def run_go_enrichment(
+    gene_list: list[str],
+    organism: str = "hsapiens",
+    sources: list[str] | None = None,
+    significant_only: bool = True,
+    max_terms: int = 20,
+) -> pd.DataFrame:
+    """Run GO / pathway enrichment on a list of gene symbols via g:Profiler.
+
+    Queries the g:Profiler web API (no local annotation files needed).
+    Returns an empty DataFrame if the gene list is empty or no terms are found.
+
+    Args:
+        gene_list: List of gene symbols (e.g. ["TP53", "MYC", "BRCA1"]).
+        organism: g:Profiler organism code. Common values:
+            "hsapiens" (human), "mmusculus" (mouse), "drerio" (zebrafish).
+        sources: Annotation sources to query. Defaults to
+            ["GO:BP", "GO:MF", "KEGG"]. Other options: "GO:CC", "REAC", "WP", "HP".
+        significant_only: If True (default), return only statistically significant
+            terms (g:Profiler's multiple-testing corrected p_value < 0.05).
+        max_terms: Maximum number of top terms to return, sorted by p_value.
+
+    Returns:
+        DataFrame with columns:
+            source        – annotation source (e.g. "GO:BP", "KEGG")
+            name          – term name
+            p_value       – adjusted p-value (g:SCS correction)
+            intersection_size – number of query genes annotated to this term
+            term_size     – total genes annotated to this term in the database
+            query_size    – number of genes in the input query
+            native        – term ID (e.g. "GO:0006355")
+        Sorted by p_value ascending. Empty DataFrame if no results.
+
+    Example:
+        >>> df = run_go_enrichment(["TP53", "MYC", "CDKN1A", "MDM2"])
+        >>> print(df[["source", "name", "p_value"]].head())
+    """
+    if sources is None:
+        sources = ["GO:BP", "GO:MF", "KEGG"]
+
+    gene_list = [g for g in gene_list if g and str(g).strip()]
+    if not gene_list:
+        return pd.DataFrame(columns=["source", "name", "p_value", "intersection_size",
+                                      "term_size", "query_size", "native"])
+
+    from gprofiler import GProfiler  # imported here to keep gprofiler optional
+
+    gp = GProfiler(return_dataframe=True)
+    results = gp.profile(
+        organism=organism,
+        query=gene_list,
+        sources=sources,
+        significance_threshold_method="g_SCS",
+        no_evidences=True,
+    )
+
+    if results is None or results.empty:
+        return pd.DataFrame(columns=["source", "name", "p_value", "intersection_size",
+                                      "term_size", "query_size", "native"])
+
+    if significant_only:
+        results = results[results["significant"] == True]  # noqa: E712
+
+    keep_cols = [c for c in ["source", "name", "p_value", "intersection_size",
+                               "term_size", "query_size", "native"] if c in results.columns]
+    results = results[keep_cols].sort_values("p_value").head(max_terms).reset_index(drop=True)
+    return results

@@ -114,6 +114,7 @@ class JupyterExecutor:
         timeout_seconds: int = 300,
         working_dir: str | Path | None = None,
         kernel_name: str = "python3",
+        max_start_attempts: int = 3,
     ):
         """Initialize the executor.
 
@@ -121,10 +122,14 @@ class JupyterExecutor:
             timeout_seconds: Maximum time for code execution
             working_dir: Working directory for the kernel
             kernel_name: Jupyter kernel to use
+            max_start_attempts: How many times to retry kernel startup on
+                transient failures (ZMQ port collision, bootstrap timeout).
+                Each attempt kills the previous kernel before retrying.
         """
         self.timeout_seconds = timeout_seconds
-        self.working_dir = Path(working_dir) if working_dir else Path.cwd()
+        self.working_dir = Path(working_dir).resolve() if working_dir else Path.cwd()
         self.kernel_name = kernel_name
+        self.max_start_attempts = max_start_attempts
 
         self.logger = get_logger("jupyter")
         self._km: KernelManager | None = None
@@ -151,7 +156,12 @@ os.chdir(_codex_working_dir)
 """.strip()
 
     async def start(self) -> None:
-        """Start the Jupyter kernel."""
+        """Start the Jupyter kernel, retrying on transient startup failures.
+
+        Transient failures (ZMQ port collision, bootstrap timeout) are retried
+        up to `max_start_attempts` times. Each failed attempt kills the hung
+        kernel before spawning a fresh one. `NoSuchKernel` is not retried.
+        """
         if self._km is not None:
             self.logger.warning("Kernel already running")
             return
@@ -161,30 +171,80 @@ os.chdir(_codex_working_dir)
             "working_dir": str(self.working_dir),
         })
 
-        try:
-            self._km = KernelManager(kernel_name=self.kernel_name)
-            self._km.start_kernel(cwd=str(self.working_dir))
-            self._kc = self._km.client()
-            self._kc.start_channels()
-
-            # Wait for kernel to be ready
-            await self._wait_for_ready()
-
-            bootstrap_result = await self.execute(self._build_kernel_bootstrap_code())
-            if not bootstrap_result.success:
-                raise RuntimeError(
-                    "Failed to initialize Jupyter kernel import path: "
-                    f"{bootstrap_result.error or 'unknown bootstrap error'}"
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_start_attempts + 1):
+            if attempt > 1:
+                self.logger.warning(
+                    "Retrying kernel startup",
+                    {"attempt": attempt, "max_attempts": self.max_start_attempts,
+                     "reason": str(last_error)},
                 )
+                await asyncio.sleep(2)
 
-            self.logger.info("Kernel started successfully")
+            try:
+                self._km = KernelManager(kernel_name=self.kernel_name)
+                self._km.start_kernel(cwd=str(self.working_dir))
+                self._kc = self._km.client()
+                self._kc.start_channels()
 
-        except NoSuchKernel:
-            self.logger.error("Kernel not found", {"kernel": self.kernel_name})
-            raise RuntimeError(f"Kernel '{self.kernel_name}' not found. Is ipykernel installed?")
-        except Exception as e:
-            self.logger.error("Failed to start kernel", {"error": str(e)})
-            raise
+                await self._wait_for_ready()
+
+                # Bootstrap code is trivial (sys.path + os.chdir); use a short
+                # timeout so a ZMQ hang is detected quickly and retried.
+                orig_timeout = self.timeout_seconds
+                self.timeout_seconds = 60
+                try:
+                    bootstrap_result = await self.execute(self._build_kernel_bootstrap_code())
+                finally:
+                    self.timeout_seconds = orig_timeout
+
+                if not bootstrap_result.success:
+                    raise RuntimeError(
+                        "Failed to initialize Jupyter kernel import path: "
+                        f"{bootstrap_result.error or 'unknown bootstrap error'}"
+                    )
+
+                self.logger.info("Kernel started successfully")
+                return
+
+            except NoSuchKernel:
+                # Permanent — no point retrying
+                self.logger.error("Kernel not found", {"kernel": self.kernel_name})
+                raise RuntimeError(
+                    f"Kernel '{self.kernel_name}' not found. Is ipykernel installed?"
+                )
+            except Exception as e:
+                last_error = e
+                self.logger.warning(
+                    "Kernel startup attempt failed — killing kernel before retry",
+                    {"attempt": attempt, "error": str(e)},
+                )
+                # Kill the hung kernel so the next attempt starts completely fresh
+                await self._force_stop()
+
+        self.logger.error("Failed to start kernel after all attempts", {
+            "max_attempts": self.max_start_attempts,
+            "error": str(last_error),
+        })
+        raise RuntimeError(
+            f"Failed to start kernel after {self.max_start_attempts} attempts: {last_error}"
+        )
+
+    async def _force_stop(self) -> None:
+        """Kill the kernel unconditionally, ignoring all errors. Used between retries."""
+        try:
+            if self._kc:
+                self._kc.stop_channels()
+        except Exception:
+            pass
+        try:
+            if self._km:
+                self._km.shutdown_kernel(now=True)
+        except Exception:
+            pass
+        finally:
+            self._km = None
+            self._kc = None
 
     async def _wait_for_ready(self, timeout: float = 30.0) -> None:
         """Wait for the kernel to be ready."""

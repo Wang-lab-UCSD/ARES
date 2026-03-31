@@ -1,6 +1,7 @@
 """Tests for reusable bioinformatics parsing helpers."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import subprocess
@@ -18,6 +19,7 @@ from src.utils.bioio import (
     parse_peak_id_from_fasta_header,
     read_narrowpeak,
     run_bedtools_closest_to_tss,
+    run_go_enrichment,
 )
 
 
@@ -212,3 +214,114 @@ def test_annotate_peaks_with_chromhmm_parses_mocked_output(monkeypatch, tmp_path
     assert out.loc[0, "name"] == "peak1"   # default is plain "name", not "peak_name"
     assert bool(out.loc[0, "is_promoter_state"]) is True
     assert bool(out.loc[0, "is_enhancer_state"]) is False
+
+
+# ---------------------------------------------------------------------------
+# run_go_enrichment
+# ---------------------------------------------------------------------------
+
+def _mock_gprofiler_result(significant_flags=None) -> pd.DataFrame:
+    """Fake g:Profiler profile() response with three terms."""
+    rows = [
+        {
+            "source": "GO:BP", "name": "transcription regulation",
+            "p_value": 0.001, "significant": True,
+            "intersection_size": 10, "term_size": 200,
+            "query_size": 50, "native": "GO:0006355",
+        },
+        {
+            "source": "KEGG", "name": "p53 signaling pathway",
+            "p_value": 0.01, "significant": True,
+            "intersection_size": 5, "term_size": 80,
+            "query_size": 50, "native": "KEGG:04115",
+        },
+        {
+            "source": "GO:MF", "name": "DNA binding",
+            "p_value": 0.08, "significant": False,
+            "intersection_size": 3, "term_size": 300,
+            "query_size": 50, "native": "GO:0003677",
+        },
+    ]
+    df = pd.DataFrame(rows)
+    if significant_flags is not None:
+        df["significant"] = significant_flags
+    return df
+
+
+def _make_gp_mock(return_value: pd.DataFrame) -> MagicMock:
+    instance = MagicMock()
+    instance.profile.return_value = return_value
+    gp_cls = MagicMock(return_value=instance)
+    return gp_cls, instance
+
+
+class TestRunGoEnrichment:
+    def test_returns_expected_columns(self):
+        gp_cls, _ = _make_gp_mock(_mock_gprofiler_result())
+        with patch("src.utils.bioio.GProfiler", gp_cls, create=True):
+            # patch the lazy import inside the function
+            with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+                df = run_go_enrichment(["TP53", "MYC"])
+        expected = {"source", "name", "p_value", "intersection_size",
+                    "term_size", "query_size", "native"}
+        assert expected.issubset(set(df.columns))
+
+    def test_significant_only_filters_nonsignificant(self):
+        gp_cls, instance = _make_gp_mock(_mock_gprofiler_result())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            df = run_go_enrichment(["TP53", "MYC"], significant_only=True)
+        # DNA binding has significant=False → should be excluded
+        assert "DNA binding" not in df["name"].values
+        assert len(df) == 2
+
+    def test_significant_only_false_returns_all(self):
+        gp_cls, instance = _make_gp_mock(_mock_gprofiler_result())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            df = run_go_enrichment(["TP53", "MYC"], significant_only=False)
+        assert len(df) == 3
+
+    def test_sorted_by_p_value_ascending(self):
+        gp_cls, _ = _make_gp_mock(_mock_gprofiler_result())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            df = run_go_enrichment(["TP53", "MYC"], significant_only=False)
+        assert list(df["p_value"]) == sorted(df["p_value"])
+
+    def test_max_terms_limits_output(self):
+        gp_cls, _ = _make_gp_mock(_mock_gprofiler_result())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            df = run_go_enrichment(["TP53", "MYC"], significant_only=False, max_terms=2)
+        assert len(df) == 2
+
+    def test_empty_gene_list_returns_empty_df_without_api_call(self):
+        gp_cls, instance = _make_gp_mock(_mock_gprofiler_result())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            df = run_go_enrichment([])
+        instance.profile.assert_not_called()
+        assert df.empty
+        assert "p_value" in df.columns
+
+    def test_api_returns_empty_df_gives_empty_result(self):
+        gp_cls, _ = _make_gp_mock(pd.DataFrame())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            df = run_go_enrichment(["TP53"])
+        assert df.empty
+
+    def test_api_returns_none_gives_empty_result(self):
+        gp_cls, _ = _make_gp_mock(None)
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            df = run_go_enrichment(["TP53"])
+        assert df.empty
+
+    def test_custom_sources_passed_to_api(self):
+        gp_cls, instance = _make_gp_mock(_mock_gprofiler_result())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            run_go_enrichment(["TP53"], sources=["GO:BP"], significant_only=False)
+        call_kwargs = instance.profile.call_args[1]
+        assert call_kwargs["sources"] == ["GO:BP"]
+
+    def test_custom_organism_passed_to_api(self):
+        gp_cls, instance = _make_gp_mock(_mock_gprofiler_result())
+        with patch.dict("sys.modules", {"gprofiler": MagicMock(GProfiler=gp_cls)}):
+            run_go_enrichment(["Trp53"], organism="mmusculus", significant_only=False)
+        call_kwargs = instance.profile.call_args[1]
+        assert call_kwargs["organism"] == "mmusculus"

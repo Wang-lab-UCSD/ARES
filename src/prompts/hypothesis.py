@@ -73,14 +73,32 @@ def build_refinement_prompt(
             "phyloP": "conservation (phyloP)",
             "string": "protein-protein interaction network (STRING DB)",
         }
-        names = [layers_desc.get(k, k) for k in unused_biology_layers]
-        biology_layers_guidance = f"""
-**Use additional data layers when possible**: The manifest provides {", ".join(names)}, but no supported result has used them yet. Convergence will require at least one hypothesis that uses expression or conservation data. Prefer proposing a hypothesis whose required_data includes one of these. Examples:
-- **RNA-seq**: link co-occupancy or motif grammar to gene expression (e.g. "genes near co-bound sites are more highly expressed")
-- **phyloP**: test conservation at grammar sites (e.g. "co-bound motif pairs are more conserved than solo motifs")
-- **STRING**: test whether TF_A and TF_B interact directly or share cofactors via the STRING protein-protein interaction network (e.g. "TF_A and TF_B have a high-confidence interaction or share >=2 common interactors in STRING, consistent with tethering or cofactor-mediated cooperation"). STRING data keys: string.species, string.api_base, string.min_score, etc. Use the STRING API to query interactions.
-
-"""
+        string_unused = "string" in unused_biology_layers
+        expr_cons_unused = [k for k in unused_biology_layers if k in ("rnaseq", "phyloP")]
+        nudge_lines = []
+        if string_unused:
+            nudge_lines.append(
+                "⚠️  **STRING/PPI is required for convergence and has not been checked yet.** "
+                "You MUST propose a hypothesis that queries the STRING protein–protein interaction network "
+                "before convergence is possible. Example: 'TF_A and TF_B share >=2 common interactors in STRING "
+                "(combined score >= 700), consistent with cofactor-mediated cooperation.' "
+                "Use `fetch_shared_partners([TF_A, TF_B])` from `src.utils.string_client`. "
+                "STRING data keys: string.species, string.api_base, string.min_score."
+            )
+        if expr_cons_unused:
+            nudge_lines.append(
+                "**Functional characterization required for convergence — not yet done.** "
+                "Propose a hypothesis that provides functional insight into the mechanism using ONE of:\n"
+                "- **GO / pathway enrichment (preferred)**: identify genes near co-bound peaks, run "
+                "`run_go_enrichment(gene_list)` from `src.utils.bioio`, and report which biological processes "
+                "or pathways are enriched. This characterizes what the TF pair *does* biologically.\n"
+                "- **RNA-seq**: link co-occupancy or mechanism to gene expression levels "
+                "(e.g. 'genes near co-bound sites show higher expression')\n"
+                "- **phyloP**: test evolutionary conservation at co-bound sites "
+                "(e.g. 'co-bound motif pairs are more conserved than solo-bound motifs')\n"
+                "Any one of these satisfies the functional characterization requirement."
+            )
+        biology_layers_guidance = "\n" + "\n\n".join(nudge_lines) + "\n\n" if nudge_lines else ""
 
     if last_hypothesis is not None and last_result is not None:
         support_level = last_result.get("support_level", "N/A")

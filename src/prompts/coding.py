@@ -16,7 +16,7 @@ CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Writ
 
 1. `pd.qcut()` on any DataFrame column → use `matched_bin(fg, bg, col)` instead
 2. `subprocess` call to `bedtools closest` → use `run_bedtools_closest_to_tss()` instead
-3. `.merge(... on='name' ...)` on narrowPeak frames → ENCODE `name` column is always `'.'`; join on coordinates or `peak_id`
+3. `.merge(... on='name' ...)` on narrowPeak frames → ENCODE `name` column is always `'.'`; join on coordinates or `peak_id`. Never pass a `lambda` as a `merge` key — pandas does not support it and raises `KeyError`
 4. `bw.stats()` directly → use `extract_bigwig_signals(df, bw_path)` instead
 5. `bedtools getfasta`, `fimo`, or `bw.stats()` inside any `for`/`while` loop → call each ONCE outside all loops
 6. `subprocess.run(..., shell=True)` or `bash -lc` for CLI tools → use `subprocess.run([...], shell=False)`
@@ -46,8 +46,11 @@ CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Writ
 | Look up motif IDs by TF name | `find_motif_ids_for_tf(tf_name, meme_file)` | hardcoded IDs |
 | RNA-seq loading | `load_rnaseq_with_gene_id(path)` or `load_rnaseq_expression(path)` | manual column parsing |
 | STRING PPI links | `load_string_links(path, min_score=400)` | `pd.read_csv(sep=' ')`, manual parsing |
+| STRING API (shared cofactors) | `fetch_shared_partners(["TF_A", "TF_B"])` from `src.utils.string_client` | custom `requests` calls |
+| Two-peak coordinate join | `intersect_peaks(df_a, df_b, mode='flag'/'count'/'wa-wb')` | `.merge(on='name')` or manual bedtools |
+| GO / pathway enrichment | `run_go_enrichment(gene_list)` from `src.utils.bioio` | `requests` to Enrichr/g:Profiler directly |
 
-All helpers are in `src.utils.bioio`. Only bypass a helper if it genuinely cannot produce the output shape you need, and explain why in a comment.
+All helpers are in `src.utils.bioio` (file-based) or `src.utils.string_client` (STRING API). Only bypass a helper if it genuinely cannot produce the output shape you need, and explain why in a comment.
 
 === API REFERENCE ===
 
@@ -81,6 +84,8 @@ fimo_df = run_fimo_on_peaks(
 )
 # → DataFrame: motif_id, sequence_name, start, stop, p-value, peak_id
 # peak_id matches col-4 (name) of peaks_bed — use for peak assignment
+# IMPORTANT: if peaks_bed is a NamedTemporaryFile path, call .flush() or .close()
+# BEFORE passing the path — unflushed buffers produce an empty file → EmptyDataError
 
 # count_overlapping_peaks
 result = count_overlapping_peaks(query_bed, subject_bed)
@@ -168,6 +173,31 @@ string_df = load_string_links(path, min_score=400)
 # → DataFrame: protein1, protein2, combined_score (+ any extra score columns)
 # Handles space-separated STRING files with or without header; filters to combined_score >= min_score
 # NEVER parse STRING files manually — separator is variable whitespace, headers are inconsistent
+
+# fetch_shared_partners  (STRING API — use when testing shared-cofactor hypotheses)
+from src.utils.string_client import fetch_shared_partners
+partners_df, shared = fetch_shared_partners(
+    ["TF_A", "TF_B"],           # gene symbols; results are cached on disk
+    species=9606,               # human
+    min_score=700,              # combined score threshold (0–1000)
+    min_escore=0.2,             # require experimental evidence
+    min_dscore=0.3,             # require curated DB evidence
+)
+# shared → set of gene symbols that interact with BOTH TF_A and TF_B
+# partners_df → full DataFrame with queryItem, preferredName_B, score, ...
+
+# intersect_peaks  (coordinate-based peak join — use instead of .merge(on='name'))
+from src.utils.bioio import intersect_peaks
+flagged = intersect_peaks(df_a, df_b, mode="flag")   # adds bool overlaps_b column
+counted = intersect_peaks(df_a, df_b, mode="count")  # adds overlap_count column
+joined  = intersect_peaks(df_a, df_b, mode="wa-wb")  # one row per overlapping pair
+
+# run_go_enrichment  (GO/KEGG enrichment via g:Profiler API — no local files needed)
+from src.utils.bioio import run_go_enrichment
+enrich_df = run_go_enrichment(gene_list, organism="hsapiens", sources=["GO:BP", "GO:MF", "KEGG"])
+# enrich_df columns: source, name, p_value, intersection_size, term_size, query_size, native
+# Returns empty DataFrame if no significant terms found
+print(enrich_df.head(10))
 ```
 
 === PRE-SUBMISSION SELF-CHECK ===

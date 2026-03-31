@@ -56,7 +56,7 @@ llm:
 execution:
   type: "jupyter"
   timeout_seconds: 900  # 15 min max per execution — covers FIMO + bigWig; kernel death is detected
-  max_retries: 5  # Each retry = 4 REPL iterations; total REPL budget = max_retries * 4 = 20
+  max_retries: 6  # Each retry = 4 REPL iterations; total REPL budget = max_retries * 4 = 24
   # max_static_rejections removed — v2 uses REPL loop, no static pre-gate
 
 pipeline:

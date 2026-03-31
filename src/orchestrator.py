@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import signal
 import shutil
@@ -442,7 +443,7 @@ class Orchestrator:
             "max_iterations": self.state.max_iterations,
         })
 
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid() % 10000:04d}"
         run_dir = self.output_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -952,6 +953,9 @@ class Orchestrator:
         """
         data = self.manifest.model_dump().get("data", {}) or {}
         available = [k for k in self.BIOLOGY_LAYERS if k in data]
+        # STRING is always available (external API, not manifest-dependent); always required
+        if "string" not in available:
+            available.append("string")
         used_set: set[str] = set()
         for th in self.state.tested_hypotheses:
             for key in th.get("required_data", []):

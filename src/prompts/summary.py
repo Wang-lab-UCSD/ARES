@@ -11,7 +11,7 @@ SUMMARY_SYSTEM_PROMPT = """You are a scientific result interpreter specializing 
 3. Extract key findings and statistics
 4. Identify any issues or anomalies in the results
 5. Prepare concise summaries for the hypothesis refinement process
-6. When writing the final report, go beyond the mechanistic explanation (why the ML rule works) to state the likely **biological purpose** of that rule: why the cell might use it and what function or selective advantage it could provide, with appropriate caveats.
+6. When writing the final report, go beyond the mechanistic explanation (why the ML rule works) to speculate on the likely **biological purpose** of that rule: why the cell might use it and what function or selective advantage it could provide. This is interpretation, not a finding — phrase it explicitly as speculation (e.g., "may serve to…", "consistent with a role in…", "one possibility is that…"). Do NOT state biological purpose as established fact.
 
 Be objective and precise in your interpretations.
 
@@ -85,7 +85,18 @@ REFUSES result do NOT count — the hypothesis must have been formally SUPPORTED
 
 4. **Cross-layer consistency**: The proposed mechanism must be supported by consistent directional evidence from at least two independent omics layers (e.g., ChIP-seq + DNase-seq, or motif analysis + histone marks, or Hi-C + expression). A single data type is not sufficient — convergence requires cross-validation across independent measurement modalities.
 
-5. **Biology layers when available**: If the manifest provides expression (rnaseq) or conservation (phyloP) data, at least one hypothesis must have **tested** at least one of these layers — the result can be SUPPORTS, REFUTES, or INCONCLUSIVE. The purpose is to ensure functional consequence or evolutionary conservation was characterized, not that it must confirm the mechanism. STRING/PPI satisfies the mechanism evidence requirement (Criterion 4) but does NOT substitute for rnaseq or phyloP here. Set converged=false only if rnaseq or phyloP was available but neither was ever attempted.
+5. **Biology layers — two independent sub-requirements, BOTH must be satisfied**:
+
+   **5a. STRING/PPI (always required)**: At least one hypothesis must have tested the STRING protein–protein interaction network — the result can be SUPPORTS, REFUTES, or INCONCLUSIVE. STRING is an external API that is always accessible; it is not contingent on the manifest. Set converged=false if STRING/PPI was never attempted in any hypothesis.
+
+   **5b. Functional characterization (required when available)**: If the manifest provides expression (rnaseq) or conservation (phyloP) data, at least one hypothesis must have addressed functional relevance using **one of** the following approaches — result can be SUPPORTS, REFUTES, or INCONCLUSIVE:
+   - **rnaseq**: link co-occupancy or mechanism to gene expression levels
+   - **phyloP**: test evolutionary conservation at co-bound sites
+   - **GO / pathway enrichment**: run GO term or pathway enrichment on genes associated with the mechanism (e.g. genes near co-bound peaks), to characterize the biological processes the TF pair regulates
+
+   The purpose is functional insight — understanding what the mechanism does biologically. Any one of these three approaches satisfies 5b. Set converged=false only if rnaseq or phyloP was available but none of these was ever attempted.
+
+   Note: STRING satisfies 5a (PPI check) but does NOT substitute for 5b. Both sub-requirements must be met independently.
 
 ## Mechanism Taxonomy (examples only — for understanding what "mechanism" means)
 
@@ -275,15 +286,22 @@ def build_convergence_check_prompt(
 
     biology_section = ""
     if available_biology_layers is not None and used_biology_layers is not None:
-        avail = ", ".join(available_biology_layers) if available_biology_layers else "none"
+        manifest_avail = [k for k in (available_biology_layers or []) if k != "string"]
+        avail_str = ", ".join(manifest_avail) if manifest_avail else "none"
         used = ", ".join(used_biology_layers) if used_biology_layers else "none"
+        string_checked = "string" in (used_biology_layers or [])
         biology_section = (
             "\n## Biology layers (expression / conservation / PPI)\n\n"
-            f"- **Available in this run** (from manifest): {avail}\n"
-            f"- **Used in at least one SUPPORTED hypothesis**: {used}\n\n"
-            "If rnaseq or phyloP is available but neither was ever tested in any hypothesis (any result), "
-            "set converged=false. The result of that hypothesis does not need to be SUPPORTS — "
-            "REFUTES or INCONCLUSIVE is fine. STRING/PPI does not substitute for rnaseq or phyloP here.\n"
+            f"- **STRING/PPI** (always required): {'✓ checked' if string_checked else '✗ NOT yet checked'}\n"
+            f"- **Expression/conservation layers available in manifest**: {avail_str}\n"
+            f"- **Biology layers used in any hypothesis (any result)**: {used}\n\n"
+            "Criterion 5a: STRING must be checked in at least one hypothesis (any result). "
+            "If STRING was never attempted, set converged=false.\n"
+            "Criterion 5b: If rnaseq or phyloP is listed above as available, at least one hypothesis must have "
+            "addressed functional relevance via rnaseq, phyloP, OR GO/pathway enrichment (any result). "
+            "Verify from the evidence summaries that the analysis was actually performed — a layer listed in "
+            "required_data but absent from the evidence summary does NOT satisfy 5b. "
+            "Set converged=false if none of rnaseq/phyloP/GO was genuinely analyzed.\n"
         )
 
     prompt = f"""# Scientific Finding Under Investigation
@@ -313,7 +331,9 @@ PREREQUISITE: At least one hypothesis must have support_level = "SUPPORTS". If n
 2. Named mechanism: a specific molecular process with a clear causal/mechanistic interpretation, not merely correlation. The mechanism can be anything that fits the evidence—it need not match any predefined category. Set mechanism_category_number to null and put a descriptive name in mechanism_category_name.
 3. But-for test (only when causal-capable data: causal, not merely correlational)
 4. Cross-layer consistency (consistent directional support from >= 2 independent omics layers)
-5. Biology layers: when rnaseq or phyloP is available, at least one hypothesis must have tested at least one of them (any result — SUPPORTS/REFUTES/INCONCLUSIVE all count); STRING/PPI does not substitute. Set converged=false only if rnaseq or phyloP was available but never attempted.
+5. Biology layers — two independent sub-requirements (BOTH must be met):
+   5a. STRING/PPI (always required): at least one hypothesis must have tested STRING (any result). Always required regardless of manifest.
+   5b. Functional characterization (when available): if rnaseq or phyloP is in the manifest, at least one hypothesis must have addressed functional relevance via rnaseq, phyloP, OR GO/pathway enrichment analysis (any result). STRING does NOT substitute.
 
 When converged=true, always fill mechanism_category_name with a descriptive mechanism name. Set mechanism_category_number to null (the taxonomy is for reference only). In observational mode, the conclusion must state that causality is not established.
 
@@ -323,7 +343,7 @@ Respond in JSON format:
     "mechanism_category_number": null or integer 1-12 (use null unless the mechanism clearly matches a taxonomy example),
     "mechanism_category_name": "<string; when converged, provide a descriptive mechanism name>",
     "confidence": 0.0-1.0,
-    "conclusion": "<one-paragraph causal conclusion if converged, else empty string>",
+    "conclusion": "<one-paragraph mechanistic interpretation if converged, else empty string. For observational data: use association language only ('co-occupancy data suggest…', 'consistent with…', 'associated with…'). Forbidden: 'proves', 'demonstrates', 'drives', 'causes', 'enables'. Must state that causality is not established from observational data.>",
     "reasoning": "<explanation of why each criterion is or is not met>"
 }}
 """
@@ -480,10 +500,21 @@ Generate a comprehensive final report summarizing the investigation. The report 
 3. **Key Findings**: Most important discoveries
 4. **Evidence Summary**: Supporting evidence for the conclusion
 5. **Synthesis / mechanism comparison**: If multiple hypotheses were tested, provide a short integrative narrative: which mechanism(s) are best supported, which were ruled out, and how they relate (e.g. a small comparison table). The mechanism can be anything that fits the evidence—it need not match any predefined category. Prefer a concise comparison table (e.g. mechanism vs evidence vs outcome) when there are several hypotheses.
-6. **Biological purpose**: Go one step beyond the mechanism: state the **biological purpose** (functional interpretation) of the supported rule. Why might the cell use this rule? What selective or functional advantage could it provide? Consider e.g. precise transcriptional control, cell-type or developmental identity, stress/dynamic response, promoter robustness, or other plausible rationales. Phrase as interpretation with appropriate caveats (e.g. "may serve to…", "consistent with a role in…"). Do not invent evidence; base this on the supported mechanism and the biological roles of the molecules involved.
+6. **Biological purpose (speculative)**: Go one step beyond the mechanism: speculate on the **biological purpose** (functional interpretation) of the supported rule. Why might the cell use this rule? What selective or functional advantage could it provide? Consider e.g. precise transcriptional control, cell-type or developmental identity, stress/dynamic response, promoter robustness, or other plausible rationales.
+
+   **LANGUAGE RULES for this section (strictly enforced)**:
+   - Every sentence must use hedged phrasing. Required starters: "may serve to…", "consistent with a role in…", "one possibility is that…", "this arrangement could allow…", "suggests a model in which…".
+   - **Forbidden causal words**: "proves", "demonstrates", "establishes", "drives", "causes", "enables" (unless preceded by "may" or "could"), "the mechanism is", "TF_X acts as a [role]" stated as fact.
+   - At the end of this section, add one sentence explicitly stating: "These functional interpretations are speculative; the available data are observational and do not establish causality."
+   - Do not invent evidence; base this only on the supported mechanism and the known biological roles of the molecules involved.
 7. **Confidence Level**: How confident we are in the conclusion
 8. **Limitations**: What we couldn't determine or potential issues
 9. **Recommendations**: Suggested follow-up experiments if any
+
+**CRITICAL — causal language**: This run uses observational data (ChIP-seq, bulk RNA-seq, epigenomics). Observational data show **association**, not causation. Throughout the entire report:
+- Use: "co-occupancy data suggest…", "consistent with…", "associated with…", "the best-supported interpretation is…", "the evidence is consistent with a model in which…"
+- **Forbidden**: "proves", "demonstrates", "establishes", "X drives Y", "X causes Y", "X enables Y" (unless qualified with "may" or "could"), "the mechanism is" stated as settled fact.
+- In the Executive Summary and Conclusion sections, add one explicit sentence: "Because these data are observational, the proposed mechanism represents the best-supported interpretation and does not establish causality."
 
 **CRITICAL — outcome accuracy**: When describing whether a hypothesis was supported or
 refused, you MUST use the exact **Support Level** recorded in the "Evidence Collected"
