@@ -96,9 +96,14 @@ class CodingAgent:
         all_stdout_parts: list[str] = []
         no_tag_count = 0
 
-        for iteration in range(1, max_iterations + 1):
+        iteration = 0       # counts only actual code executions
+        llm_turns = 0      # counts all LLM calls (including narration-only)
+        _MAX_LLM_TURNS = max_iterations * 2  # hard cap to prevent infinite loops
+        while iteration < max_iterations and llm_turns < _MAX_LLM_TURNS:
+            llm_turns += 1
             self.logger.info("REPL iteration", {
-                "iteration": iteration,
+                "iteration": iteration + 1,
+                "llm_turn": llm_turns,
                 "hypothesis": hypothesis.get("name", "N/A"),
             })
 
@@ -143,6 +148,7 @@ class CodingAgent:
                 continue
 
             no_tag_count = 0
+            iteration += 1  # count only actual code executions toward the budget
             messages.append(Message.assistant(content))
 
             # Execute only the FIRST block per LLM turn — true incremental REPL.

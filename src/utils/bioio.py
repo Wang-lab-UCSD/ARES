@@ -377,8 +377,8 @@ def parse_bedtools_closest(
 
 
 def run_bedtools_closest_to_tss(
-    peaks_bed: str | Path,
-    tss_bed: str | Path,
+    peaks_bed: str | Path | pd.DataFrame,
+    tss_bed: str | Path = None,
     max_distance: int | None = None,
     peak_cols: int | None = None,
     tss_cols: int | None = None,
@@ -399,6 +399,8 @@ def run_bedtools_closest_to_tss(
     # Resolve gtf_path alias
     if gtf_path is not None and tss_bed is None:
         tss_bed = gtf_path
+    if tss_bed is None:
+        raise ValueError("Either tss_bed or gtf_path must be provided")
 
     # Auto-convert GTF → TSS BED
     _tmp_tss_dir = None
@@ -413,6 +415,19 @@ def run_bedtools_closest_to_tss(
         )
         tss_bed = str(_tss_path)
         tss_cols = tss_cols or 6
+
+    # Write DataFrame inputs to temp BED files
+    _tmp_peaks_file = None
+    if isinstance(peaks_bed, pd.DataFrame):
+        import tempfile as _tf
+        _tmp_peaks_file = _tf.NamedTemporaryFile(
+            suffix=".bed", prefix="tss_peaks_", delete=False, mode="w"
+        )
+        bed_cols = ["chrom", "start", "end"]
+        extra = [c for c in peaks_bed.columns if c not in bed_cols][:3]
+        peaks_bed[bed_cols + extra].to_csv(_tmp_peaks_file, sep="\t", header=False, index=False)
+        _tmp_peaks_file.close()
+        peaks_bed = _tmp_peaks_file.name
 
     peaks_bed = str(peaks_bed)
     tss_bed = str(tss_bed)
@@ -474,12 +489,18 @@ def run_bedtools_closest_to_tss(
             df["distance"] = pd.to_numeric(df["distance"], errors="coerce")
             df = df[df["distance"] <= max_distance].copy()
 
-    # Cleanup temp TSS dir if we created one
+    # Cleanup temp files
     if _tmp_tss_dir is not None:
         import shutil as _shutil
         try:
             _shutil.rmtree(_tmp_tss_dir, ignore_errors=True)
         except Exception:
+            pass
+    if _tmp_peaks_file is not None:
+        try:
+            import os as _os
+            _os.unlink(_tmp_peaks_file.name)
+        except OSError:
             pass
 
     return df
@@ -662,19 +683,19 @@ def annotate_peaks_with_chromhmm(
         else:
             df["is_enhancer_state"] = False
 
-    # Clean up any temp files created from DataFrame inputs
-    for _p in _tmp_files:
-        try:
-            import os as _os
-            _os.unlink(_p)
-        except OSError:
-            pass
-
     if not keep_one_per_peak:
+        # Clean up temp files and return early
+        for _p in _tmp_files:
+            try:
+                import os as _os
+                _os.unlink(_p)
+            except OSError:
+                pass
         return df
 
     # --- Deduplicate to exactly one row per input peak ---
     # Load input peaks to get their count and coordinates for re-indexing.
+    # Must read BEFORE cleaning up temp files (peaks_bed may be a temp file).
     _peaks_src = peaks_bed  # already a path string at this point
     _peaks_df = pd.read_csv(_peaks_src, sep="\t", header=None,
                             usecols=list(range(min(peak_cols, 3))),
@@ -714,6 +735,14 @@ def annotate_peaks_with_chromhmm(
     # Guarantee row count matches input (safeguard against duplicate coords in peaks)
     if len(out) != n_peaks:
         out = out.groupby(pk_key, sort=False).first().reset_index()
+
+    # Clean up temp files now that all reads are done
+    for _p in _tmp_files:
+        try:
+            import os as _os
+            _os.unlink(_p)
+        except OSError:
+            pass
 
     return out.reset_index(drop=True)
 
@@ -902,6 +931,8 @@ def run_fimo_on_peaks(
                 names = pd.Series([f"peak_{i:05d}" for i in range(len(peaks_df))])
                 peaks_df = peaks_df.copy()
                 if peaks_df.shape[1] >= 4:
+                    col = peaks_df.columns[3]
+                    peaks_df[col] = peaks_df[col].astype(object)
                     peaks_df.iloc[:, 3] = names
                 else:
                     peaks_df[3] = names

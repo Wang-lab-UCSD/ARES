@@ -153,6 +153,12 @@ if _codex_project_root not in sys.path:
 os.environ["PYTHONPATH"] = _codex_project_root + os.pathsep + os.environ.get("PYTHONPATH", "")
 Path(_codex_working_dir).mkdir(parents=True, exist_ok=True)
 os.chdir(_codex_working_dir)
+
+import pandas as pd
+pd.set_option('display.max_rows', 5)
+pd.set_option('display.max_columns', 10)
+pd.set_option('display.width', 120)
+pd.set_option('display.max_colwidth', 40)
 """.strip()
 
     async def start(self) -> None:

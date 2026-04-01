@@ -27,6 +27,7 @@ CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Writ
 9. More than 100 permutation replicates → hard cap is 100; ignore any higher number in the hypothesis
 10. Tiling the genome or annotation for background → use `bedtools shuffle -i peaks.bed -g chrom.sizes`
 11. Scanning all FIMO motifs when hypothesis names specific ones → pass `--motif <ID>`; use `find_motif_ids_for_tf()` to look up the ID
+11a. Parsing FIMO output manually with `pd.read_csv`, column-index slicing, or hand-rolling `sequence_name`/`motif_id` column detection → always use `parse_fimo_tsv(path)`; it handles both `fimo.txt` and `fimo.tsv` format variants and normalizes column names
 12. Custom multi-file concat helpers (e.g. `_concat_files()`, `_merge_files()`) → use `pd.concat([pd.read_csv(f, ...) for f in files])` inline
 13. `pd.read_csv(string_file, sep=' ')` or `sep='\t'` for STRING files → STRING uses variable whitespace; always use `load_string_links(path)`
 
@@ -39,7 +40,7 @@ CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Writ
 | bigWig signal | `extract_bigwig_signals(df, bw_path)` | `bw.stats()` or row loops |
 | Signal-matched controls | `matched_bin(fg, bg, signal_col)` | `pd.qcut()` |
 | Nearest TSS + expression | `link_peaks_to_expression(peaks, rnaseq, gtf)` | chained TSS calls |
-| Nearest TSS distance only | `run_bedtools_closest_to_tss(peaks, tss)` | subprocess bedtools closest |
+| Nearest TSS distance only | `run_bedtools_closest_to_tss(peaks_df_or_path, gtf_path=gtf)` | subprocess bedtools closest |
 | ChromHMM annotation | `annotate_peaks_with_chromhmm(peaks, chromhmm)` | manual intersect |
 | narrowPeak loading | `read_narrowpeak(path)` | `pd.read_csv` with column guesses |
 | FIMO TSV parsing | `parse_fimo_tsv(path)` | manual `read_csv` |
@@ -145,7 +146,9 @@ tss_df = create_tss_bed_from_gencode(gtf_path, upstream=2000, downstream=2000)
 # → BED DataFrame: chrom, start, end, gene_id, score, strand, gene_name, gene_type
 
 # run_bedtools_closest_to_tss
-closest_df = run_bedtools_closest_to_tss(peaks_bed, tss_bed, max_distance=50000)
+# peaks_bed accepts a file path (str/Path) OR a pandas DataFrame with chrom/start/end columns.
+# tss_bed is OPTIONAL — provide either tss_bed (BED file) or gtf_path (GENCODE GTF, auto-converted).
+closest_df = run_bedtools_closest_to_tss(peaks_df, gtf_path=data_files["gencode"])
 # → DataFrame: peak_chrom, peak_start, peak_end, peak_name (A-side, "peak_*" prefix)
 #              tss_chrom, tss_start, tss_end, gene_id, score, strand (B-side)
 #              distance
@@ -250,27 +253,31 @@ def build_coding_system_prompt(tools: list[str] | None = None) -> str:
 
 
 def _format_prior_evidence(prior_evidence: list[dict[str, Any]]) -> str:
-    """Format previously supported hypotheses as confounders for the coding prompt."""
+    """Format all prior iteration findings and computations for the coding prompt."""
     if not prior_evidence:
         return ""
 
-    supported = [e for e in prior_evidence if e.get("support_level") in ("SUPPORTS", "INCONCLUSIVE")]
-    if not supported:
-        return ""
-
     parts = [
-        "# Previously Supported Findings (you MUST control for these)",
+        "# Prior Iteration Results",
         "",
-        "The following hypotheses were already supported in earlier iterations.",
-        "Your test MUST show that the current hypothesis explains something these",
-        "prior findings cannot. If the current effect disappears after controlling",
-        "for a prior finding, that means the current hypothesis is NOT independently supported.",
+        "The Jupyter kernel is shared across all iterations. Data computed in prior",
+        "iterations (FIMO scans, peak overlaps, getfasta output, bigWig extractions)",
+        "may still be available as Python variables — check before recomputing.",
         "",
     ]
-    for e in supported:
-        parts.append(f"**{e.get('hypothesis_name', 'N/A')}** ({e.get('support_level')}, confidence {e.get('confidence', '?')}):")
+    for e in prior_evidence:
+        support = e.get("support_level", "UNKNOWN")
+        parts.append(f"**{e.get('hypothesis_name', 'N/A')}** → {support}:")
         parts.append(f"  {e.get('summary', 'No summary')[:300]}")
         parts.append("")
+
+    supported = [e for e in prior_evidence if e.get("support_level") in ("SUPPORTS", "INCONCLUSIVE")]
+    if supported:
+        parts += [
+            "The following were SUPPORTED or INCONCLUSIVE — your test MUST show the",
+            "current hypothesis explains something these cannot, or control for them.",
+            "",
+        ]
 
     return "\n".join(parts)
 
@@ -461,7 +468,7 @@ def _build_review_constraints_block(issues: list[str]) -> str:
 
     if "bedtools closest" in joined:
         forbidden.append("subprocess call to 'bedtools closest'")
-        required.append("run_bedtools_closest_to_tss(peaks_bed, tss_bed)  # from src.utils.bioio")
+        required.append("run_bedtools_closest_to_tss(peaks_df, gtf_path=gtf)  # from src.utils.bioio")
 
     if "link_peaks_to_expression" in joined or (
         "nearest" in joined and "gene" in joined and "expression" in joined
@@ -628,8 +635,10 @@ def build_repl_system_prompt() -> str:
 You reason and execute code in small, incremental steps:
 
 - Use <think>...</think> to reason about what to do next (optional but encouraged).
-- Use <execute>...</execute> to run Python code. The kernel is persistent — variables
-  set in one block are available in the next. Always use exactly `<execute>` with no
+- Use <execute>...</execute> to run Python code. The kernel is persistent across ALL
+  iterations of this run — variables and results computed in previous iterations are
+  still in memory. Before re-computing something (FIMO scans, peak overlaps, getfasta,
+  bigWig extraction), check whether the result already exists as a variable. Always use exactly `<execute>` with no
   attributes (not `<execute code>`, `<execute python>`, etc.).
   **Send exactly ONE <execute> block per message.** Wait for the observation before
   writing the next block. Do NOT send multiple <execute> blocks in one response —
@@ -655,6 +664,10 @@ reasoning: <explanation of the evidence and why it supports/refutes the hypothes
 - No matplotlib or seaborn — print statistics only.
 - Max 100 permutation replicates.
 - Use data_files['key'] to access files — it is pre-injected into the kernel.
+- **Early stopping**: If the first prediction in the verification plan is clearly refuted
+  (wrong direction, not significant, or effect far below threshold), stop immediately and
+  emit a REFUTES <solution>. Do NOT continue testing remaining predictions — they cannot
+  rescue a failed core prediction. This saves REPL iterations and cost.
 
 """ + CODING_SYSTEM_PROMPT_BASE
 

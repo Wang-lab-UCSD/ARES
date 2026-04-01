@@ -312,6 +312,10 @@ The hypothesis must name a specific causal mechanism — a molecular event expla
 TF_B predicts TF_A binding. Reject if it merely describes the data (where, what, how much)
 or re-confirms co-occurrence without proposing a mechanism.
 
+**EXCEPTION**: If prior hypotheses already SUPPORT a mechanism AND the new hypothesis tests
+functional relevance of that supported mechanism (via GO enrichment, RNA-seq expression, or
+phyloP conservation), APPROVE it — this is required for convergence, not idle characterization.
+
 BAD (characterization or co-occurrence re-statement — reject):
 - "Are the shared sites at promoters or enhancers?" — describes where, not why
 - "Does the correlation hold genome-wide?" — confirms co-occurrence at larger scale

@@ -27,7 +27,7 @@ fi
 mkdir -p logs
 
 CONFIG_FILE="${CONFIG_FILE:-config/config.yaml}"
-MANIFEST_FILE="${MANIFEST_FILE:-examples/sp1_nfya_K562/data_manifest.yaml}"
+MANIFEST_FILE="${MANIFEST_FILE:-examples/fos_nfyb_K562/data_manifest.yaml}"
 
 python -m src.main \
   --config "${CONFIG_FILE}" \

@@ -61,12 +61,23 @@ def build_refinement_prompt(
     """
     data_section = _format_data_manifest(data_manifest)
     different_mechanism_guidance = ""
-    if encourage_different_mechanism:
+    has_supports = encourage_different_mechanism  # True when at least one SUPPORTS exists
+    biology_layers_guidance = ""
+
+    # Determine if 5b is the only thing blocking convergence
+    expr_cons_unused = []
+    if unused_biology_layers:
+        expr_cons_unused = [k for k in unused_biology_layers if k in ("rnaseq", "phyloP")]
+    _5b_is_blocker = has_supports and bool(expr_cons_unused)
+
+    # Show diversity guidance only when 5b is NOT the remaining blocker —
+    # otherwise it conflicts with the "do functional characterization NOW" instruction.
+    if encourage_different_mechanism and not _5b_is_blocker:
         different_mechanism_guidance = """
 **Diversity after support**: At least one hypothesis has already **SUPPORTS**. Prefer proposing a hypothesis that tests a **different** mechanism (e.g. pioneer vs tethering vs chromatin modifier—these are examples of what "different mechanism" means, not a prescribed list; propose whatever mechanism best fits the data), so the conclusion can compare or synthesize across mechanisms. *Exception*: If you are testing a previously supported mechanism using a fundamentally NEW data modality (like moving from ChIP to RNA-seq or phyloP for cross-layer validation), that is highly encouraged and not considered repetitive.
 
 """
-    biology_layers_guidance = ""
+
     if unused_biology_layers:
         layers_desc = {
             "rnaseq": "expression (RNA-seq)",
@@ -74,18 +85,33 @@ def build_refinement_prompt(
             "string": "protein-protein interaction network (STRING DB)",
         }
         string_unused = "string" in unused_biology_layers
-        expr_cons_unused = [k for k in unused_biology_layers if k in ("rnaseq", "phyloP")]
+        # expr_cons_unused already computed above
         nudge_lines = []
         if string_unused:
             nudge_lines.append(
                 "⚠️  **STRING/PPI is required for convergence and has not been checked yet.** "
                 "You MUST propose a hypothesis that queries the STRING protein–protein interaction network "
-                "before convergence is possible. Example: 'TF_A and TF_B share >=2 common interactors in STRING "
-                "(combined score >= 700), consistent with cofactor-mediated cooperation.' "
+                "before convergence is possible. Example: 'TF_A and TF_B have a direct interaction or share "
+                ">=1 common interactor in STRING (combined score >= 700).' "
                 "Use `fetch_shared_partners([TF_A, TF_B])` from `src.utils.string_client`. "
                 "STRING data keys: string.species, string.api_base, string.min_score."
             )
-        if expr_cons_unused:
+        if expr_cons_unused and has_supports:
+            nudge_lines.append(
+                "⚠️  **Functional characterization is the ONLY remaining convergence criterion.** "
+                "You already have a supported mechanism. Do NOT propose a new mechanism — instead, "
+                "you MUST propose a hypothesis that tests functional relevance of the supported mechanism "
+                "using ONE of:\n"
+                "- **GO / pathway enrichment (preferred)**: identify genes near co-bound peaks, run "
+                "`run_go_enrichment(gene_list)` from `src.utils.bioio`, and report which biological processes "
+                "or pathways are enriched. This characterizes what the TF pair *does* biologically.\n"
+                "- **RNA-seq**: link co-occupancy or mechanism to gene expression levels "
+                "(e.g. 'genes near co-bound sites show higher expression')\n"
+                "- **phyloP**: test evolutionary conservation at co-bound sites "
+                "(e.g. 'co-bound motif pairs are more conserved than solo-bound motifs')\n"
+                "Any one of these satisfies the requirement. Do NOT explore other mechanisms until this is done."
+            )
+        elif expr_cons_unused:
             nudge_lines.append(
                 "**Functional characterization required for convergence — not yet done.** "
                 "Propose a hypothesis that provides functional insight into the mechanism using ONE of:\n"
