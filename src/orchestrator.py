@@ -786,6 +786,7 @@ class Orchestrator:
             narrative.finalize(
                 conclusion=self.state.conclusion or "",
                 converged=self.state.converged,
+                total_cost=self.cost_tracker.session_cost if self.cost_tracker else None,
             )
             final_result = await self._generate_final_output(run_dir)
 

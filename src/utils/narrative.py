@@ -103,7 +103,9 @@ class NarrativeLog:
 
         self._append("\n".join(lines))
 
-    def finalize(self, conclusion: str, converged: bool) -> None:
+    def finalize(
+        self, conclusion: str, converged: bool, total_cost: float | None = None
+    ) -> None:
         status = "CONVERGED" if converged else "NOT CONVERGED"
         lines = [
             "## Final Conclusion",
@@ -113,6 +115,8 @@ class NarrativeLog:
             (conclusion or "Investigation incomplete.").strip(),
             "",
         ]
+        if total_cost is not None:
+            lines += [f"**Total cost**: ${total_cost:.2f}", ""]
         self._append("\n".join(lines))
 
     # ------------------------------------------------------------------
