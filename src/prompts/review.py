@@ -339,6 +339,9 @@ Common irrelevant steps to catch:
 - GO enrichment or gene expression in a hypothesis about motif co-occurrence or pioneer activity — functional annotation describes context, does not test the mechanism
 - ChromHMM or TSS-distance annotation in a hypothesis about protein-protein interaction — genomic context does not falsify a PPI claim
 
+Also reject if any step requires a **genome-wide FIMO scan** or any operation on the full genome
+FASTA — these will time out. Motif scans must be scoped to peak regions, not the whole genome.
+
 Do NOT reject for:
 - The number of steps (1–3 steps are all fine)
 - Statistical methodology concerns (test design, controls, bias, confounding)

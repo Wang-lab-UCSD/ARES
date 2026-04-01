@@ -326,6 +326,17 @@ pd.set_option('display.max_colwidth', 40)
                     msg = self._kc.get_iopub_msg(timeout=timeout)
                 except queue.Empty:
                     self.logger.error("Execution timed out")
+                    # Interrupt the kernel to kill the hung execution so the
+                    # next code block can run on a clean kernel.
+                    try:
+                        if self._km:
+                            self._km.interrupt_kernel()
+                            self.logger.info("Kernel interrupted after timeout")
+                    except Exception as intr_err:
+                        self.logger.warning(
+                            "Failed to interrupt kernel after timeout",
+                            {"error": str(intr_err)},
+                        )
                     return ExecutionResult(
                         success=False,
                         error="Execution timed out",

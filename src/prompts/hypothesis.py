@@ -234,6 +234,11 @@ Check type alignment (only use when directly required by the mechanism):
 - STRING/PPI → only for protein-interaction mechanisms, never for DNA-sequence or chromatin hypotheses
 - ChromHMM / TSS-distance / GO enrichment → only when the prediction explicitly involves chromatin state, promoter proximity, or gene function
 
+**Forbidden operations in verification plans** — these will time out and waste the entire iteration:
+- Genome-wide FIMO scans (scanning hg38 takes hours). Always scan within peak regions only.
+- Any operation on the full genome FASTA. Always scope to peak regions or specific intervals.
+- Genome-wide shuffled background with FIMO. Use bedtools shuffle + scan the shuffled peaks, not the whole genome.
+
 When relevant, always check **both conditional directions** (e.g., "% of SP1 peaks with NFYA"
 AND "% of NFYA peaks with SP1"). An asymmetric relationship (NFYA almost always with SP1,
 but SP1 not always with NFYA) is a strong mechanistic signal that would be missed by one
