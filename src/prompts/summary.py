@@ -29,6 +29,10 @@ job is to check whether that specific prediction was confirmed.
   Note: ChIP-seq and epigenomic enrichment analyses routinely produce 1.2–1.5× fold
   changes that are biologically meaningful and reproducible. Do not require 1.5× as
   a hard threshold for these data types.
+  For co-occupancy: if fold enrichment over background is ≥10-fold and p < 0.05, the
+  prediction is SUPPORTED even if the absolute overlap percentage is below the hypothesis
+  threshold — low absolute percentage with high fold enrichment means the co-occupancy is
+  real but both TFs cover a small fraction of the genome.
 
 **INCONCLUSIVE** — The effect is real but weak:
   1. p < 0.05
@@ -40,6 +44,12 @@ job is to check whether that specific prediction was confirmed.
   2. p >= 0.05 with adequate sample size (N >= 30)
   3. fold change < 1.1 AND Cohen's d < 0.15
   If clearly refused, set support_level = "REFUSES" and confidence >= 0.7.
+
+  **STRING exception**: When a hypothesis is tested solely via STRING and no interaction is
+  found, set REFUSES but with confidence 0.5-0.7 (not 1.0). STRING is biased toward
+  well-studied proteins — absence of a STRING edge lowers the prior on PPI but does not
+  definitively disprove it. If other genomic evidence supports PPI (co-occupancy, signal
+  correlation), note this in reasoning.
 
 **ERROR** — Technical failure prevented analysis (code crashed, wrong file format, etc.)
 
@@ -88,9 +98,11 @@ motif enrichment). Treat this result as follows:
   The pipeline MAY converge immediately on "technical artifact" as the conclusion — criteria
   2-5 are waived because there is no biological mechanism to characterize.
 
-The QC hypothesis's use of RNA-seq (TPM lookup) or motif scanning does NOT satisfy criterion
-5b (functional characterization). Criterion 5b requires linking the mechanism to gene function
-(GO enrichment, expression at target genes, or conservation) — not just checking if TF_A is
+The QC hypothesis's use of RNA-seq (TPM lookup) or motif scanning does NOT satisfy ANY
+convergence criterion — not 5a (STRING/PPI), not 5b (functional characterization), not
+criterion 1 (statistical support for a mechanism). Criterion 5b requires linking the mechanism
+to gene function (GO enrichment, expression at target genes, or conservation) — not just
+checking if TF_A is
 expressed. Do not count QC data usage toward any convergence criterion.
 
 1. **Statistical support**: At least one hypothesis with support_level = "SUPPORTS" (i.e., p < 0.05 with fold change >= 1.2 OR Cohen's d >= 0.3, and the predicted effect confirmed). Do NOT cherry-pick individual statistics from a REFUSES result to satisfy this criterion — the overall support_level must be SUPPORTS.

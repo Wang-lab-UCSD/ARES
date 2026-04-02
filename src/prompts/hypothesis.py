@@ -93,9 +93,22 @@ def build_refinement_prompt(
                 "When you propose a protein-interaction hypothesis, include a STRING query as the first "
                 "verification step. Do NOT add STRING to non-PPI hypotheses (DNA-sequence, chromatin, "
                 "motif similarity) — the review agent will reject it as irrelevant.\n"
-                "Use `fetch_shared_partners([TF_A, TF_B])` from `src.utils.string_client`. "
-                "**STRING prediction threshold**: direct interaction (combined score >= 700) OR >=1 shared "
-                "interactor (combined score >= 700 to each)."
+                "Prefer `load_string_links(data_files['links_file'])` (local file, no rate limits) over "
+                "`fetch_shared_partners()` (API, has rate limits across parallel jobs).\n"
+                "**STRING score tiers** (use the appropriate tier for the hypothesis):\n"
+                "- >=900: direct physical contact (high-confidence experimental binding)\n"
+                "- >=700: strong interaction (use for direct TF-TF contact hypotheses)\n"
+                "- >=400: moderate interaction (use for shared partners, cofactor bridging, "
+                "and non-DBD protein recruitment)\n"
+                "- <150: background / not mechanistically informative\n"
+                "Match the tier to the hypothesis: direct TF-TF tethering → >=700; "
+                "shared cofactor network → >=400; non-DBD protein partners → >=400.\n"
+                "**IMPORTANT**: Absence of STRING evidence does NOT eliminate PPI mechanisms. "
+                "STRING is biased toward well-studied factors — many real interactions have not "
+                "been assayed. A negative STRING result should lower the prior on PPI (make it "
+                "less likely), not definitively refute it. If other evidence supports PPI "
+                "(e.g., high co-occupancy, signal correlation at co-bound sites), the mechanism "
+                "remains plausible despite no STRING edge."
             )
         if expr_cons_unused and has_supports:
             nudge_lines.append(
@@ -288,9 +301,30 @@ artifact/cross-reactivity hypotheses. If TF_A is expressed but motif enrichment 
 (1.2-2.0 fold), prioritize indirect/tethering mechanisms. If only expression failed but
 motif is enriched, proceed with caution but do not assume artifact.
 
+**No-DBD adjustment**: If the QC check found TF_A has NO motif in the database (no DNA-binding
+domain), adjust ALL subsequent hypothesis thresholds:
+- Co-occupancy: expect <20% overlap with any single TF (not 30-50%) — non-DBD proteins are
+  recruited indirectly and will never show high overlap with a single partner.
+- STRING: use the >=400 tier (moderate interaction) for shared partners and bridging proteins,
+  not >=700 — indirect recruiters interact through cofactors at lower confidence thresholds.
+- When searching for recruiting partners, do NOT restrict to TFs with similar motifs. Instead
+  use a two-stage screen: (1) loop through all_tf_chipseq directories, calculate peak overlap
+  fraction with TF_A for each TF (bedtools intersect is fast, ~1s per TF), rank by overlap;
+  (2) check STRING only for the top 10-20 TFs by overlap. This avoids 352 STRING queries while
+  still casting a wide net.
+
 When the last result **REFUSES** or is **INCONCLUSIVE** but its findings include strong or
-surprising patterns (e.g., large effects in unexpected directions, subgroups behaving
-differently, sharp gradients across strata), your next hypothesis MUST propose a mechanism
+surprising patterns, your next hypothesis MUST propose a mechanism that EXPLAINS those
+patterns. Examples of surprising patterns that MUST be followed up:
+- Large fold enrichment despite low absolute percentage (e.g., 108-fold co-occupancy at 23% overlap)
+- Correlation in the unexpected direction (e.g., negative DNase-motif correlation)
+- Effect in the opposite direction from prediction (e.g., higher methylation where lower was expected)
+- Positive signal correlation between TFs despite no STRING interaction
+
+Do NOT discard these as "failed predictions." They are the most informative results — they
+tell you the mechanism is different from what you hypothesized, not that there is no mechanism.
+
+Your next hypothesis MUST propose a mechanism
 that explains those patterns themselves. Do NOT simply re-ask the same question with
 slightly different thresholds or proxies. Treat the surprising observations as a new
 phenomenon to explain. Even if the overall hypothesis was rejected, you should use any positive, interesting signals as a foundation for your next hypothesis so that the final conclusion weaves these iterations into a coherent story.

@@ -1445,9 +1445,13 @@ def load_string_links(
         (plus any extra columns from the file), filtered to ``>= min_score``.
     """
     path = Path(path)
+    # Auto-detect gzip
+    import gzip as _gzip
+    _opener = _gzip.open if str(path).endswith(".gz") else open
+
     # Peek at first non-empty, non-comment line to detect separator
     header_line: str | None = None
-    with open(path, encoding="utf-8") as fh:
+    with _opener(path, "rt", encoding="utf-8") as fh:
         for line in fh:
             stripped = line.strip()
             if not stripped:
@@ -1465,6 +1469,7 @@ def load_string_links(
         comment="#",
         header=None,
         engine="python",
+        compression="gzip" if str(path).endswith(".gz") else None,
     )
 
     # Try to detect a header from the first real line of the file

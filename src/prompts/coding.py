@@ -48,8 +48,8 @@ CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Writ
 | bedtools `closest -d` output | `parse_bedtools_closest(path, a_col_count, b_col_count)` | positional indexing |
 | Look up motif IDs by TF name | `find_motif_ids_for_tf(tf_name, meme_file)` | hardcoded IDs |
 | RNA-seq loading | `load_rnaseq_with_gene_id(path)` or `load_rnaseq_expression(path)` | manual column parsing |
-| STRING PPI links | `load_string_links(path, min_score=400)` | `pd.read_csv(sep=' ')`, manual parsing |
-| STRING API (shared cofactors) | `fetch_shared_partners(["TF_A", "TF_B"])` from `src.utils.string_client` | custom `requests` calls |
+| STRING PPI links (PREFERRED) | `load_string_links(path, min_score=400)` | `pd.read_csv(sep=' ')`, manual parsing |
+| STRING API (FALLBACK ONLY) | `fetch_shared_partners(["TF_A", "TF_B"])` from `src.utils.string_client` — only if local file unavailable | custom `requests` calls |
 | Two-peak coordinate join | `intersect_peaks(df_a, df_b, mode='flag'/'count'/'wa-wb')` | `.merge(on='name')` or manual bedtools |
 | GO / pathway enrichment | `run_go_enrichment(gene_list)` from `src.utils.bioio` | `requests` to Enrichr/g:Profiler directly |
 | Motif-to-motif comparison | `run_tomtom(meme_file, motif_id_1, motif_id_2)` | manual PWM comparison or FIMO-based approximation |
@@ -174,13 +174,15 @@ closest_df = parse_bedtools_closest(path_or_df, a_col_count=4, b_col_count=4)
 ix_df = parse_bedtools_wa_wb(path_or_df, a_col_count=4, b_col_count=4)
 # → DataFrame with A-side and B-side columns in order
 
-# load_string_links
-string_df = load_string_links(path, min_score=400)
+# load_string_links  (PREFERRED — uses local file, no API rate limits)
+string_df = load_string_links(data_files['links_file'], min_score=400)
 # → DataFrame: protein1, protein2, combined_score (+ any extra score columns)
-# Handles space-separated STRING files with or without header; filters to combined_score >= min_score
-# NEVER parse STRING files manually — separator is variable whitespace, headers are inconsistent
+# Handles space-separated STRING files (plain or .gz), variable whitespace, with or without header.
+# Protein IDs are Ensembl format (9606.ENSP...). Use aliases_file to map gene symbols → ENSP IDs.
+# NEVER parse STRING files manually — always use this helper.
 
-# fetch_shared_partners  (STRING API — use when testing shared-cofactor hypotheses)
+# fetch_shared_partners  (STRING API — FALLBACK ONLY, has rate limits across parallel jobs)
+# Use ONLY if the local STRING file is not in the manifest.
 from src.utils.string_client import fetch_shared_partners
 partners_df, shared = fetch_shared_partners(
     ["TF_A", "TF_B"],           # gene symbols; results are cached on disk
@@ -679,9 +681,18 @@ reasoning: <explanation of the evidence and why it supports/refutes the hypothes
 - Max 100 permutation replicates.
 - Use data_files['key'] to access files — it is pre-injected into the kernel.
 - **Early stopping**: If the first prediction in the verification plan is clearly refuted
-  (wrong direction, not significant, or effect far below threshold), stop immediately and
-  emit a REFUTES <solution>. Do NOT continue testing remaining predictions — they cannot
-  rescue a failed core prediction. This saves REPL iterations and cost.
+  (wrong direction, not significant, or effect far below threshold) AND there are no
+  surprising secondary findings, stop immediately and emit a REFUTES <solution>.
+  However, if the result contains a strong unexpected pattern (e.g., large fold enrichment
+  despite low absolute percentage, effect in opposite direction, unexpected negative
+  correlation), report it in the finding/reasoning even if the overall verdict is REFUTES.
+  The hypothesis agent needs these secondary findings to guide the next hypothesis.
+- **Co-occupancy: always report fold enrichment over background, not just absolute overlap
+  percentage.** An absolute overlap of 20% can be highly significant (>100-fold over random)
+  if both TFs cover a tiny fraction of the genome. When evaluating co-occupancy predictions,
+  if the fold enrichment is large (≥10-fold, p < 0.05) but the absolute percentage is below
+  the hypothesis threshold, report SUPPORTS based on the fold enrichment — the absolute
+  percentage threshold was likely miscalibrated.
 
 """ + CODING_SYSTEM_PROMPT_BASE
 
