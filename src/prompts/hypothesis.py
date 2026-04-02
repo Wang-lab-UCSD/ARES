@@ -89,12 +89,13 @@ def build_refinement_prompt(
         nudge_lines = []
         if string_unused:
             nudge_lines.append(
-                "⚠️  **STRING/PPI is required for convergence and has not been checked yet.** "
-                "You MUST propose a hypothesis that queries the STRING protein–protein interaction network "
-                "before convergence is possible. Example: 'TF_A and TF_B have a direct interaction or share "
-                ">=1 common interactor in STRING (combined score >= 700).' "
+                "⚠️  **STRING/PPI has not been checked yet (required for convergence).** "
+                "When you propose a protein-interaction hypothesis, include a STRING query as the first "
+                "verification step. Do NOT add STRING to non-PPI hypotheses (DNA-sequence, chromatin, "
+                "motif similarity) — the review agent will reject it as irrelevant.\n"
                 "Use `fetch_shared_partners([TF_A, TF_B])` from `src.utils.string_client`. "
-                "STRING data keys: string.species, string.api_base, string.min_score."
+                "**STRING prediction threshold**: direct interaction (combined score >= 700) OR >=1 shared "
+                "interactor (combined score >= 700 to each)."
             )
         if expr_cons_unused and has_supports:
             nudge_lines.append(
@@ -182,7 +183,23 @@ def build_refinement_prompt(
 
 No hypotheses have been tested yet. This is the start of the investigation.
 
-Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant."""
+Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant.
+
+**First hypothesis MUST be a standalone signal authenticity check — do NOT combine it with
+any mechanism test.** This hypothesis should ONLY verify two things:
+
+Check 1 (Expression): Is TF_A expressed (TPM >= 0.5)?
+Check 2 (Motif): Is TF_A's known motif enriched at TF_A peaks?
+
+Interpretation (reported in the solution):
+- YES expression + YES motif: high-confidence direct binding. Proceed normally.
+- YES expression + NO motif: hypothesize indirect/tethered binding. Look for partner motifs.
+- NO expression + YES motif: low-confidence. Proceed with caution.
+- NO expression + NO motif: likely artifact (e.g., antibody cross-reactivity). Flag and deprioritize binding-mechanism hypotheses.
+
+Only call "artifact" when BOTH checks fail. A single failing check should redirect the
+hypothesis, not invalidate it. Do NOT add co-occupancy, chromatin, or any other mechanism
+steps to this hypothesis."""
 
     prompt = f"""# Scientific Finding Under Investigation
 
@@ -207,7 +224,7 @@ Based on these results, decide how to proceed.
 INVESTIGATION GUIDANCE:
 {different_mechanism_guidance}
 {biology_layers_guidance}
-You are in the **mechanism exploration phase**.
+Your task: propose a testable causal mechanism hypothesis.
 
 **Hard rule — no characterization**: Do NOT propose hypotheses that describe what the data
 looks like. Every hypothesis must propose a specific causal mechanism: a molecular event
@@ -261,6 +278,11 @@ genome-wide multiple testing correction that may be overly conservative for shor
 Your hypothesis should also be motivated by previous results — build on what you've learned,
 don't ignore it. But advancing toward mechanism takes priority over following up on details.
 
+**Expression check**: If the first iteration found TF_A has TPM < 0.5 AND TF_A's motif is NOT
+enriched at TF_A peaks, the signal is likely an artifact — prioritize artifact/cross-reactivity
+hypotheses. If only one check failed (low expression but motif enriched, or expressed but no
+motif), proceed with caution but do not assume artifact.
+
 When the last result **REFUSES** or is **INCONCLUSIVE** but its findings include strong or
 surprising patterns (e.g., large effects in unexpected directions, subgroups behaving
 differently, sharp gradients across strata), your next hypothesis MUST propose a mechanism
@@ -305,7 +327,7 @@ Respond in JSON format:
             "name": "Hypothesis name",
             "group": "mechanism-slug",
             "rationale": "Biological reasoning",
-            "prediction": "Quantitative, falsifiable prediction with metric, comparison, and expected direction/magnitude",
+            "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3). Do NOT invent aggressive thresholds (>2.0 fold, >=3 partners) — these cause real signals to be labeled REFUTES.",
             "verification_plan": ["Step 1", "Step 2", ...],
             "priority": 1,
             "required_data": ["data_key_1", "data_key_2"]
@@ -438,7 +460,7 @@ Respond in JSON format:
         "name": "Hypothesis name",
         "group": "mechanism-slug",
         "rationale": "Biological reasoning",
-        "prediction": "Quantitative, falsifiable prediction with metric, comparison, and expected direction/magnitude",
+        "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3). Do NOT invent aggressive thresholds.",
         "verification_plan": ["Step 1", "Step 2", ...],
         "priority": 1,
         "required_data": ["data_key_1", "data_key_2"]

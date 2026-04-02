@@ -9,39 +9,93 @@ llm:
     # Do NOT set max_tokens for gpt-5.2 — reasoning tokens count against the budget;
     # a cap causes the model to exhaust tokens on thinking before producing visible output.
 
-  hypothesis_model:
-    provider: "openai"  # Options: openai, anthropic, gemini
-    model: "glm-5"
-    api_key_env: "Z_AI_API_KEY"
-    base_url: "https://api.z.ai/api/paas/v4/"
+  # hypothesis_model:
+  #   provider: "openai"  # Options: openai, anthropic, gemini
+  #   model: "glm-5"
+  #   api_key_env: "Z_AI_API_KEY"
+  #   base_url: "https://api.z.ai/api/paas/v4/"
   # # Model for writing verification code
-
-  coding_model:
-    provider: "openai"
-    model: "glm-5"
-    api_key_env: "Z_AI_API_KEY"
-    base_url: "https://api.z.ai/api/paas/v4/"
-  #   # Note: Do NOT set max_tokens for GLM-5 reasoning models
 
   # coding_model:
   #   provider: "openai"
-  #   model: "deepseek-chat"
-  #   api_key_env: "DEEPSEEK_API_KEY"
-  #   base_url: "https://api.deepseek.com"
-  #   max_tokens: 8192  # DeepSeek API default is 4096 — too low for long scripts
+  #   model: "glm-5"
+  #   api_key_env: "Z_AI_API_KEY"
+  #   base_url: "https://api.z.ai/api/paas/v4/"
+  #   # Note: Do NOT set max_tokens for GLM-5 reasoning models
+
   # coding_model:
   #   provider: "openai"
   #   model: "gpt-5.2"
   #   api_key_env: "OPENAI_API_KEY"
 
   # Model for reviewing code and hypotheses (needs reliable JSON output)
+  # review_model:
+  #   # provider: "openai"
+  #   # model: "gpt-5.2"
+  #   # api_key_env: "OPENAI_API_KEY"
+  #   # #max_tokens: 4096
+  #   # reasoning_effort: "low"
+  #   provider: "openai"  # Options: openai, anthropic, gemini
+  #   model: "glm-5"
+  #   api_key_env: "Z_AI_API_KEY"
+  #   base_url: "https://api.z.ai/api/paas/v4/"
+
+  # hypothesis_model:
+  #   provider: "openai"
+  #   model: "deepseek-chat"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   base_url: "https://api.deepseek.com"
+  #   max_tokens: 8192
+  #
+  # coding_model:
+  #   provider: "openai"
+  #   model: "deepseek-chat"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   base_url: "https://api.deepseek.com"
+  #   max_tokens: 8192
+  #
+  # review_model:
+  #   provider: "openai"
+  #   model: "deepseek-chat"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   base_url: "https://api.deepseek.com"
+  #   max_tokens: 8192
+
+  # hypothesis_model:
+  #   provider: "openai"
+  #   model: "MiniMax-M2.7"
+  #   api_key_env: "MINIMAX_API_KEY"
+  #   base_url: "https://api.minimax.io/v1"
+  #   max_tokens: 16000  # Thinking tokens count against budget; <16000 causes truncation loops
+  #
+  # coding_model:
+  #   provider: "openai"
+  #   model: "MiniMax-M2.7"
+  #   api_key_env: "MINIMAX_API_KEY"
+  #   base_url: "https://api.minimax.io/v1"
+  #   max_tokens: 16000
+  #
+  # review_model:
+  #   provider: "openai"
+  #   model: "MiniMax-M2.7"
+  #   api_key_env: "MINIMAX_API_KEY"
+  #   base_url: "https://api.minimax.io/v1"
+  #   max_tokens: 16000
+
+  hypothesis_model:
+    provider: "openai"
+    model: "glm-5"
+    api_key_env: "Z_AI_API_KEY"
+    base_url: "https://api.z.ai/api/paas/v4/"
+
+  coding_model:
+    provider: "openai"
+    model: "glm-5"
+    api_key_env: "Z_AI_API_KEY"
+    base_url: "https://api.z.ai/api/paas/v4/"
+
   review_model:
-    # provider: "openai"
-    # model: "gpt-5.2"
-    # api_key_env: "OPENAI_API_KEY"
-    # #max_tokens: 4096
-    # reasoning_effort: "low"
-    provider: "openai"  # Options: openai, anthropic, gemini
+    provider: "openai"
     model: "glm-5"
     api_key_env: "Z_AI_API_KEY"
     base_url: "https://api.z.ai/api/paas/v4/"

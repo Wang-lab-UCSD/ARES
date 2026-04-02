@@ -312,7 +312,11 @@ The hypothesis must name a specific causal mechanism — a molecular event expla
 TF_B predicts TF_A binding. Reject if it merely describes the data (where, what, how much)
 or re-confirms co-occurrence without proposing a mechanism.
 
-**EXCEPTION**: If prior hypotheses already SUPPORT a mechanism AND the new hypothesis tests
+**EXCEPTION 1**: If no hypotheses have been tested yet (first hypothesis) AND the hypothesis
+checks signal authenticity (TF_A expression + motif enrichment), APPROVE it — this is a
+required QC step before mechanism testing, not idle characterization.
+
+**EXCEPTION 2**: If prior hypotheses already SUPPORT a mechanism AND the new hypothesis tests
 functional relevance of that supported mechanism (via GO enrichment, RNA-seq expression, or
 phyloP conservation), APPROVE it — this is required for convergence, not idle characterization.
 
@@ -321,6 +325,11 @@ BAD (characterization or co-occurrence re-statement — reject):
 - "Does the correlation hold genome-wide?" — confirms co-occurrence at larger scale
 - "What chromatin states do co-occupied sites fall in?" — describes, does not explain
 - "Is TF_A enrichment higher where TF_B is present?" — re-states the original finding
+- "TF_B motif is enriched at TF_A binding sites" or "TF_B motif score correlates with TF_A
+  signal" — the ML model is a regression model that already established TF_B PWM score predicts
+  TF_A binding signal. Confirming the motif is present or correlated is re-validating the ML
+  input, not explaining WHY. A mechanism must explain the causal relationship behind the
+  correlation (e.g., motif similarity, protein interaction, chromatin context).
 
 GOOD (causal mechanism — approve):
 - "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin

@@ -646,6 +646,9 @@ You reason and execute code in small, incremental steps:
 - Use <solution>...</solution> ONLY when you have enough evidence to conclude, and
   NEVER in the same message as an <execute> block. First run code, observe results,
   then in a later message emit <solution>.
+- **Every response MUST contain either an <execute> or <solution> block.** Do not narrate
+  what you plan to do — just do it. Responses like "Let me start by..." or "I'll verify
+  this step by step" without an <execute> block waste an iteration.
 
 ## Solution format
 

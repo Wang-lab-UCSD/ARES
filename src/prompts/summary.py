@@ -77,6 +77,22 @@ far has been REFUSES, INCONCLUSIVE, ERROR, or UNTESTABLE, you MUST set converged
 regardless of how interesting the individual findings are. Promising sub-findings inside a
 REFUSES result do NOT count — the hypothesis must have been formally SUPPORTED as a whole.
 
+**Signal authenticity QC (special handling)**:
+The first hypothesis typically checks whether TF_A's ChIP-seq signal is genuine (expression +
+motif enrichment). Treat this result as follows:
+- QC SUPPORTS (signal is genuine): this does NOT satisfy the SUPPORTS prerequisite above —
+  it is a quality check, not a mechanism. The pipeline still needs a mechanism SUPPORTS.
+- QC INCONCLUSIVE (weak expression or weak motif enrichment): proceed with caution. The signal
+  is likely real but low-confidence. The pipeline still needs a mechanism SUPPORTS.
+- QC REFUTES (TF_A not expressed AND motif not enriched): the signal is a technical artifact.
+  The pipeline MAY converge immediately on "technical artifact" as the conclusion — criteria
+  2-5 are waived because there is no biological mechanism to characterize.
+
+The QC hypothesis's use of RNA-seq (TPM lookup) or motif scanning does NOT satisfy criterion
+5b (functional characterization). Criterion 5b requires linking the mechanism to gene function
+(GO enrichment, expression at target genes, or conservation) — not just checking if TF_A is
+expressed. Do not count QC data usage toward any convergence criterion.
+
 1. **Statistical support**: At least one hypothesis with support_level = "SUPPORTS" (i.e., p < 0.05 with fold change >= 1.2 OR Cohen's d >= 0.3, and the predicted effect confirmed). Do NOT cherry-pick individual statistics from a REFUSES result to satisfy this criterion — the overall support_level must be SUPPORTS.
 
 2. **Named mechanism**: A mechanism that: (1) names a specific molecular process, (2) states a clear causal chain (or, in observational mode, a clear mechanistic interpretation), and (3) is not merely a re-description of correlation. The mechanism can be **anything** that fits the evidence—it need not match any predefined category. The taxonomy below is for **reference only** (to illustrate what "mechanism" means in terms of specificity); do NOT constrain convergence to those categories.
@@ -177,6 +193,7 @@ RNA is now recognized as a major scaffold for TF interactions.
 - **"All hypotheses REFUSES but the findings are interesting"** — if no hypothesis achieved support_level = "SUPPORTS", you CANNOT converge. Interesting sub-findings within a REFUSES result mean the pipeline should refine the hypothesis (e.g., drop the failed prediction, keep the successful ones) and test again, not declare convergence.
 - "Co-bound sites are in active chromatin" — correlation. Active sites attract many TFs. Does NOT establish mechanism unless pioneer activity is shown (mechanism #3 requires the pioneer to OPEN the site, not merely be present at already-open sites).
 - "TF_B signal is higher where TF_A is present" — restates the original finding. Not a mechanism.
+- "TF_B motif is enriched at TF_A binding sites" or "TF_B motif score correlates with TF_A signal" — the ML model is a regression model where TF_B PWM score already predicts TF_A binding signal. Re-confirming the motif is present or correlated at TF_A peaks is re-validating the ML input-output relationship, not a mechanism. A mechanism must explain WHY TF_B motif predicts TF_A binding (e.g., motif similarity, protein interaction, shared chromatin context).
 - "The effect is small but real" — effect sizes below threshold (fold change < 1.2 AND Cohen's d < 0.3) do not meet the statistical support criterion.
 - "Data cannot answer the question" — insufficient data is NOT convergence.
 
