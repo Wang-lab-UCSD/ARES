@@ -1569,3 +1569,115 @@ def run_go_enrichment(
                                "term_size", "query_size", "native"] if c in results.columns]
     results = results[keep_cols].sort_values("p_value").head(max_terms).reset_index(drop=True)
     return results
+
+
+# =============================================================================
+# MOTIF COMPARISON (Tomtom)
+# =============================================================================
+
+def run_tomtom(
+    meme_file: str | Path,
+    motif_id_1: str,
+    motif_id_2: str,
+    threshold: float = 0.5,
+    distance_metric: str = "ed",
+) -> dict[str, Any]:
+    """Compare two motifs using Tomtom and return similarity statistics.
+
+    Args:
+        meme_file: Path to MEME format motif database file.
+        motif_id_1: Query motif ID (e.g., "NFYA|jaspar|MA0060.3").
+        motif_id_2: Target motif ID (e.g., "NFATC3|jaspar|MA0623.1").
+        threshold: q-value significance threshold (default 0.5 to capture
+            borderline matches; filter on p_value in results if needed).
+        distance_metric: Distance metric — "ed" (Euclidean, default),
+            "pearson", "allr", "kullback", "sandelin".
+
+    Returns:
+        dict with keys:
+          - p_value: float (NaN if no match found)
+          - e_value: float
+          - q_value: float
+          - overlap: int (number of aligned columns)
+          - query_consensus: str
+          - target_consensus: str
+          - orientation: str ("+" or "-")
+          - is_significant: bool (q_value < 0.05)
+          - match_found: bool (whether Tomtom found any alignment)
+    """
+    from tempfile import TemporaryDirectory
+    import math
+
+    meme_file = Path(meme_file)
+    if not meme_file.exists():
+        raise FileNotFoundError(f"MEME file not found: {meme_file}")
+
+    # Tomtom needs separate query and target files when using -m to select motifs.
+    # We use the same MEME file as both query and target, selecting one motif each.
+    with TemporaryDirectory(prefix="tomtom_") as td:
+        td_path = Path(td)
+        out_dir = td_path / "output"
+
+        cmd = [
+            "tomtom",
+            "-oc", str(out_dir),
+            "-m", motif_id_1,
+            "-thresh", str(threshold),
+            "-dist", distance_metric,
+            str(meme_file),   # query (motif_id_1 selected by -m)
+            str(meme_file),   # target (full database — Tomtom finds motif_id_2)
+        ]
+
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Parse output — Tomtom writes TSV before generating XML/HTML, so the
+        # TSV may exist even if returncode != 0 (e.g., missing Perl XML module).
+        # Only raise if the TSV is also missing.
+        tsv_path = out_dir / "tomtom.tsv"
+        if proc.returncode != 0 and (not tsv_path.exists() or tsv_path.stat().st_size == 0):
+            print(f"[run_tomtom] ERROR: tomtom failed (rc={proc.returncode})")
+            print(f"[run_tomtom] stderr: {proc.stderr[:500]}")
+            raise RuntimeError(f"tomtom failed: {proc.stderr[:300]}")
+        if not tsv_path.exists() or tsv_path.stat().st_size == 0:
+            return {
+                "p_value": math.nan, "e_value": math.nan, "q_value": math.nan,
+                "overlap": 0, "query_consensus": "", "target_consensus": "",
+                "orientation": "", "is_significant": False, "match_found": False,
+            }
+
+        df = pd.read_csv(tsv_path, sep="\t", comment="#")
+        if df.empty:
+            return {
+                "p_value": math.nan, "e_value": math.nan, "q_value": math.nan,
+                "overlap": 0, "query_consensus": "", "target_consensus": "",
+                "orientation": "", "is_significant": False, "match_found": False,
+            }
+
+        # Find the row matching motif_id_2 as target
+        match = df[df["Target_ID"] == motif_id_2]
+        if match.empty:
+            # Try partial match (motif IDs can have slight formatting differences)
+            match = df[df["Target_ID"].str.contains(motif_id_2.split("|")[0], case=False, na=False)]
+        if match.empty:
+            return {
+                "p_value": math.nan, "e_value": math.nan, "q_value": math.nan,
+                "overlap": 0, "query_consensus": "", "target_consensus": "",
+                "orientation": "", "is_significant": False, "match_found": False,
+            }
+
+        row = match.iloc[0]
+        p_val = float(row.get("p-value", math.nan))
+        e_val = float(row.get("E-value", math.nan))
+        q_val = float(row.get("q-value", math.nan))
+
+        return {
+            "p_value": p_val,
+            "e_value": e_val,
+            "q_value": q_val,
+            "overlap": int(row.get("Overlap", 0)),
+            "query_consensus": str(row.get("Query_consensus", "")),
+            "target_consensus": str(row.get("Target_consensus", "")),
+            "orientation": str(row.get("Orientation", "")),
+            "is_significant": q_val < 0.05 if not math.isnan(q_val) else False,
+            "match_found": True,
+        }

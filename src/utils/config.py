@@ -115,8 +115,18 @@ class Config(BaseModel):
 
 
 class DataManifest(BaseModel):
-    """Data manifest describing available data for analysis."""
+    """Data manifest describing available data for analysis.
 
+    Supports a ``base_manifest`` field that points to a shared YAML file (e.g.,
+    cell-line-wide data).  The base is loaded first, then the pair-specific
+    manifest is deep-merged on top — pair-specific keys override base keys.
+    """
+
+    base_manifest: str | None = Field(
+        default=None,
+        description="Optional path to a base manifest YAML. Resolved relative to this manifest file. "
+                    "The base 'data' dict is deep-merged under this manifest's 'data' dict.",
+    )
     finding: str = Field(description="The scientific finding to investigate (X predicts Y)")
     context: str = Field(default="", description="Additional context about the finding")
     investigation_objective: str = Field(
@@ -147,14 +157,39 @@ def load_config(config_path: str | Path) -> Config:
     return Config.model_validate(data)
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep-merge *override* into *base* (override wins on conflicts)."""
+    merged = dict(base)
+    for key, val in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(val, dict):
+            merged[key] = _deep_merge(merged[key], val)
+        else:
+            merged[key] = val
+    return merged
+
+
 def load_data_manifest(manifest_path: str | Path) -> DataManifest:
-    """Load data manifest from YAML file."""
-    manifest_path = Path(manifest_path)
+    """Load data manifest from YAML file.
+
+    Optionally supports ``base_manifest`` — if present, the base file is loaded
+    first and the pair-specific manifest is deep-merged on top. If absent, the
+    manifest is loaded as-is (fully backwards compatible).
+    """
+    manifest_path = Path(manifest_path).resolve()
     if not manifest_path.exists():
         raise FileNotFoundError(f"Data manifest not found: {manifest_path}")
 
     with open(manifest_path) as f:
         data = yaml.safe_load(f)
+
+    base_path = data.pop("base_manifest", None)
+    if base_path:
+        base_resolved = (manifest_path.parent / base_path).resolve()
+        if not base_resolved.exists():
+            raise FileNotFoundError(f"Base manifest not found: {base_resolved}")
+        with open(base_resolved) as f:
+            base_data = yaml.safe_load(f)
+        data = _deep_merge(base_data, data)
 
     return DataManifest.model_validate(data)
 

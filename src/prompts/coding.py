@@ -52,6 +52,7 @@ CODING_SYSTEM_PROMPT_BASE = """You are an expert bioinformatics programmer. Writ
 | STRING API (shared cofactors) | `fetch_shared_partners(["TF_A", "TF_B"])` from `src.utils.string_client` | custom `requests` calls |
 | Two-peak coordinate join | `intersect_peaks(df_a, df_b, mode='flag'/'count'/'wa-wb')` | `.merge(on='name')` or manual bedtools |
 | GO / pathway enrichment | `run_go_enrichment(gene_list)` from `src.utils.bioio` | `requests` to Enrichr/g:Profiler directly |
+| Motif-to-motif comparison | `run_tomtom(meme_file, motif_id_1, motif_id_2)` | manual PWM comparison or FIMO-based approximation |
 
 All helpers are in `src.utils.bioio` (file-based) or `src.utils.string_client` (STRING API). Only bypass a helper if it genuinely cannot produce the output shape you need, and explain why in a comment.
 
@@ -65,7 +66,7 @@ from src.utils.bioio import (
     load_rnaseq_expression, merge_rnaseq_with_nearest_genes, read_narrowpeak,
     run_bedtools_closest_to_tss, parse_fimo_tsv, parse_chromhmm_intersect,
     load_rnaseq_with_gene_id, parse_bedtools_closest, parse_bedtools_wa_wb,
-    load_string_links,
+    load_string_links, run_tomtom,
 )
 
 # find_motif_ids_for_tf
@@ -214,6 +215,16 @@ enrich_df = run_go_enrichment(gene_list, organism="hsapiens", sources=["GO:BP", 
 # enrich_df columns: source, name, p_value, intersection_size, term_size, query_size, native
 # Returns empty DataFrame if no significant terms found
 print(enrich_df.head(10))
+
+# run_tomtom  (motif-to-motif similarity comparison using Tomtom)
+from src.utils.bioio import run_tomtom
+result = run_tomtom(data_files["motif_meme"], "NFYA|jaspar|MA0060.3", "NFATC3|jaspar|MA0623.1")
+# result is a dict: p_value, e_value, q_value, overlap, query_consensus, target_consensus,
+#                   orientation, is_significant (q_value < 0.05), match_found (bool)
+# Use this to directly test motif similarity — much faster and more rigorous than scanning
+# both motifs with FIMO and comparing overlap percentages.
+print(f"Motif similarity: p={result['p_value']:.2e}, overlap={result['overlap']}bp, "
+      f"significant={result['is_significant']}")
 ```
 
 === PRE-SUBMISSION SELF-CHECK ===

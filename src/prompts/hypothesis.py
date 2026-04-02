@@ -189,11 +189,15 @@ Before selecting data for your hypothesis, review all available files in the man
 any mechanism test.** This hypothesis should ONLY verify two things:
 
 Check 1 (Expression): Is TF_A expressed (TPM >= 0.5)?
-Check 2 (Motif): Is TF_A's known motif enriched at TF_A peaks?
+Check 2 (Motif): Is TF_A's known motif enriched at TF_A peaks (≥2-fold over background,
+p < 0.05)? Note: 1.2-2.0 fold is ambiguous (some direct + mostly indirect binding);
+≥2-fold indicates confident direct binding.
 
 Interpretation (reported in the solution):
-- YES expression + YES motif: high-confidence direct binding. Proceed normally.
-- YES expression + NO motif: hypothesize indirect/tethered binding. Look for partner motifs.
+- YES expression + YES motif (≥2-fold): high-confidence direct binding. Proceed normally.
+- YES expression + WEAK motif (1.2-2.0 fold): likely indirect/tethered binding with some
+  direct binding. Hypothesize protein interaction or cooperative binding mechanisms.
+- YES expression + NO motif (<1.2-fold): hypothesize indirect/tethered binding. Look for partner motifs.
 - NO expression + YES motif: low-confidence. Proceed with caution.
 - NO expression + NO motif: likely artifact (e.g., antibody cross-reactivity). Flag and deprioritize binding-mechanism hypotheses.
 
@@ -279,9 +283,10 @@ Your hypothesis should also be motivated by previous results — build on what y
 don't ignore it. But advancing toward mechanism takes priority over following up on details.
 
 **Expression check**: If the first iteration found TF_A has TPM < 0.5 AND TF_A's motif is NOT
-enriched at TF_A peaks, the signal is likely an artifact — prioritize artifact/cross-reactivity
-hypotheses. If only one check failed (low expression but motif enriched, or expressed but no
-motif), proceed with caution but do not assume artifact.
+enriched at TF_A peaks (<1.2-fold), the signal is likely an artifact — prioritize
+artifact/cross-reactivity hypotheses. If TF_A is expressed but motif enrichment is weak
+(1.2-2.0 fold), prioritize indirect/tethering mechanisms. If only expression failed but
+motif is enriched, proceed with caution but do not assume artifact.
 
 When the last result **REFUSES** or is **INCONCLUSIVE** but its findings include strong or
 surprising patterns (e.g., large effects in unexpected directions, subgroups behaving
