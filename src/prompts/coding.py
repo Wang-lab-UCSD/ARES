@@ -178,8 +178,17 @@ ix_df = parse_bedtools_wa_wb(path_or_df, a_col_count=4, b_col_count=4)
 string_df = load_string_links(data_files['links_file'], min_score=400)
 # → DataFrame: protein1, protein2, combined_score (+ any extra score columns)
 # Handles space-separated STRING files (plain or .gz), variable whitespace, with or without header.
-# Protein IDs are Ensembl format (9606.ENSP...). Use aliases_file to map gene symbols → ENSP IDs.
-# NEVER parse STRING files manually — always use this helper.
+# IMPORTANT: Protein IDs are Ensembl format (9606.ENSP...), NOT gene symbols.
+# Do NOT hardcode Ensembl IDs — use the aliases file to look them up:
+import gzip
+aliases = {}
+with gzip.open(data_files['aliases_file'], 'rt') as f:
+    for line in f:
+        parts = line.strip().split('\t')
+        if len(parts) >= 2:
+            aliases.setdefault(parts[1], parts[0])  # alias → ENSP ID
+# Then: yy1_ensp = aliases.get('YY1'); pttg1_ensp = aliases.get('PTTG1')
+# NEVER guess or hardcode Ensembl IDs — they vary by STRING version.
 
 # fetch_shared_partners  (STRING API — FALLBACK ONLY, has rate limits across parallel jobs)
 # Use ONLY if the local STRING file is not in the manifest.

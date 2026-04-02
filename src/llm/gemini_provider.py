@@ -144,24 +144,23 @@ class GeminiProvider(LLMProvider):
             # Some google-generativeai versions support response_mime_type="application/json"
             # which improves structured output reliability. We pass it through when provided.
             response_mime_type = kwargs.pop("response_mime_type", None)
+
+            # Only set max_output_tokens when explicitly configured.
+            # When None, let the API use its own default (avoids capping
+            # reasoning-heavy models at the 4096 fallback).
+            effective_max = max_tokens if max_tokens is not None else self.default_max_tokens
+            gen_kwargs: dict = {"temperature": self._get_temperature(temperature)}
+            if effective_max is not None:
+                gen_kwargs["max_output_tokens"] = effective_max
+
             try:
                 if response_mime_type:
-                    generation_config = genai.GenerationConfig(
-                        temperature=self._get_temperature(temperature),
-                        max_output_tokens=self._get_max_tokens(max_tokens),
-                        response_mime_type=response_mime_type,
-                    )
-                else:
-                    generation_config = genai.GenerationConfig(
-                        temperature=self._get_temperature(temperature),
-                        max_output_tokens=self._get_max_tokens(max_tokens),
-                    )
+                    gen_kwargs["response_mime_type"] = response_mime_type
+                generation_config = genai.GenerationConfig(**gen_kwargs)
             except TypeError:
                 # Older library version: ignore response_mime_type
-                generation_config = genai.GenerationConfig(
-                    temperature=self._get_temperature(temperature),
-                    max_output_tokens=self._get_max_tokens(max_tokens),
-                )
+                gen_kwargs.pop("response_mime_type", None)
+                generation_config = genai.GenerationConfig(**gen_kwargs)
 
             # Start chat with history (excluding the last user message)
             chat = model.start_chat(history=history[:-1] if len(history) > 1 else [])

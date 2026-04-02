@@ -54,6 +54,7 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # Google (Gemini API / AI Studio) — Gemini 3 Flash Preview
     # NOTE: Update if your billing page shows different rates.
     "gemini-3-flash-preview": ModelPricing(0.50, 3.00, "gemini", "gemini-3-flash-preview", context_limit=1000000),
+    "gemini-3.1-pro-preview": ModelPricing(2.0, 12.0, "gemini", "gemini-3.1-pro-preview", context_limit=200000),
     # MiniMax
     "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=200000),
     # GLM-5 (Z.AI) — $1/1M input, $3.2/1M output; limited-time free tier available
