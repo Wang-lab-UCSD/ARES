@@ -1,4 +1,4 @@
-"""Tests for summary prompt construction."""
+"""Tests for prompt construction."""
 
 from src.prompts.summary import build_final_report_prompt
 

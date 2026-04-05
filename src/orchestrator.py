@@ -615,6 +615,30 @@ class Orchestrator:
                         )
                         if new_hypo:
                             self.state.add_hypothesis(new_hypo)
+                        else:
+                            # Regeneration returned None — fall back to refine_hypotheses()
+                            self.logger.warning(
+                                "Regeneration returned no hypothesis, falling back to refine_hypotheses()"
+                            )
+                            available_bl, used_bl = self._biology_layers_for_convergence()
+                            unused_bl = [k for k in available_bl if k not in used_bl] if available_bl else None
+                            has_support = any(
+                                h.get("result") == "SUPPORTS" and h.get("group") != "signal-authenticity"
+                                for h in self.state.tested_hypotheses
+                            )
+                            try:
+                                fallback = await self.hypothesis_agent.refine_hypotheses(
+                                    state=self.state,
+                                    last_hypothesis=hypothesis,
+                                    last_result=self.state.tested_hypotheses[-1] if self.state.tested_hypotheses else None,
+                                    data_manifest=self.manifest.model_dump(),
+                                    encourage_different_mechanism=has_support,
+                                    unused_biology_layers=unused_bl or None,
+                                )
+                                for hypo in fallback.get("hypotheses", []):
+                                    self.state.add_hypothesis(hypo)
+                            except Exception as e:
+                                self.logger.error("Fallback hypothesis generation also failed", {"error": str(e)})
                         continue
 
                     # Only reset rejection counter on genuine approval (not LLM-unavailable bypass)
@@ -974,6 +998,9 @@ class Orchestrator:
             available.append("string")
         used_set: set[str] = set()
         for th in self.state.tested_hypotheses:
+            # QC/signal-authenticity uses rnaseq for TPM check — not functional characterization
+            if th.get("group") == "signal-authenticity":
+                continue
             for key in th.get("required_data", []):
                 top = key.split(".", 1)[0].split(":", 1)[0]
                 if top in self.BIOLOGY_LAYERS:
@@ -1054,7 +1081,8 @@ class Orchestrator:
         )
 
         has_any_supports = any(
-            h.get("result") == "SUPPORTS" for h in self.state.tested_hypotheses
+            h.get("result") == "SUPPORTS" and h.get("group") != "signal-authenticity"
+            for h in self.state.tested_hypotheses
         )
 
         if convergence.get("converged", False) and not has_any_supports:
@@ -1096,7 +1124,11 @@ class Orchestrator:
 
         # Step 2: HypothesisAgent proposes next hypothesis
         group_summary = self._build_group_summary(last_hypothesis)
-        has_support = any(h.get("result") == "SUPPORTS" for h in self.state.tested_hypotheses)
+        # Only count mechanism hypotheses as SUPPORTS — QC/signal-authenticity is not a mechanism
+        has_support = any(
+            h.get("result") == "SUPPORTS" and h.get("group") != "signal-authenticity"
+            for h in self.state.tested_hypotheses
+        )
         available_bl, used_bl = self._biology_layers_for_convergence()
         unused_biology_layers = [k for k in available_bl if k not in used_bl] if available_bl else None
 

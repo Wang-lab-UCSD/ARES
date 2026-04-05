@@ -126,6 +126,13 @@ expressed. Do not count QC data usage toward any convergence criterion.
 
    Note: STRING satisfies 5a (PPI check) but does NOT substitute for 5b. Both sub-requirements must be met independently.
 
+   **Escape-hatch characterization**: When multiple mechanism hypotheses have been tested without
+   achieving SUPPORTS, a functional-characterization hypothesis (GO enrichment, RNA-seq, phyloP)
+   may be tested as a deadlock-breaking synthesis step. This satisfies criterion 5b (functional
+   characterization was attempted). However, it does NOT satisfy the PREREQUISITE (at least one
+   mechanism SUPPORTS) — a SUPPORTS result on a characterization-only hypothesis is NOT a
+   mechanism SUPPORTS. The pipeline must still find a supported mechanism to converge.
+
 ## Mechanism Taxonomy (examples only — for understanding what "mechanism" means)
 
 The following list illustrates the level of specificity required: a mechanism names a molecular process and causal chain, not just correlation. Use it to judge whether a proposed mechanism is sufficiently specific. The evidence may support a mechanism that matches one of these, or something entirely different—do NOT constrain convergence to these categories.

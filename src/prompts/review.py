@@ -316,9 +316,13 @@ or re-confirms co-occurrence without proposing a mechanism.
 checks signal authenticity (TF_A expression + motif enrichment), APPROVE it — this is a
 required QC step before mechanism testing, not idle characterization.
 
-**EXCEPTION 2**: If prior hypotheses already SUPPORT a mechanism AND the new hypothesis tests
-functional relevance of that supported mechanism (via GO enrichment, RNA-seq expression, or
-phyloP conservation), APPROVE it — this is required for convergence, not idle characterization.
+**EXCEPTION 2**: If the new hypothesis tests functional relevance via GO enrichment, RNA-seq
+expression, or phyloP conservation, APPROVE it when EITHER condition holds:
+  (a) A prior mechanism hypothesis has SUPPORTS status and this tests functional relevance
+      of that mechanism, OR
+  (b) Multiple mechanism hypotheses have been tested (>=3) regardless of their results —
+      functional characterization at this stage provides convergence-required biological
+      context even when no single mechanism has been confirmed yet.
 
 BAD (characterization or co-occurrence re-statement — reject):
 - "Are the shared sites at promoters or enhancers?" — describes where, not why

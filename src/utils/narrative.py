@@ -60,7 +60,10 @@ class NarrativeLog:
             lines += [f"**Distinguishable from null**: {sc['distinguishable']}", ""]
 
         lines += ["", "### Verification Plan", ""]
+        import re
         for i, step in enumerate(vplan, 1):
+            # Strip leading numbering the LLM may have included (e.g. "1. ", "Step 1: ")
+            step = re.sub(r"^(\d+\.\s*|Step\s*\d+[:\s]*)", "", step)
             lines.append(f"{i}. {step}")
         lines.append("")
 

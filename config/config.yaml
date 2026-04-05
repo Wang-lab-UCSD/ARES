@@ -2,10 +2,10 @@
 
 llm:
   # Model for generating and refining hypotheses
-  hypothesis_model:
-    provider: "openai"  # Options: openai, anthropic, gemini
-    model: "gpt-5.2"
-    api_key_env: "OPENAI_API_KEY"
+  # hypothesis_model:
+  #   provider: "openai"  # Options: openai, anthropic, gemini
+  #   model: "gpt-5.2"
+  #   api_key_env: "OPENAI_API_KEY"
     # Do NOT set max_tokens for gpt-5.2 — reasoning tokens count against the budget;
     # a cap causes the model to exhaust tokens on thinking before producing visible output.
 
@@ -120,10 +120,10 @@ llm:
   #   model: "gpt-5.2"
   #   api_key_env: "OPENAI_API_KEY"
 
-  # hypothesis_model:
-  #   provider: "gemini"
-  #   model: "gemini-3.1-pro-preview"
-  #   api_key_env: "GOOGLE_API_KEY"
+  hypothesis_model:
+    provider: "gemini"
+    model: "gemini-3.1-pro-preview"
+    api_key_env: "GOOGLE_API_KEY"
 
   coding_model:
     provider: "openai"

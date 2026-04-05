@@ -129,16 +129,18 @@ def build_refinement_prompt(
             )
         elif expr_cons_unused:
             nudge_lines.append(
-                "**Functional characterization required for convergence — not yet done.** "
-                "Propose a hypothesis that provides functional insight into the mechanism using ONE of:\n"
-                "- **GO / pathway enrichment (preferred)**: identify genes near co-bound peaks, run "
+                "**Functional characterization not yet done.** Prioritize proposing new causal mechanism "
+                "hypotheses — do not default to functional characterization.\n\n"
+                "**Exception — deadlock-breaking synthesis**: If multiple mechanism hypotheses (>=3) have "
+                "already been tested without achieving SUPPORTS, you MAY propose a functional-characterization "
+                "hypothesis as a synthesis step using ONE of:\n"
+                "- **GO / pathway enrichment**: identify genes near co-bound peaks, run "
                 "`run_go_enrichment(gene_list)` from `src.utils.bioio`, and report which biological processes "
-                "or pathways are enriched. This characterizes what the TF pair *does* biologically.\n"
-                "- **RNA-seq**: link co-occupancy or mechanism to gene expression levels "
-                "(e.g. 'genes near co-bound sites show higher expression')\n"
-                "- **phyloP**: test evolutionary conservation at co-bound sites "
-                "(e.g. 'co-bound motif pairs are more conserved than solo-bound motifs')\n"
-                "Any one of these satisfies the functional characterization requirement."
+                "or pathways are enriched.\n"
+                "- **RNA-seq**: link co-occupancy to gene expression levels.\n"
+                "- **phyloP**: test evolutionary conservation at co-bound sites.\n"
+                "This is a deliberate fallback to provide biological context, not a substitute for finding "
+                "a supported mechanism."
             )
         biology_layers_guidance = "\n" + "\n\n".join(nudge_lines) + "\n\n" if nudge_lines else ""
 
