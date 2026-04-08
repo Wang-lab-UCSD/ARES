@@ -35,6 +35,7 @@ MANIFEST
 # Runtime
 logs/
 outputs/
+outputs_2
 *.log
 
 # IDE

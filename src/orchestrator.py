@@ -82,6 +82,14 @@ class Orchestrator:
                 session_limit=config.cost.session_limit_usd,
                 warn_threshold=config.cost.warn_threshold,
             )
+            # Zero out pricing for models on subscription plans
+            for model_cfg in [
+                config.llm.hypothesis_model, config.llm.coding_model,
+                config.llm.summary_model, config.llm.review_model,
+            ]:
+                if model_cfg is not None and model_cfg.subscription:
+                    self.cost_tracker.set_zero_pricing(model_cfg.model)
+
             self.logger.info("Cost tracking enabled", {
                 "per_call_limit_usd": config.cost.per_call_limit_usd,
                 "session_limit_usd": config.cost.session_limit_usd,
@@ -623,7 +631,7 @@ class Orchestrator:
                             available_bl, used_bl = self._biology_layers_for_convergence()
                             unused_bl = [k for k in available_bl if k not in used_bl] if available_bl else None
                             has_support = any(
-                                h.get("result") == "SUPPORTS" and h.get("group") != "signal-authenticity"
+                                h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0
                                 for h in self.state.tested_hypotheses
                             )
                             try:
@@ -998,8 +1006,8 @@ class Orchestrator:
             available.append("string")
         used_set: set[str] = set()
         for th in self.state.tested_hypotheses:
-            # QC/signal-authenticity uses rnaseq for TPM check — not functional characterization
-            if th.get("group") == "signal-authenticity":
+            # QC (iteration 0) uses rnaseq for TPM check — not functional characterization
+            if th.get("iteration", -1) == 0:
                 continue
             for key in th.get("required_data", []):
                 top = key.split(".", 1)[0].split(":", 1)[0]
@@ -1081,7 +1089,7 @@ class Orchestrator:
         )
 
         has_any_supports = any(
-            h.get("result") == "SUPPORTS" and h.get("group") != "signal-authenticity"
+            h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0
             for h in self.state.tested_hypotheses
         )
 
@@ -1126,7 +1134,7 @@ class Orchestrator:
         group_summary = self._build_group_summary(last_hypothesis)
         # Only count mechanism hypotheses as SUPPORTS — QC/signal-authenticity is not a mechanism
         has_support = any(
-            h.get("result") == "SUPPORTS" and h.get("group") != "signal-authenticity"
+            h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0
             for h in self.state.tested_hypotheses
         )
         available_bl, used_bl = self._biology_layers_for_convergence()

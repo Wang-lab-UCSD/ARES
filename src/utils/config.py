@@ -23,6 +23,10 @@ class LLMModelConfig(BaseModel):
         default=None,
         description="Optional custom API base URL (e.g. for Anthropic-compatible third-party endpoints)",
     )
+    subscription: bool = Field(
+        default=False,
+        description="If True, API cost is $0 (e.g. MiniMax subscription plan). Tokens are still tracked but not billed.",
+    )
 
     @field_validator("provider")
     @classmethod

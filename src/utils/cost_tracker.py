@@ -138,6 +138,20 @@ class CostTracker:
         self.call_history: list[dict[str, Any]] = []
         self.logger = get_logger("cost_tracker")
 
+    def set_zero_pricing(self, model: str) -> None:
+        """Set pricing to $0 for a model (e.g. subscription plan).
+
+        Tokens are still tracked but cost is reported as $0.
+        """
+        existing = MODEL_PRICING.get(model)
+        MODEL_PRICING[model] = ModelPricing(
+            0.0, 0.0,
+            provider=existing.provider if existing else "subscription",
+            model_id=model,
+            context_limit=existing.context_limit if existing else 128000,
+        )
+        self.logger.info(f"Subscription mode: {model} pricing set to $0")
+
     def get_pricing(self, model: str) -> ModelPricing | None:
         """Get pricing for a model, returns None if unknown."""
         return MODEL_PRICING.get(model)

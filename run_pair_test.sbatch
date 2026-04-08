@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=pair_test
+#SBATCH --job-name=ARES
 #SBATCH --output=logs/slurm_%j.out
 #SBATCH --error=logs/slurm_%j.err
 #SBATCH --time=24:00:00
@@ -27,7 +27,7 @@ fi
 mkdir -p logs
 
 CONFIG_FILE="${CONFIG_FILE:-config/config.yaml}"
-MANIFEST_FILE="${MANIFEST_FILE:-examples/znf354b_yy1_K562/manifest.yaml}"
+MANIFEST_FILE="${MANIFEST_FILE:-examples/ilk_yy1_K562/manifest.yaml}"
 
 python -m src.main \
   --config "${CONFIG_FILE}" \

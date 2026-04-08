@@ -125,11 +125,24 @@ llm:
     model: "gemini-3.1-pro-preview"
     api_key_env: "GOOGLE_API_KEY"
 
+  # coding_model:
+  #   provider: "openai"
+  #   model: "glm-5"
+  #   api_key_env: "Z_AI_API_KEY"
+  #   base_url: "https://api.z.ai/api/paas/v4/"
+
   coding_model:
     provider: "openai"
-    model: "glm-5"
-    api_key_env: "Z_AI_API_KEY"
-    base_url: "https://api.z.ai/api/paas/v4/"
+    model: "MiniMax-M2.7"
+    api_key_env: "MINIMAX_API_KEY"
+    base_url: "https://api.minimax.io/v1"
+    subscription: true
+    
+  # coding_model:
+  #   provider: "openai"
+  #   model: "deepseek-chat"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   base_url: "https://api.deepseek.com"
 
   review_model:
     provider: "openai"
@@ -154,5 +167,5 @@ pipeline:
   max_iterations: 8  # Maximum hypothesis-verification loops
   max_consecutive_hypothesis_rejections: 6  # If reached and any SUPPORTS exist, synthesize and report; else stop
   log_dir: "logs"
-  output_dir: "outputs"
+  output_dir: "outputs_2"
   save_intermediate: true  # Save state after each iteration
