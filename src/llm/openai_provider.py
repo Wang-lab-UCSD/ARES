@@ -6,22 +6,41 @@ import asyncio
 import json
 from typing import Any
 
-from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, RateLimitError
+from openai import (
+    AsyncOpenAI,
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from src.llm.base import LLMProvider, LLMResponse, Message, Role
 from src.utils.logging import get_logger
 
 
 # Retry configuration
-MAX_RETRIES = 3
-RETRY_DELAY_BASE = 2.0  # seconds, will be multiplied by attempt number
+MAX_RETRIES = 5  # bumped from 3 — MiniMax/Z.AI has occasional multi-minute 5xx windows
+RETRY_DELAY_BASE = 2.0  # seconds, multiplied by attempt number (2s, 4s, 6s, 8s, 10s)
 
 
 class OpenAIProvider(LLMProvider):
     """OpenAI API provider."""
 
-    # Errors that should trigger a retry
-    RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError, ConnectionError)
+    # Errors that should trigger a retry.
+    #
+    # InternalServerError is the base class for all 5xx responses in the openai
+    # SDK (500, 502, 503, 504). We added it after the 2026-04-09 ETS2/YY1 run
+    # died at iter 7 with HTTP 500 / Cloudflare 520 (Z.AI origin outage) —
+    # without this, a single transient 5xx kills the whole pipeline. A second
+    # concurrent job died for the same reason 8 minutes later, proving it was
+    # a provider-side issue rather than anything in our code.
+    RETRYABLE_ERRORS = (
+        APIConnectionError,
+        APITimeoutError,
+        InternalServerError,
+        RateLimitError,
+        ConnectionError,
+    )
 
     def __init__(self, model: str, api_key: str, **kwargs: Any):
         super().__init__(model, api_key, **kwargs)

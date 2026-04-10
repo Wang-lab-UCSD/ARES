@@ -228,7 +228,7 @@ Mechanisms not yet explored: #1, #4, #6, #7, #8, #9, #10, #11, #12.
 
 ### Feb 2026 Three-Pair Test Run Results (outputs/20260216_*)
 
-Three runs on Feb 16, 2026 using the updated pipeline (with ReviewAgent, convergence criteria, tool quirks):
+Three runs on Feb 16, 2026 using the updated pipeline (with the legacy code-review ReviewAgent — since narrowed and renamed to HypothesisReviewAgent — plus convergence criteria and tool quirks):
 
 1. **ATF3/USF1 (GM12878)** — `outputs/20260216_174252/`
    - 9 iterations, 9 hypotheses, **CONVERGED** (confidence 0.82)

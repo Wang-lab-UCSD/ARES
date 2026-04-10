@@ -915,10 +915,17 @@ def run_fimo_on_peaks(
             fimo_out_dir = td_path / "fimo_out"
 
             # Step 1: optionally window to summit; always ensure unique peak names.
-            # ENCODE peak files commonly use '.' as the name column (col 4), which makes
-            # every peak_id '.' in the FIMO output and breaks motif-to-peak mapping.
-            # Whenever col 4 is missing, uniform, or contains only '.' we assign
-            # sequential IDs (peak_00000, peak_00001, ...) so peak_id is always unique.
+            #
+            # ENCODE peak files commonly use '.' as the name column (col 4), which
+            # makes every peak_id '.' in the FIMO output and breaks motif-to-peak
+            # mapping. Worse, callers sometimes pass the narrowPeak `peak` column
+            # (summit offset, col 9 — integers like 52, 142, 245) into col 4
+            # thinking it's an identifier, which silently collapses thousands of
+            # peaks into a handful of unique peak_ids.
+            #
+            # Rule: whenever col 4 is missing OR not fully unique, we overwrite
+            # it with sequential IDs (peak_00000, peak_00001, ...). This is the
+            # only way FIMO's sequence_name → peak_id mapping is safe.
             peaks_df = pd.read_csv(peaks_bed, sep="\t", header=None)
 
             if peaks_df.shape[1] >= 4:
@@ -926,8 +933,19 @@ def run_fimo_on_peaks(
             else:
                 names = pd.Series(["."] * len(peaks_df))
 
-            if names.nunique() <= 1:
-                # Uniform or missing names — generate sequential IDs
+            if names.nunique() < len(peaks_df):
+                # Non-unique or missing names — generate sequential IDs.
+                # This catches both the ENCODE all-"." case and the subtler bug
+                # where a caller writes a non-identifier column (summit offset,
+                # score, strand, ...) into col 4.
+                if len(peaks_df) > 0 and names.nunique() > 1:
+                    print(
+                        f"[run_fimo_on_peaks] WARNING: col 4 of peaks_bed has "
+                        f"{names.nunique()} unique values across {len(peaks_df)} "
+                        f"rows — not suitable as a peak identifier. Replacing "
+                        f"with sequential peak_NNNNN IDs to prevent peak_id "
+                        f"collisions in FIMO output."
+                    )
                 names = pd.Series([f"peak_{i:05d}" for i in range(len(peaks_df))])
                 peaks_df = peaks_df.copy()
                 if peaks_df.shape[1] >= 4:
@@ -1505,6 +1523,251 @@ def load_string_links(
         df = df[df[score_col] >= min_score].reset_index(drop=True)
 
     return df
+
+
+def find_string_interaction(
+    gene_a: str,
+    gene_b: str,
+    links_df: "pd.DataFrame",
+    aliases_path: str | Path,
+    min_score: int = 0,
+) -> dict:
+    """Find the highest-scoring STRING interaction between two gene names.
+
+    Genes often map to multiple Ensembl protein IDs in STRING (different transcripts,
+    KEGG synonyms, etc.). A naive lookup that takes the first ID misses interactions
+    on the canonical isoform. This helper checks ALL ID combinations and returns the
+    highest score.
+
+    Args:
+        gene_a: First gene symbol (e.g., "SP1")
+        gene_b: Second gene symbol (e.g., "NFYA")
+        links_df: DataFrame from load_string_links()
+        aliases_path: Path to STRING aliases file (e.g. 9606.protein.aliases.v12.0.txt.gz)
+        min_score: Minimum score to consider (default 0 = return any interaction found)
+
+    Returns:
+        Dict with keys:
+          - found: bool — whether any interaction was found
+          - score: int — highest combined_score among all ID pairs (0 if not found)
+          - protein_a, protein_b: str — the ENSP IDs of the best-scoring pair
+          - all_ids_a, all_ids_b: list[str] — all ENSP IDs found for each gene
+    """
+    import gzip as _gzip
+
+    aliases_path = Path(aliases_path)
+    _opener = _gzip.open if str(aliases_path).endswith(".gz") else open
+
+    ids_a: set[str] = set()
+    ids_b: set[str] = set()
+    with _opener(aliases_path, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            parts = line.strip().split("\t")
+            if len(parts) < 2:
+                continue
+            if parts[1] == gene_a:
+                ids_a.add(parts[0])
+            elif parts[1] == gene_b:
+                ids_b.add(parts[0])
+
+    if not ids_a or not ids_b:
+        return {
+            "found": False, "score": 0, "protein_a": None, "protein_b": None,
+            "all_ids_a": sorted(ids_a), "all_ids_b": sorted(ids_b),
+        }
+
+    p_a, p_b = links_df.columns[0], links_df.columns[1]
+    score_col = links_df.columns[-1] if "combined_score" not in links_df.columns else "combined_score"
+
+    matches = links_df[
+        ((links_df[p_a].isin(ids_a)) & (links_df[p_b].isin(ids_b))) |
+        ((links_df[p_a].isin(ids_b)) & (links_df[p_b].isin(ids_a)))
+    ]
+
+    if len(matches) == 0:
+        return {
+            "found": False, "score": 0, "protein_a": None, "protein_b": None,
+            "all_ids_a": sorted(ids_a), "all_ids_b": sorted(ids_b),
+        }
+
+    best = matches.loc[matches[score_col].idxmax()]
+    score = int(best[score_col])
+    if score < min_score:
+        return {
+            "found": False, "score": score, "protein_a": str(best[p_a]), "protein_b": str(best[p_b]),
+            "all_ids_a": sorted(ids_a), "all_ids_b": sorted(ids_b),
+        }
+
+    return {
+        "found": True,
+        "score": score,
+        "protein_a": str(best[p_a]),
+        "protein_b": str(best[p_b]),
+        "all_ids_a": sorted(ids_a),
+        "all_ids_b": sorted(ids_b),
+    }
+
+
+def find_shared_string_partners(
+    gene_a: str,
+    gene_b: str,
+    links_df: "pd.DataFrame",
+    aliases_path: str | Path,
+    min_score: int = 400,
+    max_partners: int | None = None,
+) -> dict:
+    """Find shared STRING interaction partners between two genes, with proper gene names.
+
+    Naive implementations of this fail in two ways:
+      1. Genes map to MULTIPLE Ensembl protein IDs in STRING (canonical, KEGG synonyms,
+         transcripts). A naive `aliases[gene] = ensp_id` dict picks one ID and misses
+         partners on other isoforms.
+      2. Reverse-mapping ENSPs back to gene symbols by `aliases[ensp]` collides on
+         non-canonical sources (PDB structure IDs like "2YRP", deletion-region names
+         like "10q23del"). Must filter the aliases file by source priority to recover
+         the canonical HGNC symbol.
+
+    This helper handles both: collects all ENSP IDs for each gene, finds the partner
+    intersection in `links_df`, then converts each shared ENSP back to its canonical
+    gene symbol using Ensembl_HGNC / Ensembl_HGNC_symbol / BioMart_HUGO sources.
+
+    Args:
+        gene_a: First gene symbol (e.g. "SP1")
+        gene_b: Second gene symbol (e.g. "NFYA")
+        links_df: DataFrame from load_string_links()
+        aliases_path: Path to STRING aliases file (e.g. 9606.protein.aliases.v12.0.txt.gz)
+        min_score: Minimum combined_score for partner edges (default 400 = medium)
+        max_partners: If set, return only the top N partners by max(score_a, score_b)
+
+    Returns:
+        Dict with keys:
+          - shared_count: int — number of unique ENSP IDs that link to BOTH genes
+          - partners: list[dict] — each entry has:
+              {ensp: str, gene_symbol: str, score_a: int, score_b: int}
+              Sorted by min(score_a, score_b) descending. gene_symbol falls back
+              to the ENSP ID if no canonical alias exists.
+          - all_ids_a, all_ids_b: list[str] — all ENSP IDs found for each query gene
+    """
+    import gzip as _gzip
+
+    aliases_path = Path(aliases_path)
+    _opener = _gzip.open if str(aliases_path).endswith(".gz") else open
+
+    # Source priority for converting ENSP → gene symbol. We accept any of these
+    # because not every protein has every annotation source.
+    canonical_sources = (
+        "Ensembl_HGNC",
+        "Ensembl_HGNC_symbol",
+        "BioMart_HUGO",
+        "Ensembl_UniProt",
+        "UniProt_GN_Name",
+        "Ensembl_EntrezGene",
+    )
+
+    # First pass: collect ALL ENSP IDs for the two query genes
+    ids_a: set[str] = set()
+    ids_b: set[str] = set()
+    with _opener(aliases_path, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            parts = line.strip().split("\t")
+            if len(parts) < 2:
+                continue
+            if parts[1] == gene_a:
+                ids_a.add(parts[0])
+            elif parts[1] == gene_b:
+                ids_b.add(parts[0])
+
+    if not ids_a or not ids_b:
+        return {
+            "shared_count": 0, "partners": [],
+            "all_ids_a": sorted(ids_a), "all_ids_b": sorted(ids_b),
+        }
+
+    p_a, p_b = links_df.columns[0], links_df.columns[1]
+    score_col = links_df.columns[-1] if "combined_score" not in links_df.columns else "combined_score"
+
+    # All edges that include any ID for gene_a, with score >= min_score
+    mask_a = (
+        (links_df[p_a].isin(ids_a) & ~links_df[p_b].isin(ids_a)) |
+        (links_df[p_b].isin(ids_a) & ~links_df[p_a].isin(ids_a))
+    )
+    edges_a = links_df[mask_a & (links_df[score_col] >= min_score)]
+
+    mask_b = (
+        (links_df[p_a].isin(ids_b) & ~links_df[p_b].isin(ids_b)) |
+        (links_df[p_b].isin(ids_b) & ~links_df[p_a].isin(ids_b))
+    )
+    edges_b = links_df[mask_b & (links_df[score_col] >= min_score)]
+
+    # Build {partner_ensp: best_score} for each side
+    partners_a: dict[str, int] = {}
+    for _, row in edges_a.iterrows():
+        partner = row[p_b] if row[p_a] in ids_a else row[p_a]
+        if partner in ids_b:
+            continue  # gene_b's own IDs are not partners
+        score = int(row[score_col])
+        if partner not in partners_a or score > partners_a[partner]:
+            partners_a[partner] = score
+
+    partners_b: dict[str, int] = {}
+    for _, row in edges_b.iterrows():
+        partner = row[p_b] if row[p_a] in ids_b else row[p_a]
+        if partner in ids_a:
+            continue
+        score = int(row[score_col])
+        if partner not in partners_b or score > partners_b[partner]:
+            partners_b[partner] = score
+
+    shared_ensps = set(partners_a) & set(partners_b)
+
+    if not shared_ensps:
+        return {
+            "shared_count": 0, "partners": [],
+            "all_ids_a": sorted(ids_a), "all_ids_b": sorted(ids_b),
+        }
+
+    # Second pass: resolve canonical gene symbols for the shared ENSP IDs.
+    # Build {ensp: {source: alias}} only for the ENSPs we care about.
+    ensp_aliases: dict[str, dict[str, str]] = {ensp: {} for ensp in shared_ensps}
+    with _opener(aliases_path, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            parts = line.strip().split("\t")
+            if len(parts) < 3:
+                continue
+            ensp, alias, source = parts[0], parts[1], parts[2]
+            if ensp in ensp_aliases:
+                # Keep first hit per source
+                if source not in ensp_aliases[ensp]:
+                    ensp_aliases[ensp][source] = alias
+
+    def _resolve_symbol(ensp: str) -> str:
+        srcs = ensp_aliases.get(ensp, {})
+        for src in canonical_sources:
+            if src in srcs:
+                return srcs[src]
+        return ensp  # Fallback: return the ENSP if no canonical source matched
+
+    partners = []
+    for ensp in shared_ensps:
+        partners.append({
+            "ensp": ensp,
+            "gene_symbol": _resolve_symbol(ensp),
+            "score_a": partners_a[ensp],
+            "score_b": partners_b[ensp],
+        })
+
+    # Sort by min(score_a, score_b) desc — partners with strong evidence on BOTH sides
+    partners.sort(key=lambda p: min(p["score_a"], p["score_b"]), reverse=True)
+
+    if max_partners is not None:
+        partners = partners[:max_partners]
+
+    return {
+        "shared_count": len(shared_ensps),
+        "partners": partners,
+        "all_ids_a": sorted(ids_a),
+        "all_ids_b": sorted(ids_b),
+    }
 
 
 def run_go_enrichment(

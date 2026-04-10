@@ -52,7 +52,7 @@ class LLMConfig(BaseModel):
     summary_model: LLMModelConfig
     review_model: LLMModelConfig | None = Field(
         default=None,
-        description="Optional dedicated model for code/hypothesis review. Falls back to coding_model if not set.",
+        description="Optional dedicated model for hypothesis review. Falls back to hypothesis_model if not set.",
     )
 
 

@@ -249,6 +249,152 @@ def test_parse_fimo_tsv_drops_nan_sequence_name_rows(tmp_path: Path):
     assert "peak_id" in out.columns
 
 
+def test_run_fimo_on_peaks_replaces_non_unique_names_with_sequential_ids(
+    monkeypatch, tmp_path: Path
+):
+    """REGRESSION (SP1/NFYA K562 iter6 bug): when col 4 of the input BED has
+    non-unique values (e.g. a caller mistakenly wrote the narrowPeak `peak`
+    column = summit offset into col 4), the helper must replace them with
+    sequential peak_NNNNN IDs before handing off to bedtools getfasta /
+    FIMO. Otherwise multiple genomic peaks collapse into one peak_id and
+    motif-to-peak mapping silently breaks.
+
+    We fake subprocess.run so we don't need real bedtools/FIMO — the test
+    captures the BED file that would have been handed to bedtools getfasta
+    and asserts its name column is fully unique.
+    """
+    # BED with 5 rows but only 2 distinct values in col 4 (summit offsets 52, 142)
+    peaks_bed = tmp_path / "peaks.bed"
+    peaks_bed.write_text(
+        "chr1\t100\t300\t52\n"
+        "chr1\t500\t700\t142\n"
+        "chr2\t100\t300\t52\n"
+        "chr3\t500\t700\t142\n"
+        "chr4\t100\t300\t52\n"
+    )
+    genome_fa = tmp_path / "genome.fa"
+    genome_fa.write_text(">chr1\n" + "A" * 1000 + "\n")
+    meme_file = tmp_path / "motif.meme"
+    meme_file.write_text("MEME version 4\n")
+
+    captured_names: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["bedtools", "getfasta"]:
+            # Parse the -bed arg, read it, capture col 4 (the name column).
+            bed_idx = cmd.index("-bed")
+            fasta_idx = cmd.index("-fo")
+            bed_path = Path(cmd[bed_idx + 1])
+            fasta_path = Path(cmd[fasta_idx + 1])
+            lines = bed_path.read_text().strip().split("\n")
+            cols_per_row = [line.split("\t") for line in lines]
+            captured_names.append([row[3] for row in cols_per_row])
+            # Write a fake FASTA that bedtools -name would produce
+            fasta_path.write_text(
+                "\n".join(
+                    f">{row[3]}::{row[0]}:{row[1]}-{row[2]}\nACGT"
+                    for row in cols_per_row
+                )
+                + "\n"
+            )
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:1] == ["fimo"]:
+            # Write a minimal empty fimo.tsv in --oc dir
+            oc_idx = cmd.index("--oc")
+            out_dir = Path(cmd[oc_idx + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "fimo.tsv").write_text(
+                "motif_id\tmotif_alt_id\tsequence_name\tstart\tstop\tstrand\t"
+                "score\tp-value\tq-value\tmatched_sequence\n"
+            )
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("src.utils.bioio.subprocess.run", fake_run)
+
+    run_fimo_on_peaks(
+        peaks_bed=peaks_bed,
+        genome_fasta=genome_fa,
+        meme_file=meme_file,
+        motif_id="MA0001.1",
+    )
+
+    # The helper must have rewritten col 4 to sequential IDs before writing
+    # scan_regions.bed for bedtools getfasta.
+    assert len(captured_names) == 1, "bedtools getfasta should have been called exactly once"
+    names = captured_names[0]
+    assert len(names) == 5
+    assert len(set(names)) == 5, (
+        f"Non-unique names in scan_regions.bed — helper did NOT replace "
+        f"collided names. Got: {names}"
+    )
+    # Sequential IDs follow the peak_NNNNN pattern
+    assert all(n.startswith("peak_") for n in names), (
+        f"Expected peak_NNNNN sequential IDs, got: {names}"
+    )
+
+
+def test_run_fimo_on_peaks_preserves_already_unique_names(
+    monkeypatch, tmp_path: Path
+):
+    """Sanity check: when col 4 is already fully unique, the helper must
+    preserve the caller's names (not overwrite them with peak_NNNNN).
+    """
+    peaks_bed = tmp_path / "peaks.bed"
+    peaks_bed.write_text(
+        "chr1\t100\t300\tATF6_peak_001\n"
+        "chr1\t500\t700\tATF6_peak_002\n"
+        "chr2\t100\t300\tATF6_peak_003\n"
+    )
+    genome_fa = tmp_path / "genome.fa"
+    genome_fa.write_text(">chr1\n" + "A" * 1000 + "\n")
+    meme_file = tmp_path / "motif.meme"
+    meme_file.write_text("MEME version 4\n")
+
+    captured_names: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["bedtools", "getfasta"]:
+            bed_idx = cmd.index("-bed")
+            fasta_idx = cmd.index("-fo")
+            bed_path = Path(cmd[bed_idx + 1])
+            fasta_path = Path(cmd[fasta_idx + 1])
+            lines = bed_path.read_text().strip().split("\n")
+            cols_per_row = [line.split("\t") for line in lines]
+            captured_names.append([row[3] for row in cols_per_row])
+            fasta_path.write_text(
+                "\n".join(
+                    f">{row[3]}::{row[0]}:{row[1]}-{row[2]}\nACGT"
+                    for row in cols_per_row
+                )
+                + "\n"
+            )
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:1] == ["fimo"]:
+            oc_idx = cmd.index("--oc")
+            out_dir = Path(cmd[oc_idx + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "fimo.tsv").write_text(
+                "motif_id\tmotif_alt_id\tsequence_name\tstart\tstop\tstrand\t"
+                "score\tp-value\tq-value\tmatched_sequence\n"
+            )
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("src.utils.bioio.subprocess.run", fake_run)
+
+    run_fimo_on_peaks(
+        peaks_bed=peaks_bed,
+        genome_fasta=genome_fa,
+        meme_file=meme_file,
+        motif_id="MA0001.1",
+    )
+
+    assert len(captured_names) == 1
+    names = captured_names[0]
+    assert names == ["ATF6_peak_001", "ATF6_peak_002", "ATF6_peak_003"]
+
+
 # ---------------------------------------------------------------------------
 # read_narrowpeak — verify output columns
 # ---------------------------------------------------------------------------

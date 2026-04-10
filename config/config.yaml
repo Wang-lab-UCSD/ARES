@@ -144,6 +144,7 @@ llm:
   #   api_key_env: "DEEPSEEK_API_KEY"
   #   base_url: "https://api.deepseek.com"
 
+  # Model for hypothesis review
   review_model:
     provider: "openai"
     model: "glm-5"
@@ -160,7 +161,7 @@ llm:
 execution:
   type: "jupyter"
   timeout_seconds: 900  # 15 min max per execution — covers FIMO + bigWig; kernel death is detected
-  max_retries: 6  # Each retry = 4 REPL iterations; total REPL budget = max_retries * 4 = 24
+  max_retries: 9  # Each retry = 4 REPL iterations; total REPL budget = max_retries * 4 = 36
   # max_static_rejections removed — v2 uses REPL loop, no static pre-gate
 
 pipeline:

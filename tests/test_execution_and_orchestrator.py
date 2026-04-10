@@ -1,4 +1,4 @@
-"""Regression tests for execution bootstrap and review gating."""
+"""Regression tests for execution bootstrap and orchestration."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from src.agents.review_agent import ReviewResult
 from src.execution.jupyter_executor import JupyterExecutor
 from src.orchestrator import Orchestrator
 
@@ -39,6 +38,12 @@ def test_verification_cycle_delegates_to_run_repl(tmp_path):
         async def run_repl(self, **kwargs):
             return expected_result
 
+    class StubExecutor:
+        """Minimal executor stub — _run_verification_cycle re-injects
+        data_files at the start of every cycle, which needs .execute()."""
+        async def execute(self, code):
+            return SimpleNamespace(success=True, stderr="")
+
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
     orchestrator.config = SimpleNamespace(execution=SimpleNamespace(max_retries=5))
@@ -48,7 +53,7 @@ def test_verification_cycle_delegates_to_run_repl(tmp_path):
     )
     orchestrator.coding_agent = StubCodingAgent()
     orchestrator._allowed_packages = []
-    orchestrator.executor = None  # not used — run_repl is stubbed
+    orchestrator.executor = StubExecutor()
 
     result = asyncio.run(
         orchestrator._run_verification_cycle(

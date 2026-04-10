@@ -14,7 +14,8 @@ from typing import Any
 from src.agents.hypothesis_agent import HypothesisAgent
 from src.agents.coding_agent import CodingAgent
 from src.agents.summary_agent import SummaryAgent
-from src.agents.review_agent import ReviewAgent
+from src.agents.review_agent import HypothesisReviewAgent
+from src.prompts.coding import validate_required_data
 from src.execution.jupyter_executor import JupyterExecutor
 from src.llm.base import create_provider
 from src.memory.conversation import PipelineState
@@ -302,7 +303,7 @@ class Orchestrator:
                 reasoning_effort=llm_config.review_model.reasoning_effort,
             )
         else:
-            self.review_llm = self.coding_llm
+            self.review_llm = self.hypothesis_llm
 
         # Inject cost tracker into all providers
         if self.cost_tracker is not None:
@@ -318,7 +319,7 @@ class Orchestrator:
 
         self.hypothesis_agent = HypothesisAgent(self.hypothesis_llm)
         self.coding_agent = CodingAgent(self.coding_llm)
-        self.review_agent = ReviewAgent(self.review_llm)
+        self.review_agent = HypothesisReviewAgent(self.review_llm)
         self.summary_agent = SummaryAgent(self.summary_llm)
 
     def _resolve_allowed_packages(self, manifest_path: Path | None) -> list[str]:
@@ -582,7 +583,7 @@ class Orchestrator:
                             self.logger.warning("Max consecutive hypothesis rejections reached", {
                                 "count": consecutive_hypo_rejections,
                             })
-                            supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS"]
+                            supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0]
                             if supported:
                                 names = ", ".join(h.get("name", "?") for h in supported)
                                 self._display_message(
@@ -655,6 +656,24 @@ class Orchestrator:
 
                 # Hypothesis passed review — mark as consumed
                 tested_ids.add(hypo_id)
+
+                # Stage 1.25: required_data completeness validator (log-only).
+                # Detect manifest categories implied by the hypothesis text but
+                # missing from its `required_data` field. We only log warnings
+                # here — no auto-fix — so we can gather real-run data before
+                # deciding whether to promote this to a deterministic patch.
+                missing_categories = validate_required_data(hypothesis)
+                if missing_categories:
+                    self.logger.warning("required_data may be incomplete", {
+                        "hypothesis": hypothesis.get("name", "N/A"),
+                        "declared": hypothesis.get("required_data", []),
+                        "suggested_missing_categories": missing_categories,
+                        "note": (
+                            "Verification plan / prediction mentions these "
+                            "categories but `required_data` does not declare them. "
+                            "Helper bundles for these categories will NOT be loaded."
+                        ),
+                    })
 
                 # Stage 1.5: Deterministic data-availability check
                 data_ok, missing_keys, available_keys = self._check_data_availability(hypothesis)
@@ -752,6 +771,28 @@ class Orchestrator:
                     "executed_after_review_approval": result.get("_executed_after_review_approval", False),
                     "execution_attempt": result.get("_execution_attempt"),
                 })
+                # Summary agent independently evaluates the result (authoritative scorer)
+                if result.get("support_level") not in ("ERROR", "UNTESTABLE"):
+                    evaluation = await self.summary_agent.evaluate_result(
+                        hypothesis=hypothesis,
+                        coding_result=result,
+                        raw_output=result.get("_raw_output"),
+                    )
+                    # Apply summary agent's judgment as authoritative
+                    result["support_level"] = evaluation.get("support_level", result["support_level"])
+                    result["confidence"] = evaluation.get("confidence", result.get("confidence", 0.0))
+                    result["summary"] = evaluation.get("summary", result.get("summary", ""))
+                    result["findings"] = evaluation.get("findings", result.get("findings", []))
+                    result["reasoning"] = evaluation.get("reasoning", result.get("reasoning", ""))
+                    # Update state to match
+                    self.state.tested_hypotheses[-1]["result"] = result["support_level"]
+                    self.state.tested_hypotheses[-1]["evidence_summary"] = result["summary"]
+                    self.state.evidence[-1]["support_level"] = result["support_level"]
+                    self.state.evidence[-1]["confidence"] = result["confidence"]
+                    self.state.evidence[-1]["summary"] = result["summary"]
+                    self.state.evidence[-1]["findings"] = result["findings"]
+
+                # Write narrative with summary agent's authoritative result
                 narrative.write_result(result)
 
                 # Check for convergence or refinement
@@ -759,16 +800,7 @@ class Orchestrator:
                     # If all retries failed, stop the pipeline
                     if result.get("support_level") == "ERROR":
                         reasoning = result.get("reasoning", "Unknown error")
-                        # Give an accurate stop reason instead of always saying "max retries exceeded".
-                        # Static pre-gate cap and code review cap fire before any execution attempt,
-                        # so "max retries exceeded" is misleading in those cases.
-                        if any(
-                            tag in reasoning
-                            for tag in ("Static pre-gate cap", "Code review cap", "pre-gate")
-                        ):
-                            stop_reason = reasoning
-                        else:
-                            stop_reason = f"max retries ({self.config.execution.max_retries}) exceeded"
+                        stop_reason = f"max retries ({self.config.execution.max_retries}) exceeded"
                         self.state.mark_stopped(
                             reason=stop_reason,
                             confidence=0.0,
@@ -790,15 +822,15 @@ class Orchestrator:
 
             # If max iterations reached without convergence, set a default conclusion
             if not self.state.converged and not self.state.conclusion:
-                supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS"]
-                refused = [h for h in self.state.tested_hypotheses if h.get("result") == "REFUSES"]
+                supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0]
+                rejected = [h for h in self.state.tested_hypotheses if h.get("result") == "REJECTS" and h.get("iteration", -1) != 0]
                 if supported:
                     names = ", ".join(h.get("name", "unnamed") for h in supported)
-                    refused_names = ", ".join(h.get("name", "unnamed") for h in refused)
+                    rejected_names = ", ".join(h.get("name", "unnamed") for h in rejected)
                     self.state.conclusion = (
                         f"Max iterations reached. Supported mechanism evidence found "
                         f"({names}), but no mechanism achieved full convergence. "
-                        f"Ruled-out mechanisms: {refused_names}."
+                        f"Ruled-out mechanisms: {rejected_names}."
                     )
                 else:
                     self.state.conclusion = "Max iterations reached without finding a supported hypothesis."
@@ -945,8 +977,8 @@ class Orchestrator:
         """Run a single verification cycle for a hypothesis using the REPL agent.
 
         The coding agent runs an incremental execute-observe loop until it reaches
-        a conclusion.  No static pre-gate or LLM code review — errors are fed back
-        to the model as observations and it fixes them in place.
+        a conclusion. Errors are fed back to the model as observations and it fixes
+        them in place.
 
         Args:
             hypothesis: The hypothesis to verify
@@ -958,6 +990,14 @@ class Orchestrator:
         self.logger.info("Running verification", {
             "hypothesis": hypothesis.get("name", "N/A"),
         })
+
+        # Re-inject `data_files` into the kernel before every verification cycle.
+        # The Jupyter kernel persists across iterations, and the coding LLM
+        # occasionally reassigns `data_files = {...}` (usually with lowercase or
+        # partial keys) which corrupts kernel state for all subsequent iterations.
+        # Re-injecting guarantees each iteration starts with the canonical dict,
+        # so a bad assignment in iter N cannot break iter N+1.
+        await self._inject_data_files()
 
         max_repl_iterations = self.config.execution.max_retries * 4  # generous budget
 
@@ -992,7 +1032,7 @@ class Orchestrator:
     def _biology_layers_for_convergence(self) -> tuple[list[str], list[str]]:
         """Compute which biology layers are available and which were used in any tested hypothesis.
 
-        "Used" includes any support level (SUPPORTS, REFUTES, INCONCLUSIVE) — the goal is to
+        "Used" includes any support level (SUPPORTS, REJECTS, INCONCLUSIVE) — the goal is to
         ensure the pipeline at least attempts functional/conservation characterization, not
         that it must succeed.
 
@@ -1054,7 +1094,7 @@ class Orchestrator:
         parts.append(
             "Synthesize these results when deciding next steps. "
             "Consider whether the group as a whole supports, partially supports, "
-            "or refuses the broad mechanism."
+            "or rejects the broad mechanism."
         )
         return "\n".join(parts)
 
@@ -1102,7 +1142,7 @@ class Orchestrator:
             convergence["converged"] = False
             convergence["reasoning"] = (
                 f"[OVERRIDDEN] LLM declared convergence but no hypothesis achieved "
-                f"SUPPORTS (all are REFUSES/INCONCLUSIVE/ERROR/UNTESTABLE). "
+                f"SUPPORTS (all are REJECTS/INCONCLUSIVE/ERROR/UNTESTABLE). "
                 f"Original reasoning: {convergence.get('reasoning', '')}"
             )
 

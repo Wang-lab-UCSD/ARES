@@ -79,7 +79,15 @@ class CodingAgent:
         debug_dir = run_dir / "debug_code"
         debug_dir.mkdir(exist_ok=True)
 
-        system_prompt = build_repl_system_prompt()
+        # Use the hypothesis's required_data list to select which helper bundles
+        # to load. If the hypothesis didn't declare required_data, the dispatcher
+        # falls back to loading all bundles (safe default).
+        required_data = hypothesis.get("required_data") or None
+        system_prompt = build_repl_system_prompt(required_data=required_data)
+        self.logger.info("Built REPL system prompt", {
+            "required_data_count": len(required_data) if required_data else 0,
+            "system_prompt_chars": len(system_prompt),
+        })
         initial_msg = build_repl_initial_prompt(
             hypothesis=hypothesis,
             data_manifest=data_manifest,
@@ -149,7 +157,6 @@ class CodingAgent:
 
             no_tag_count = 0
             iteration += 1  # count only actual code executions toward the budget
-            messages.append(Message.assistant(content))
 
             # Execute only the FIRST block per LLM turn — true incremental REPL.
             # The model must see each result before writing the next step.
@@ -157,6 +164,38 @@ class CodingAgent:
             # causing cascade failures when an early block fails silently.
             code = execute_blocks[0].strip()
             block_idx = 0
+
+            # Strip unused execute blocks from the stored conversation history.
+            # Some models (e.g. MiniMax) emit dozens of execute blocks per response
+            # — only the first is run, and storing all of them blows up context size.
+            stored_content = content
+            if len(execute_blocks) > 1:
+                # Keep only the first <execute>...</execute> block
+                first_exec_pattern = re.compile(
+                    r"<execute[^>]*>.*?</execute>", re.DOTALL | re.IGNORECASE
+                )
+                first_match = first_exec_pattern.search(content)
+                if first_match:
+                    # Replace all execute blocks with just the first one
+                    parts: list[str] = []
+                    last_end = 0
+                    for i, m in enumerate(first_exec_pattern.finditer(content)):
+                        if i == 0:
+                            parts.append(content[last_end:m.end()])
+                            last_end = m.end()
+                        else:
+                            parts.append(content[last_end:m.start()])
+                            last_end = m.end()
+                    parts.append(content[last_end:])
+                    stored_content = "".join(parts)
+                    self.logger.warning("REPL: stripped extra execute blocks from history", {
+                        "iteration": iteration,
+                        "blocks_total": len(execute_blocks),
+                        "original_chars": len(content),
+                        "stored_chars": len(stored_content),
+                    })
+
+            messages.append(Message.assistant(stored_content))
             try:
                 (debug_dir / f"iter{self.state_iter}_repl{iteration}_block{block_idx}.py"
                  ).write_text(code, encoding="utf-8")
@@ -190,7 +229,7 @@ class CodingAgent:
             "You have used all available iterations. "
             "Based on what you have observed so far, give your final conclusion:\n\n"
             "<solution>\n"
-            "support_level: SUPPORTS|REFUTES|INCONCLUSIVE\n"
+            "support_level: SUPPORTS|REJECTS|INCONCLUSIVE\n"
             "confidence: 0.0-1.0\n"
             "finding: <one sentence>\n"
             "reasoning: <explanation>\n"
@@ -222,7 +261,7 @@ class CodingAgent:
             return m.group(1).strip() if m else default
 
         raw = _field("support_level", "INCONCLUSIVE").upper()
-        valid = {"SUPPORTS", "REFUTES", "INCONCLUSIVE", "ERROR", "UNTESTABLE"}
+        valid = {"SUPPORTS", "REJECTS", "INCONCLUSIVE", "ERROR", "UNTESTABLE"}
         level = raw if raw in valid else "INCONCLUSIVE"
 
         try:
@@ -231,12 +270,14 @@ class CodingAgent:
         except ValueError:
             conf = 0.5
 
+        analysis = _field("analysis", "")
         finding = _field("finding", "")
         reasoning = _field("reasoning", text)
         raw_output = "\n".join(stdout_parts)
 
         return {
             "execution_success": level not in ("ERROR",),
+            "analysis": analysis,
             "findings": [finding] if finding else [],
             "support_level": level,
             "confidence": conf,

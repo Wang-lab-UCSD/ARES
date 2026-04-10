@@ -9,9 +9,12 @@ import subprocess
 from src.utils.bioio import (
     annotate_peaks_with_chromhmm,
     create_tss_bed_from_gencode,
+    find_shared_string_partners,
+    find_string_interaction,
     load_gencode_genes,
     load_rnaseq_expression,
     load_rnaseq_with_gene_id,
+    load_string_links,
     merge_rnaseq_with_nearest_genes,
     parse_bedtools_closest,
     parse_chromhmm_intersect,
@@ -325,3 +328,390 @@ class TestRunGoEnrichment:
             run_go_enrichment(["Trp53"], organism="mmusculus", significant_only=False)
         call_kwargs = instance.profile.call_args[1]
         assert call_kwargs["organism"] == "mmusculus"
+
+
+# ============================================================================
+# find_string_interaction tests
+# ============================================================================
+
+
+def _write_string_aliases(tmp_path: Path, lines: list[tuple[str, str, str]]) -> Path:
+    """Write a STRING-format aliases file (TSV: ENSP_id, alias, source)."""
+    p = tmp_path / "aliases.txt"
+    p.write_text("\n".join(f"{a}\t{b}\t{c}" for a, b, c in lines) + "\n")
+    return p
+
+
+def _make_links_df(rows: list[tuple[str, str, int]]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["protein1", "protein2", "combined_score"])
+
+
+def test_find_string_interaction_canonical_pair(tmp_path):
+    """Two genes with single canonical IDs and a direct interaction."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_NFYA", "NFYA", "Ensembl_HGNC"),
+        ("9606.ENSP_SP1",  "SP1",  "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_NFYA", "9606.ENSP_SP1", 909),
+    ])
+
+    result = find_string_interaction("SP1", "NFYA", links, aliases)
+    assert result["found"] is True
+    assert result["score"] == 909
+    assert set(result["all_ids_a"]) == {"9606.ENSP_SP1"}
+    assert set(result["all_ids_b"]) == {"9606.ENSP_NFYA"}
+
+
+def test_find_string_interaction_multimapped_gene_picks_correct_id(tmp_path):
+    """Critical test: SP1 has 3 ENSP IDs (KEGG synonyms + canonical),
+    only the canonical one has the NFYA interaction. Naive setdefault()
+    would pick the wrong ID and miss the interaction.
+    """
+    aliases = _write_string_aliases(tmp_path, [
+        # KEGG synonyms first (the trap)
+        ("9606.ENSP_SP1_synonym1", "SP1",  "KEGG_NAME_SYNONYM"),
+        ("9606.ENSP_SP1_synonym2", "SP1",  "KEGG_NAME_SYNONYM"),
+        ("9606.ENSP_SP1_synonym2", "SP1",  "UniProt_GN_Synonyms"),
+        # Canonical Ensembl ID (the one with the real interaction)
+        ("9606.ENSP_SP1_canonical", "SP1", "Ensembl_HGNC"),
+        ("9606.ENSP_SP1_canonical", "SP1", "Ensembl_HGNC_symbol"),
+        # NFYA single canonical ID
+        ("9606.ENSP_NFYA", "NFYA", "Ensembl_HGNC"),
+    ])
+    # The interaction exists ONLY with the canonical SP1 ID — synonyms have no link
+    links = _make_links_df([
+        ("9606.ENSP_SP1_canonical", "9606.ENSP_NFYA", 909),
+    ])
+
+    result = find_string_interaction("SP1", "NFYA", links, aliases)
+    assert result["found"] is True, "Failed to find interaction with multi-mapped gene"
+    assert result["score"] == 909
+    assert "9606.ENSP_SP1_canonical" in (result["protein_a"], result["protein_b"])
+    assert len(result["all_ids_a"]) == 3, "Should find all 3 ENSP IDs for SP1"
+
+
+def test_find_string_interaction_picks_highest_score(tmp_path):
+    """When multiple ID combinations link two genes, return the highest score."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A1", "GENE_A", "KEGG"),
+        ("9606.ENSP_A2", "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B1", "GENE_B", "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A1", "9606.ENSP_B1", 450),  # weak link via synonym
+        ("9606.ENSP_A2", "9606.ENSP_B1", 850),  # strong link via canonical
+    ])
+
+    result = find_string_interaction("GENE_A", "GENE_B", links, aliases)
+    assert result["found"] is True
+    assert result["score"] == 850  # not 450
+
+
+def test_find_string_interaction_reverse_direction(tmp_path):
+    """STRING links can be in either direction (A→B or B→A). Both must match."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A", "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B", "GENE_B", "Ensembl_HGNC"),
+    ])
+    # Link is stored as B→A (not A→B)
+    links = _make_links_df([
+        ("9606.ENSP_B", "9606.ENSP_A", 700),
+    ])
+
+    result = find_string_interaction("GENE_A", "GENE_B", links, aliases)
+    assert result["found"] is True
+    assert result["score"] == 700
+
+
+def test_find_string_interaction_no_link_returns_not_found(tmp_path):
+    """Two genes that exist in aliases but have no STRING link."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_X", "GENE_X", "Ensembl_HGNC"),
+        ("9606.ENSP_Y", "GENE_Y", "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_X", "9606.ENSP_OTHER", 800),  # X links to something else
+    ])
+
+    result = find_string_interaction("GENE_X", "GENE_Y", links, aliases)
+    assert result["found"] is False
+    assert result["score"] == 0
+    # All_ids should still be populated (the genes exist, just no link)
+    assert set(result["all_ids_a"]) == {"9606.ENSP_X"}
+    assert set(result["all_ids_b"]) == {"9606.ENSP_Y"}
+
+
+def test_find_string_interaction_unknown_gene_returns_not_found(tmp_path):
+    """Gene name not in aliases file at all."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A", "GENE_A", "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([])
+
+    result = find_string_interaction("GENE_A", "UNKNOWN_GENE", links, aliases)
+    assert result["found"] is False
+    assert result["score"] == 0
+    assert result["all_ids_a"] == ["9606.ENSP_A"]
+    assert result["all_ids_b"] == []
+
+
+def test_find_string_interaction_min_score_filter(tmp_path):
+    """min_score filters out interactions below the threshold."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A", "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B", "GENE_B", "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_B", 350),  # below 400 threshold
+    ])
+
+    result = find_string_interaction("GENE_A", "GENE_B", links, aliases, min_score=400)
+    assert result["found"] is False
+    assert result["score"] == 350  # still reports the score for context
+
+
+def test_find_string_interaction_handles_gzip(tmp_path):
+    """Aliases file in gzip format (the real STRING distribution format)."""
+    import gzip as _gzip
+    p = tmp_path / "aliases.txt.gz"
+    with _gzip.open(p, "wt") as f:
+        f.write("9606.ENSP_A\tGENE_A\tEnsembl_HGNC\n")
+        f.write("9606.ENSP_B\tGENE_B\tEnsembl_HGNC\n")
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_B", 800),
+    ])
+
+    result = find_string_interaction("GENE_A", "GENE_B", links, p)
+    assert result["found"] is True
+    assert result["score"] == 800
+
+
+# ============================================================================
+# find_shared_string_partners tests
+# ============================================================================
+
+
+def test_find_shared_string_partners_basic(tmp_path):
+    """Two genes with one shared partner that has a canonical HGNC alias."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A",       "GENE_A",  "Ensembl_HGNC"),
+        ("9606.ENSP_B",       "GENE_B",  "Ensembl_HGNC"),
+        ("9606.ENSP_PARTNER", "EP300",   "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_PARTNER", 800),
+        ("9606.ENSP_B", "9606.ENSP_PARTNER", 750),
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases)
+    assert result["shared_count"] == 1
+    assert len(result["partners"]) == 1
+    assert result["partners"][0]["gene_symbol"] == "EP300"
+    assert result["partners"][0]["score_a"] == 800
+    assert result["partners"][0]["score_b"] == 750
+
+
+def test_find_shared_string_partners_recovers_canonical_symbol_not_pdb_id(tmp_path):
+    """Critical regression test: STRING aliases include PDB IDs (e.g. '2YRP'),
+    deletion-region names (e.g. '10q23del'), and other non-canonical synonyms.
+    A naive lookup picks one of these instead of the canonical HGNC symbol.
+    The helper must filter by source priority and return the HGNC name.
+    """
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A",       "GENE_A",     "Ensembl_HGNC"),
+        ("9606.ENSP_B",       "GENE_B",     "Ensembl_HGNC"),
+        # PARTNER has many alias rows; the canonical HGNC line is NOT first
+        ("9606.ENSP_PARTNER", "2YRP",       "PDB"),
+        ("9606.ENSP_PARTNER", "10q23del",   "Reactome"),
+        ("9606.ENSP_PARTNER", "1A02",       "PDB"),
+        ("9606.ENSP_PARTNER", "PTEN",       "Ensembl_HGNC"),  # canonical, found late
+        ("9606.ENSP_PARTNER", "MMAC1",      "KEGG_NAME_SYNONYM"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_PARTNER", 600),
+        ("9606.ENSP_B", "9606.ENSP_PARTNER", 700),
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases)
+    assert result["shared_count"] == 1
+    assert result["partners"][0]["gene_symbol"] == "PTEN"
+
+
+def test_find_shared_string_partners_multimapped_query_genes(tmp_path):
+    """Critical: query genes themselves often have multiple ENSP IDs (canonical
+    Ensembl plus KEGG synonyms). The helper must collect ALL of them and find
+    partners across the union — naive code that grabs the first ENSP would
+    miss interactions on the other isoforms.
+    """
+    aliases = _write_string_aliases(tmp_path, [
+        # SP1 has 3 ENSP IDs; only the canonical one has the shared partner edge
+        ("9606.ENSP_SP1_kegg",     "SP1",  "KEGG_NAME_SYNONYM"),
+        ("9606.ENSP_SP1_uniprot",  "SP1",  "UniProt_GN_Synonyms"),
+        ("9606.ENSP_SP1_canon",    "SP1",  "Ensembl_HGNC"),
+        ("9606.ENSP_NFYA",         "NFYA", "Ensembl_HGNC"),
+        ("9606.ENSP_PARTNER",      "TP53", "Ensembl_HGNC"),
+    ])
+    # Edges live on the canonical SP1 ID, not the synonyms
+    links = _make_links_df([
+        ("9606.ENSP_SP1_canon", "9606.ENSP_PARTNER", 850),
+        ("9606.ENSP_NFYA",      "9606.ENSP_PARTNER", 800),
+    ])
+
+    result = find_shared_string_partners("SP1", "NFYA", links, aliases)
+    assert result["shared_count"] == 1, "Failed to find partner via canonical SP1 ID"
+    assert result["partners"][0]["gene_symbol"] == "TP53"
+    # Ensure both SP1 ENSP IDs were collected (verifies multi-mapping handling)
+    assert len(result["all_ids_a"]) == 3
+
+
+def test_find_shared_string_partners_excludes_self(tmp_path):
+    """If gene_a's own ENSP appears as a 'partner' of gene_b (because the two
+    genes have an edge), it must NOT be reported as a shared partner.
+    """
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A", "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B", "GENE_B", "Ensembl_HGNC"),
+        ("9606.ENSP_C", "GENE_C", "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_B", 900),  # direct A-B edge
+        ("9606.ENSP_A", "9606.ENSP_C", 700),
+        ("9606.ENSP_B", "9606.ENSP_C", 650),
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases)
+    assert result["shared_count"] == 1, "GENE_A and GENE_B must not be reported as their own shared partners"
+    assert result["partners"][0]["gene_symbol"] == "GENE_C"
+
+
+def test_find_shared_string_partners_min_score_filter(tmp_path):
+    """Edges below min_score should not contribute partners."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A",       "GENE_A",  "Ensembl_HGNC"),
+        ("9606.ENSP_B",       "GENE_B",  "Ensembl_HGNC"),
+        ("9606.ENSP_STRONG",  "STRONG",  "Ensembl_HGNC"),
+        ("9606.ENSP_WEAK",    "WEAK",    "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_STRONG", 800),
+        ("9606.ENSP_B", "9606.ENSP_STRONG", 700),
+        ("9606.ENSP_A", "9606.ENSP_WEAK",   350),  # below 400 threshold
+        ("9606.ENSP_B", "9606.ENSP_WEAK",   350),
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases, min_score=400)
+    assert result["shared_count"] == 1
+    assert result["partners"][0]["gene_symbol"] == "STRONG"
+
+
+def test_find_shared_string_partners_sorted_by_min_score(tmp_path):
+    """Partners should be sorted by min(score_a, score_b) descending — the
+    'evidence on both sides' criterion.
+    """
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A",   "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B",   "GENE_B", "Ensembl_HGNC"),
+        ("9606.ENSP_P1",  "P1",     "Ensembl_HGNC"),
+        ("9606.ENSP_P2",  "P2",     "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_P1", 999),  # Very strong on A side
+        ("9606.ENSP_B", "9606.ENSP_P1", 410),  # Weak on B side → min = 410
+        ("9606.ENSP_A", "9606.ENSP_P2", 700),
+        ("9606.ENSP_B", "9606.ENSP_P2", 700),  # Balanced → min = 700
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases)
+    assert [p["gene_symbol"] for p in result["partners"]] == ["P2", "P1"]
+
+
+def test_find_shared_string_partners_max_partners(tmp_path):
+    """max_partners truncates the result list."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A",   "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B",   "GENE_B", "Ensembl_HGNC"),
+    ] + [
+        (f"9606.ENSP_P{i}", f"P{i}", "Ensembl_HGNC") for i in range(5)
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", f"9606.ENSP_P{i}", 800) for i in range(5)
+    ] + [
+        ("9606.ENSP_B", f"9606.ENSP_P{i}", 800) for i in range(5)
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases, max_partners=3)
+    assert result["shared_count"] == 5  # Total still reflects all shared
+    assert len(result["partners"]) == 3  # But list is truncated
+
+
+def test_find_shared_string_partners_falls_back_to_ensp_when_no_canonical_alias(tmp_path):
+    """If a partner has NO canonical alias source at all, use the ENSP as the
+    label rather than picking a noisy synonym.
+    """
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A",       "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B",       "GENE_B", "Ensembl_HGNC"),
+        # PARTNER only has noisy synonyms — no canonical entry
+        ("9606.ENSP_PARTNER", "junk1",  "PDB"),
+        ("9606.ENSP_PARTNER", "junk2",  "Reactome"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_PARTNER", 800),
+        ("9606.ENSP_B", "9606.ENSP_PARTNER", 800),
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases)
+    assert result["shared_count"] == 1
+    # Falls back to ENSP, not "junk1" or "junk2"
+    assert result["partners"][0]["gene_symbol"] == "9606.ENSP_PARTNER"
+
+
+def test_find_shared_string_partners_no_shared_returns_empty(tmp_path):
+    """Two genes with disjoint partner sets."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A",  "GENE_A", "Ensembl_HGNC"),
+        ("9606.ENSP_B",  "GENE_B", "Ensembl_HGNC"),
+        ("9606.ENSP_X",  "X",      "Ensembl_HGNC"),
+        ("9606.ENSP_Y",  "Y",      "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_X", 800),
+        ("9606.ENSP_B", "9606.ENSP_Y", 800),
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, aliases)
+    assert result["shared_count"] == 0
+    assert result["partners"] == []
+    assert set(result["all_ids_a"]) == {"9606.ENSP_A"}
+    assert set(result["all_ids_b"]) == {"9606.ENSP_B"}
+
+
+def test_find_shared_string_partners_unknown_gene_returns_empty(tmp_path):
+    """Gene not in aliases file → empty result, no crash."""
+    aliases = _write_string_aliases(tmp_path, [
+        ("9606.ENSP_A", "GENE_A", "Ensembl_HGNC"),
+    ])
+    links = _make_links_df([])
+
+    result = find_shared_string_partners("GENE_A", "UNKNOWN", links, aliases)
+    assert result["shared_count"] == 0
+    assert result["all_ids_b"] == []
+
+
+def test_find_shared_string_partners_handles_gzip(tmp_path):
+    """Real STRING aliases distribution is gzipped — must work."""
+    import gzip as _gzip
+    p = tmp_path / "aliases.txt.gz"
+    with _gzip.open(p, "wt") as f:
+        f.write("9606.ENSP_A\tGENE_A\tEnsembl_HGNC\n")
+        f.write("9606.ENSP_B\tGENE_B\tEnsembl_HGNC\n")
+        f.write("9606.ENSP_P\tEP300\tEnsembl_HGNC\n")
+    links = _make_links_df([
+        ("9606.ENSP_A", "9606.ENSP_P", 800),
+        ("9606.ENSP_B", "9606.ENSP_P", 800),
+    ])
+
+    result = find_shared_string_partners("GENE_A", "GENE_B", links, p)
+    assert result["shared_count"] == 1
+    assert result["partners"][0]["gene_symbol"] == "EP300"

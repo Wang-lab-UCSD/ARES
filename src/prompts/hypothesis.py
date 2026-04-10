@@ -164,7 +164,16 @@ def build_refinement_prompt(
             surprising_intro = (
                 "Below are observations that may be surprising, strong, or partially contradictory.\n"
                 "Your next hypothesis MUST treat at least one of these as a phenomenon to explain,\n"
-                "not just re-ask the original question."
+                "not just re-ask the original question.\n\n"
+                "**High-value lead — motif-score-vs-signal correlation**: If any finding below\n"
+                "reports a Spearman or Pearson correlation |r| >= 0.15 between the TF_B motif\n"
+                "score and TF_A signal (in EITHER direction, even if the hypothesis predicted\n"
+                "the opposite sign), this is a strong candidate for a sequence-intrinsic mechanism.\n"
+                "Consider testing whether the correlation persists at TF_A peaks that lack TF_B\n"
+                "protein (no ChIP-seq overlap) — this is the single most diagnostic test for\n"
+                "distinguishing protein-mediated vs sequence-intrinsic mechanisms. However, weigh\n"
+                "this against other evidence before committing: if there is strong PPI evidence\n"
+                "(STRING score >= 700) or other leads, those may be more productive to pursue first."
             )
         else:
             surprising_intro = "No specific high-signal findings were extracted; focus on clarifying the mechanism."
@@ -202,25 +211,28 @@ No hypotheses have been tested yet. This is the start of the investigation.
 
 Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant.
 
-**First hypothesis MUST be a standalone signal authenticity check — do NOT combine it with
-any mechanism test.** This hypothesis should ONLY verify two things:
+**First hypothesis MUST be a standalone artifact check — do NOT combine it with
+any mechanism test.** The hypothesis asks: "Is the ChIP-seq signal a technical artifact?"
 
 Check 1 (Expression): Is TF_A expressed (TPM >= 0.5)?
 Check 2 (Motif): Is TF_A's known motif enriched at TF_A peaks (≥2-fold over background,
 p < 0.05)? Note: 1.2-2.0 fold is ambiguous (some direct + mostly indirect binding);
 ≥2-fold indicates confident direct binding.
 
-Interpretation (reported in the solution):
-- YES expression + YES motif (≥2-fold): high-confidence direct binding. Proceed normally.
-- YES expression + WEAK motif (1.2-2.0 fold): likely indirect/tethered binding with some
-  direct binding. Hypothesize protein interaction or cooperative binding mechanisms.
-- YES expression + NO motif (<1.2-fold): hypothesize indirect/tethered binding. Look for partner motifs.
-- NO expression + YES motif: low-confidence. Proceed with caution.
-- NO expression + NO motif: likely artifact (e.g., antibody cross-reactivity). Flag and deprioritize binding-mechanism hypotheses.
+Interpretation — the hypothesis predicts the signal is an artifact, so:
+- YES expression + YES motif (≥2-fold): signal is genuine, not an artifact → REJECTS.
+  High-confidence direct binding. Proceed normally.
+- YES expression + WEAK motif (1.2-2.0 fold): signal is likely genuine → REJECTS.
+  Hypothesize protein interaction or cooperative binding mechanisms.
+- YES expression + NO motif (<1.2-fold): signal is genuine but indirect → REJECTS.
+  Hypothesize indirect/tethered binding. Look for partner motifs.
+- NO expression + YES motif: ambiguous → INCONCLUSIVE. Proceed with caution.
+- NO expression + NO motif: signal IS a technical artifact → SUPPORTS.
+  The pipeline will converge on "technical artifact" and stop.
 
-Only call "artifact" when BOTH checks fail. A single failing check should redirect the
-hypothesis, not invalidate it. Do NOT add co-occupancy, chromatin, or any other mechanism
-steps to this hypothesis."""
+Only call SUPPORTS (artifact confirmed) when BOTH checks fail. A single failing check
+should redirect the hypothesis, not confirm artifact. Do NOT add co-occupancy, chromatin,
+or any other mechanism steps to this hypothesis."""
 
     prompt = f"""# Scientific Finding Under Investigation
 
@@ -299,11 +311,10 @@ genome-wide multiple testing correction that may be overly conservative for shor
 Your hypothesis should also be motivated by previous results — build on what you've learned,
 don't ignore it. But advancing toward mechanism takes priority over following up on details.
 
-**Expression check**: If the first iteration found TF_A has TPM < 0.5 AND TF_A's motif is NOT
-enriched at TF_A peaks (<1.2-fold), the signal is likely an artifact — prioritize
-artifact/cross-reactivity hypotheses. If TF_A is expressed but motif enrichment is weak
-(1.2-2.0 fold), prioritize indirect/tethering mechanisms. If only expression failed but
-motif is enriched, proceed with caution but do not assume artifact.
+**Artifact check**: If the first iteration SUPPORTS (TF_A not expressed AND motif not enriched),
+the signal is a confirmed artifact — the pipeline will stop. If the first iteration REJECTS
+(signal is genuine), proceed with mechanism hypotheses. If INCONCLUSIVE, proceed with caution.
+When REJECTS with weak motif (1.2-2.0 fold), prioritize indirect/tethering mechanisms.
 
 **No-DBD adjustment**: If the QC check found TF_A has NO motif in the database (no DNA-binding
 domain), adjust ALL subsequent hypothesis thresholds:
@@ -317,7 +328,7 @@ domain), adjust ALL subsequent hypothesis thresholds:
   (2) check STRING only for the top 10-20 TFs by overlap. This avoids 352 STRING queries while
   still casting a wide net.
 
-When the last result **REFUSES** or is **INCONCLUSIVE** but its findings include strong or
+When the last result **REJECTS** or is **INCONCLUSIVE** but its findings include strong or
 surprising patterns, your next hypothesis MUST propose a mechanism that EXPLAINS those
 patterns. Examples of surprising patterns that MUST be followed up:
 - Large fold enrichment despite low absolute percentage (e.g., 108-fold co-occupancy at 23% overlap)
@@ -370,7 +381,7 @@ Respond in JSON format:
             "name": "Hypothesis name",
             "group": "mechanism-slug",
             "rationale": "Biological reasoning",
-            "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3). Do NOT invent aggressive thresholds (>2.0 fold, >=3 partners) — these cause real signals to be labeled REFUTES.",
+            "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3, or Spearman/Pearson r >= 0.2). For peak overlap thresholds, calibrate to the mechanism: cooperative binding >= 30%, protein tethering/indirect recruitment >= 10%, unbiased screen >= 15%. Do NOT invent aggressive thresholds (>2.0 fold, >30% overlap for non-cooperative mechanisms, r > 0.4) — these cause genuine but moderate biological signals to be labeled REJECTS.",
             "verification_plan": ["Step 1", "Step 2", ...],
             "priority": 1,
             "required_data": ["data_key_1", "data_key_2"]
@@ -503,7 +514,7 @@ Respond in JSON format:
         "name": "Hypothesis name",
         "group": "mechanism-slug",
         "rationale": "Biological reasoning",
-        "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3). Do NOT invent aggressive thresholds.",
+        "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3, or r >= 0.2). For overlap: cooperative >= 30%, tethering >= 10%, unbiased screen >= 15%. Do NOT invent aggressive thresholds.",
         "verification_plan": ["Step 1", "Step 2", ...],
         "priority": 1,
         "required_data": ["data_key_1", "data_key_2"]

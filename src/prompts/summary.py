@@ -39,14 +39,14 @@ job is to check whether that specific prediction was confirmed.
   2. 1.1 <= fold change < 1.2 OR 0.15 <= Cohen's d < 0.3
   Set support_level = "INCONCLUSIVE" and confidence 0.4-0.7.
 
-**REFUSES** — ANY of the following:
+**REJECTS** — ANY of the following:
   1. The predicted effect is absent or reversed (e.g., depletion instead of enrichment)
   2. p >= 0.05 with adequate sample size (N >= 30)
   3. fold change < 1.1 AND Cohen's d < 0.15
-  If clearly refused, set support_level = "REFUSES" and confidence >= 0.7.
+  If clearly refused, set support_level = "REJECTS" and confidence >= 0.7.
 
   **STRING exception**: When a hypothesis is tested solely via STRING and no interaction is
-  found, set REFUSES but with confidence 0.5-0.7 (not 1.0). STRING is biased toward
+  found, set REJECTS but with confidence 0.5-0.7 (not 1.0). STRING is biased toward
   well-studied proteins — absence of a STRING edge lowers the prior on PPI but does not
   definitively disprove it. If other genomic evidence supports PPI (co-occupancy, signal
   correlation), note this in reasoning.
@@ -83,20 +83,21 @@ When the user prompt states that the run uses only observational data (ChIP-seq,
 
 **PREREQUISITE — at least one SUPPORTS**: Convergence is ONLY possible when at least one
 hypothesis in the testing history has support_level = "SUPPORTS". If every hypothesis so
-far has been REFUSES, INCONCLUSIVE, ERROR, or UNTESTABLE, you MUST set converged=false
+far has been REJECTS, INCONCLUSIVE, ERROR, or UNTESTABLE, you MUST set converged=false
 regardless of how interesting the individual findings are. Promising sub-findings inside a
-REFUSES result do NOT count — the hypothesis must have been formally SUPPORTED as a whole.
+REJECTS result do NOT count — the hypothesis must have been formally SUPPORTED as a whole.
 
-**Signal authenticity QC (special handling)**:
-The first hypothesis typically checks whether TF_A's ChIP-seq signal is genuine (expression +
-motif enrichment). Treat this result as follows:
-- QC SUPPORTS (signal is genuine): this does NOT satisfy the SUPPORTS prerequisite above —
-  it is a quality check, not a mechanism. The pipeline still needs a mechanism SUPPORTS.
-- QC INCONCLUSIVE (weak expression or weak motif enrichment): proceed with caution. The signal
-  is likely real but low-confidence. The pipeline still needs a mechanism SUPPORTS.
-- QC REFUTES (TF_A not expressed AND motif not enriched): the signal is a technical artifact.
-  The pipeline MAY converge immediately on "technical artifact" as the conclusion — criteria
-  2-5 are waived because there is no biological mechanism to characterize.
+**Artifact check QC (special handling)**:
+The first hypothesis tests whether TF_A's ChIP-seq signal is a technical artifact. Its logic
+is inverted: SUPPORTS means the signal IS an artifact; REJECTS means it is genuine.
+- QC REJECTS (signal is genuine): the signal passed quality checks. This does NOT satisfy the
+  SUPPORTS prerequisite above — it is a quality check, not a mechanism. The pipeline still
+  needs a mechanism SUPPORTS.
+- QC INCONCLUSIVE (ambiguous — e.g., not expressed but motif present): proceed with caution.
+  The pipeline still needs a mechanism SUPPORTS.
+- QC SUPPORTS (TF_A not expressed AND motif not enriched — artifact confirmed): The pipeline
+  MUST converge immediately on "technical artifact" as the conclusion — criteria 2-5 are
+  waived because there is no biological mechanism to characterize. Set converged=true.
 
 The QC hypothesis's use of RNA-seq (TPM lookup) or motif scanning does NOT satisfy ANY
 convergence criterion — not 5a (STRING/PPI), not 5b (functional characterization), not
@@ -105,7 +106,7 @@ to gene function (GO enrichment, expression at target genes, or conservation) �
 checking if TF_A is
 expressed. Do not count QC data usage toward any convergence criterion.
 
-1. **Statistical support**: At least one hypothesis with support_level = "SUPPORTS" (i.e., p < 0.05 with fold change >= 1.2 OR Cohen's d >= 0.3, and the predicted effect confirmed). Do NOT cherry-pick individual statistics from a REFUSES result to satisfy this criterion — the overall support_level must be SUPPORTS.
+1. **Statistical support**: At least one hypothesis with support_level = "SUPPORTS" (i.e., p < 0.05 with fold change >= 1.2 OR Cohen's d >= 0.3, and the predicted effect confirmed). Do NOT cherry-pick individual statistics from a REJECTS result to satisfy this criterion — the overall support_level must be SUPPORTS.
 
 2. **Named mechanism**: A mechanism that: (1) names a specific molecular process, (2) states a clear causal chain (or, in observational mode, a clear mechanistic interpretation), and (3) is not merely a re-description of correlation. The mechanism can be **anything** that fits the evidence—it need not match any predefined category. The taxonomy below is for **reference only** (to illustrate what "mechanism" means in terms of specificity); do NOT constrain convergence to those categories.
 
@@ -115,9 +116,9 @@ expressed. Do not count QC data usage toward any convergence criterion.
 
 5. **Biology layers — two independent sub-requirements, BOTH must be satisfied**:
 
-   **5a. STRING/PPI (always required)**: At least one hypothesis must have tested the STRING protein–protein interaction network — the result can be SUPPORTS, REFUTES, or INCONCLUSIVE. STRING is an external API that is always accessible; it is not contingent on the manifest. Set converged=false if STRING/PPI was never attempted in any hypothesis.
+   **5a. STRING/PPI (always required)**: At least one hypothesis must have tested the STRING protein–protein interaction network — the result can be SUPPORTS, REJECTS, or INCONCLUSIVE. STRING is an external API that is always accessible; it is not contingent on the manifest. Set converged=false if STRING/PPI was never attempted in any hypothesis.
 
-   **5b. Functional characterization (required when available)**: If the manifest provides expression (rnaseq) or conservation (phyloP) data, at least one hypothesis must have addressed functional relevance using **one of** the following approaches — result can be SUPPORTS, REFUTES, or INCONCLUSIVE:
+   **5b. Functional characterization (required when available)**: If the manifest provides expression (rnaseq) or conservation (phyloP) data, at least one hypothesis must have addressed functional relevance using **one of** the following approaches — result can be SUPPORTS, REJECTS, or INCONCLUSIVE:
    - **rnaseq**: link co-occupancy or mechanism to gene expression levels
    - **phyloP**: test evolutionary conservation at co-bound sites
    - **GO / pathway enrichment**: run GO term or pathway enrichment on genes associated with the mechanism (e.g. genes near co-bound peaks), to characterize the biological processes the TF pair regulates
@@ -209,7 +210,7 @@ RNA is now recognized as a major scaffold for TF interactions.
 
 ## Common False Convergence Patterns — Do NOT converge on these
 
-- **"All hypotheses REFUSES but the findings are interesting"** — if no hypothesis achieved support_level = "SUPPORTS", you CANNOT converge. Interesting sub-findings within a REFUSES result mean the pipeline should refine the hypothesis (e.g., drop the failed prediction, keep the successful ones) and test again, not declare convergence.
+- **"All hypotheses REJECTS but the findings are interesting"** — if no hypothesis achieved support_level = "SUPPORTS", you CANNOT converge. Interesting sub-findings within a REJECTS result mean the pipeline should refine the hypothesis (e.g., drop the failed prediction, keep the successful ones) and test again, not declare convergence.
 - "Co-bound sites are in active chromatin" — correlation. Active sites attract many TFs. Does NOT establish mechanism unless pioneer activity is shown (mechanism #3 requires the pioneer to OPEN the site, not merely be present at already-open sites).
 - "TF_B signal is higher where TF_A is present" — restates the original finding. Not a mechanism.
 - "TF_B motif is enriched at TF_A binding sites" or "TF_B motif score correlates with TF_A signal" — the ML model is a regression model where TF_B PWM score already predicts TF_A binding signal. Re-confirming the motif is present or correlated at TF_A peaks is re-validating the ML input-output relationship, not a mechanism. A mechanism must explain WHY TF_B motif predicts TF_A binding (e.g., motif similarity, protein interaction, shared chromatin context).
@@ -363,7 +364,7 @@ Evaluate whether the accumulated evidence is sufficient to declare convergence o
 {criteria_instruction}
 
 PREREQUISITE: At least one hypothesis must have support_level = "SUPPORTS". If none do, set converged=false immediately.
-1. Statistical support: at least one hypothesis with support_level = "SUPPORTS" (not just promising numbers inside a REFUSES result)
+1. Statistical support: at least one hypothesis with support_level = "SUPPORTS" (not just promising numbers inside a REJECTS result)
 2. Named mechanism: a specific molecular process with a clear causal/mechanistic interpretation, not merely correlation. The mechanism can be anything that fits the evidence—it need not match any predefined category. Set mechanism_category_number to null and put a descriptive name in mechanism_category_name.
 3. But-for test (only when causal-capable data: causal, not merely correlational)
 4. Cross-layer consistency (consistent directional support from >= 2 independent omics layers)
@@ -456,7 +457,7 @@ Respond in JSON format:
         "relevant_stat_name": value,
         ...
     }},
-    "support_level": "SUPPORTS" | "REFUSES" | "INCONCLUSIVE" | "ERROR",
+    "support_level": "SUPPORTS" | "REJECTS" | "INCONCLUSIVE" | "ERROR",
     "confidence": 0.0-1.0,
     "reasoning": "Explanation of the interpretation",
     "issues": ["Any issues or concerns"],
@@ -554,8 +555,8 @@ Generate a comprehensive final report summarizing the investigation. The report 
 
 **CRITICAL — outcome accuracy**: When describing whether a hypothesis was supported or
 refused, you MUST use the exact **Support Level** recorded in the "Evidence Collected"
-section above (SUPPORTS, REFUSES, INCONCLUSIVE, ERROR, UNTESTABLE). Do NOT upgrade a
-REFUSES/ERROR/INCONCLUSIVE result to "supported" or "confirmed" in the narrative. If no
+section above (SUPPORTS, REJECTS, INCONCLUSIVE, ERROR, UNTESTABLE). Do NOT upgrade a
+REJECTS/ERROR/INCONCLUSIVE result to "supported" or "confirmed" in the narrative. If no
 hypothesis achieved SUPPORTS, state that clearly. Misrepresenting outcomes is the single
 most harmful error this report can contain.
 
