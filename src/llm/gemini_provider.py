@@ -182,9 +182,11 @@ class GeminiProvider(LLMProvider):
             # Try to get usage metadata if available
             prompt_tokens = 0
             completion_tokens = 0
+            cached_tokens = 0
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
                 completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                cached_tokens = getattr(response.usage_metadata, 'cached_content_token_count', 0) or 0
 
             usage = {
                 "prompt_tokens": prompt_tokens,
@@ -193,7 +195,7 @@ class GeminiProvider(LLMProvider):
             }
 
             # Record actual usage for cost tracking (may be 0 if not provided)
-            self._record_usage(prompt_tokens, completion_tokens)
+            self._record_usage(prompt_tokens, completion_tokens, cached_tokens)
 
             self.logger.debug("Received completion")
 
@@ -266,7 +268,13 @@ class GeminiProvider(LLMProvider):
 
             # Attempt 1: direct parse
             try:
-                return json.loads(content)
+                parsed = json.loads(content)
+                # Gemini sometimes wraps the response object in a JSON array:
+                # [{...}] instead of {...}. Unwrap single-element arrays so
+                # callers always get a dict back.
+                if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+                    parsed = parsed[0]
+                return parsed
             except json.JSONDecodeError as e:
                 last_parse_error = e
 

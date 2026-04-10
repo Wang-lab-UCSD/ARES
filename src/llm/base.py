@@ -82,15 +82,16 @@ class LLMProvider(ABC):
         if self._cost_tracker is not None:
             self._cost_tracker.check_and_record(messages, self.model)
 
-    def _record_usage(self, input_tokens: int, output_tokens: int) -> None:
+    def _record_usage(self, input_tokens: int, output_tokens: int, cached_input_tokens: int = 0) -> None:
         """Record actual token usage after API call.
 
         Args:
-            input_tokens: Number of input tokens used
+            input_tokens: Total input tokens (includes cached)
             output_tokens: Number of output tokens generated
+            cached_input_tokens: Number of input tokens served from cache
         """
         if self._cost_tracker is not None:
-            self._cost_tracker.record_actual_usage(self.model, input_tokens, output_tokens)
+            self._cost_tracker.record_actual_usage(self.model, input_tokens, output_tokens, cached_input_tokens)
 
     @abstractmethod
     async def complete(

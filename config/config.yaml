@@ -145,18 +145,30 @@ llm:
   #   base_url: "https://api.deepseek.com"
 
   # Model for hypothesis review
+  # review_model:
+  #   provider: "openai"
+  #   model: "glm-5"
+  #   api_key_env: "Z_AI_API_KEY"
+  #   base_url: "https://api.z.ai/api/paas/v4/"
   review_model:
     provider: "openai"
-    model: "glm-5"
-    api_key_env: "Z_AI_API_KEY"
-    base_url: "https://api.z.ai/api/paas/v4/"
+    model: "gpt-5-mini"
+    api_key_env: "OPENAI_API_KEY"
     
   # Model for summarizing results
+  # summary_model:
+  #   provider: "gemini"
+  #   model: "gemini-3-flash-preview"
+  #   api_key_env: "GOOGLE_API_KEY"
+  #   max_tokens: 8192  # Gemini Flash truncates JSON mid-string at the 4096 fallback when reasoning is long (e.g. 2+ SUPPORTS results requiring full 5-criteria evaluation)
+  # summary_model:
+  #   provider: "gemini"
+  #   model: "gemini-3.1-pro-preview"
+  #   api_key_env: "GOOGLE_API_KEY"
   summary_model:
-    provider: "gemini"
-    model: "gemini-3-flash-preview"
-    api_key_env: "GOOGLE_API_KEY"
-    max_tokens: 8192  # Gemini Flash truncates JSON mid-string at the 4096 fallback when reasoning is long (e.g. 2+ SUPPORTS results requiring full 5-criteria evaluation)
+    provider: "openai"
+    model: "gpt-5.4-mini"
+    api_key_env: "OPENAI_API_KEY"
 
 execution:
   type: "jupyter"

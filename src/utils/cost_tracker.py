@@ -38,7 +38,8 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     "gpt-5-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5-chat-latest", context_limit=256000),
     "gpt-5-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5-codex", context_limit=256000),
     "gpt-5-pro": ModelPricing(15.0, 120.0, "openai", "gpt-5-pro", context_limit=256000),
-    "gpt-5-mini": ModelPricing(0.25, 2.0, "openai", "gpt-5-mini", context_limit=128000),
+    "gpt-5-mini": ModelPricing(0.25, 2.0, "openai", "gpt-5-mini", context_limit=400000, cached_input_price=0.03),
+    "gpt-5.4-mini": ModelPricing(0.75, 4.50, "openai", "gpt-5.4-mini", context_limit=400000, cached_input_price=0.08),
     "gpt-5-nano": ModelPricing(0.05, 0.40, "openai", "gpt-5-nano", context_limit=128000),
     # Anthropic
     "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4", context_limit=200000, cached_input_price=0.30),
@@ -54,13 +55,13 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # Google (Gemini API / AI Studio) — Gemini 3 Flash Preview
     # NOTE: Update if your billing page shows different rates.
     "gemini-3-flash-preview": ModelPricing(0.50, 3.00, "gemini", "gemini-3-flash-preview", context_limit=1000000),
-    "gemini-3.1-pro-preview": ModelPricing(2.0, 12.0, "gemini", "gemini-3.1-pro-preview", context_limit=200000),
+    "gemini-3.1-pro-preview": ModelPricing(2.0, 12.0, "gemini", "gemini-3.1-pro-preview", context_limit=200000, cached_input_price=0.20),
     # MiniMax
-    "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=200000),
+    "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=204800),
     # GLM-5 (Z.AI) — $1/1M input, $3.2/1M output; limited-time free tier available
-    "glm-5": ModelPricing(1.0, 3.2, "openai", "glm-5", context_limit=128000),
+    "glm-5": ModelPricing(1.0, 3.2, "openai", "glm-5", context_limit=200000),
     # DeepSeek V3.2 — $0.28/1M input (cache miss), $0.028/1M (cache hit), $0.42/1M output
-    "deepseek-chat": ModelPricing(0.28, 0.42, "deepseek", "deepseek-chat", context_limit=64000, cached_input_price=0.028),
+    "deepseek-chat": ModelPricing(0.28, 0.42, "deepseek", "deepseek-chat", context_limit=128000, cached_input_price=0.028),
 }
 
 
@@ -310,6 +311,7 @@ class CostTracker:
         model: str,
         input_tokens: int,
         output_tokens: int,
+        cached_input_tokens: int = 0,
     ) -> float:
         """Record actual token usage after API call.
 
@@ -318,7 +320,11 @@ class CostTracker:
         """
         pricing = self.get_pricing(model) or ModelPricing(10.0, 40.0, "unknown", model)
 
-        input_cost = (input_tokens / 1_000_000) * pricing.input_price
+        # Split input cost: cached tokens at cached price, rest at full price
+        uncached_input_tokens = input_tokens - cached_input_tokens
+        cached_price = pricing.cached_input_price if pricing.cached_input_price > 0 else pricing.input_price
+        input_cost = (uncached_input_tokens / 1_000_000) * pricing.input_price + \
+                     (cached_input_tokens / 1_000_000) * cached_price
         output_cost = (output_tokens / 1_000_000) * pricing.output_price
         actual_cost = input_cost + output_cost
 
@@ -327,6 +333,7 @@ class CostTracker:
             "model": model,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
+            "cached_input_tokens": cached_input_tokens,
             "cost": actual_cost,
         })
 
@@ -336,6 +343,7 @@ class CostTracker:
                 "model": model,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cached_input_tokens": cached_input_tokens,
                 "cost": actual_cost,
                 "session_total": self.session_cost,
             }

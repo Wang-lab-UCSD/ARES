@@ -150,8 +150,13 @@ class OpenAIProvider(LLMProvider):
                 "total_tokens": response.usage.total_tokens if response.usage else 0,
             }
 
+            # Extract cached token count from response
+            cached_tokens = 0
+            if response.usage and hasattr(response.usage, 'prompt_tokens_details') and response.usage.prompt_tokens_details:
+                cached_tokens = getattr(response.usage.prompt_tokens_details, 'cached_tokens', 0) or 0
+
             # Record actual usage for cost tracking
-            self._record_usage(usage["prompt_tokens"], usage["completion_tokens"])
+            self._record_usage(usage["prompt_tokens"], usage["completion_tokens"], cached_tokens)
 
             self.logger.debug("Received completion", {"usage": usage, "content_preview": content[:200] if content else "(empty)"})
 
@@ -216,7 +221,10 @@ class OpenAIProvider(LLMProvider):
 
             # Record actual usage for cost tracking
             if response.usage:
-                self._record_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+                cached_tokens = 0
+                if hasattr(response.usage, 'prompt_tokens_details') and response.usage.prompt_tokens_details:
+                    cached_tokens = getattr(response.usage.prompt_tokens_details, 'cached_tokens', 0) or 0
+                self._record_usage(response.usage.prompt_tokens, response.usage.completion_tokens, cached_tokens)
 
             content = response.choices[0].message.content or "{}"
 

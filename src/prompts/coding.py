@@ -294,6 +294,12 @@ HELPER_BUNDLES: dict[str, dict[str, Any]] = {
 #   df["h3k4me3"] = extract_bigwig_signals(intervals_df, data_files["h3k4me3..."])
 # stat kwarg: "mean" | "max" | "min" | "std" (default: "mean")
 #
+# COLUMN NAME DEFAULTS: expects columns named "chrom", "start", "end".
+# If your DataFrame uses different names (e.g. "summit_start", "summit_end"),
+# you MUST pass them explicitly:
+#   extract_bigwig_signals(df, bw, start_col="summit_start", end_col="summit_end")
+# Otherwise you will get KeyError: "['start', 'end'] not in index".
+#
 # PEAK-STRENGTH METRIC CHOICE — read this before comparing signal between peak groups:
 #   If your hypothesis is "TF_A binds MORE STRONGLY at sites where TF_B is also bound"
 #   (or any per-peak signal intensity comparison), do NOT use
@@ -425,6 +431,11 @@ partners_df, shared = fetch_shared_partners(
             "link_peaks_to_expression", "merge_rnaseq_with_nearest_genes",
         ],
         "helper_notes": """\
+# --- load_rnaseq_with_gene_id ------------------------------------------------
+# Returns a 2-tuple: (rnaseq_df, gene_id_col)
+#   rnaseq_df, gene_id_col = load_rnaseq_with_gene_id(path)
+# Do NOT call .columns on the raw return value — it is a tuple, not a DataFrame.
+
 # --- load_rnaseq_expression ---------------------------------------------------
 # Returns (rnaseq_df, gene_id_col, clean_col, expr_col)
 # - clean_col = "gene_id_clean" (version-stripped)
@@ -1196,6 +1207,17 @@ Print and verify, in plain Python, each of the following for every metric in you
    p-value, and you should report `REJECTS` for any "X is larger than Y" prediction even
    if Mann-Whitney barely crosses 0.05.
 
+10. **Correlation test discipline**: When computing a correlation between two continuous
+   variables (e.g. motif score vs ChIP-seq signal), run BOTH `scipy.stats.spearmanr`
+   AND `scipy.stats.pearsonr`. Report both r values and both p-values. **If they
+   disagree substantially** — one gives |r| >= 0.2 while the other gives |r| < 0.1 —
+   the relationship is likely driven by outliers or non-linearity rather than a genuine
+   quantitative trend. In a previous run (ILK/YY1), Spearman r=0.34 (p=2e-05) but
+   Pearson r=0.06 (p=0.43) at n=152 co-bound peaks — the "correlation" was entirely
+   a rank-ordering effect from a few high-signal outliers, not a real quantitative
+   relationship. If only Spearman passes your prediction threshold but Pearson does
+   not, note this in the reasoning and downgrade confidence accordingly.
+
 If any check fails, fix the bug in another <execute> block BEFORE writing the solution.
 If everything passes, emit the <solution>.
 
@@ -1229,10 +1251,11 @@ cleanly is a baseline, not evidence. Use this rubric:
   doesn't actually address the hypothesis.
 
 **Auto-downgrade triggers** (any of these forces confidence ≤ 0.6, regardless of above):
-- Welch's t-test and Mann-Whitney disagree by more than 10× in p-value
+- Welch's t-test and Mann-Whitney give different discrete verdicts (one p<0.05, other p≥0.05)
 - Mean difference between groups is < 0.1% of either group's mean (near-zero effect
   despite any p < 0.05)
-- Any pre-solution check (#1–#9) flagged a warning you couldn't fully explain
+- Spearman and Pearson correlations disagree: one |r| >= 0.2 while other |r| < 0.1
+- Any pre-solution check (#1–#10) flagged a warning you couldn't fully explain
 - A sanity-check filter dropped >90% of rows for reasons you couldn't verify
 - You had to reload data or re-inspect columns more than 3 times during the iteration
 
