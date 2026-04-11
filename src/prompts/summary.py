@@ -338,7 +338,9 @@ def build_convergence_check_prompt(
             "addressed functional relevance via rnaseq, phyloP, OR GO/pathway enrichment (any result). "
             "Verify from the evidence summaries that the analysis was actually performed — a layer listed in "
             "required_data but absent from the evidence summary does NOT satisfy 5b. "
-            "Set converged=false if none of rnaseq/phyloP/GO was genuinely analyzed.\n"
+            "IMPORTANT: Using RNA-seq only to check TF expression (TPM) in the artifact check does NOT satisfy 5b. "
+            "5b requires linking the mechanism to gene expression, conservation, or pathway function. "
+            "Set converged=false if none of rnaseq/phyloP/GO was genuinely analyzed for functional relevance.\n"
         )
 
     prompt = f"""# Scientific Finding Under Investigation
@@ -370,7 +372,7 @@ PREREQUISITE: At least one hypothesis must have support_level = "SUPPORTS". If n
 4. Cross-layer consistency (consistent directional support from >= 2 independent omics layers)
 5. Biology layers — two independent sub-requirements (BOTH must be met):
    5a. STRING/PPI (always required): at least one hypothesis must have tested STRING (any result). Always required regardless of manifest.
-   5b. Functional characterization (when available): if rnaseq or phyloP is in the manifest, at least one hypothesis must have addressed functional relevance via rnaseq, phyloP, OR GO/pathway enrichment analysis (any result). STRING does NOT substitute.
+   5b. Functional characterization (when available): if rnaseq or phyloP is in the manifest, at least one hypothesis must have addressed functional relevance via rnaseq, phyloP, OR GO/pathway enrichment analysis (any result). STRING does NOT substitute. Checking TF expression (TPM) in an artifact check does NOT count — 5b requires linking the mechanism to gene expression levels, conservation scores, or pathway function.
 
 When converged=true, always fill mechanism_category_name with a descriptive mechanism name. Set mechanism_category_number to null (the taxonomy is for reference only). In observational mode, the conclusion must state that causality is not established.
 
