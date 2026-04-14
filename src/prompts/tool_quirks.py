@@ -274,6 +274,28 @@ peaks_with_motif = peaks[peaks['name'].isin(fimo_hits['peak_id'])]  # KeyError: 
 fimo_df['chrom'] = fimo_df['sequence_name'].str.split(':').str[0]  # Wrong! gets 'peak_00001'
 fimo_df['pos'] = fimo_df['sequence_name'].str.split(':').str[2].astype(int)  # Crashes on 'chr6'
 ```
+
+**RULE 9: Zero-inflation trap — NEVER correlate motif_score vs signal on ALL peaks including score=0**
+
+When FIMO does not find a motif at a peak, that peak gets motif_score=0.  Typically 50–80%
+of peaks have score=0.  Computing Spearman(motif_score, chip_signal) on all peaks gives a
+spurious positive correlation driven by the binary has-motif / no-motif split, NOT by motif
+*strength* among motif-positive peaks.  This is Simpson's Paradox.
+
+WRONG — includes zeros, inflates correlation:
+```python
+r, p = spearmanr(peaks['nfya_motif_score'], peaks['sp1_signal'])  # r ≈ +0.12
+```
+
+CORRECT — restrict to motif-positive peaks first:
+```python
+motif_pos = peaks[peaks['nfya_motif_score'] > 0]
+r, p = spearmanr(motif_pos['nfya_motif_score'], motif_pos['sp1_signal'])  # r ≈ -0.04
+```
+
+If you need to test whether motif *presence* (binary) predicts signal, use a group comparison
+(Mann-Whitney / Cohen's d on motif-positive vs motif-negative), not a correlation on the
+zero-inflated scores.
 """
 
 # =============================================================================

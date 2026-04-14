@@ -19,8 +19,11 @@ from src.utils.logging import get_logger
 
 
 # Retry configuration
-MAX_RETRIES = 5  # bumped from 3 — MiniMax/Z.AI has occasional multi-minute 5xx windows
-RETRY_DELAY_BASE = 2.0  # seconds, multiplied by attempt number (2s, 4s, 6s, 8s, 10s)
+# Linear backoff: delay[i] = RETRY_DELAY_BASE * (i + 1)
+# Total window: sum(5, 10, 15, ..., 50) = 275s (~4.5 min), tuned to ride out
+# MiniMax/Z.AI multi-minute 5xx windows seen in the Apr 13 runs (529 overloaded_error).
+MAX_RETRIES = 10
+RETRY_DELAY_BASE = 5.0
 
 
 class OpenAIProvider(LLMProvider):

@@ -51,9 +51,25 @@ def _read_table_like(
     data: str | Path | pd.DataFrame,
     **kwargs,
 ) -> pd.DataFrame:
-    """Read a path or return a defensive copy of a DataFrame."""
+    """Read a table-like input. Accepts:
+
+    - ``pd.DataFrame``: returns a defensive copy.
+    - ``pathlib.Path``: treated as a filesystem path.
+    - ``str`` containing a newline: treated as in-memory content (wrapped
+      in ``StringIO``). This supports the natural pattern of passing a
+      subprocess stdout straight into a parser, e.g.
+      ``parse_bedtools_wa_wb(subprocess.run(..., capture_output=True).stdout)``.
+      Without this branch, pandas treats the long multi-line string as a
+      file path and raises ``OSError: [Errno 36] File name too long`` with
+      the **entire input embedded in the error message**, which previously
+      blew out the coding-agent conversation history (ARID4B/YY1 Apr 13 run).
+    - ``str`` without a newline: treated as a filesystem path (existing
+      behaviour, preserved for backward compatibility with all callers).
+    """
     if isinstance(data, pd.DataFrame):
         return data.copy()
+    if isinstance(data, str) and "\n" in data:
+        return pd.read_csv(StringIO(data), **kwargs)
     return pd.read_csv(data, **kwargs)
 
 
@@ -94,6 +110,40 @@ def parse_peak_id_from_fasta_header(sequence_name: str) -> str:
     return sequence_name
 
 
+def gc_content(seq: str) -> float:
+    """Return the GC fraction of a DNA sequence, handling soft-masked lowercase bases.
+
+    ``bedtools getfasta`` leaves repeat-masked regions in lowercase, so naive
+    ``seq.count('G') + seq.count('C')`` produces a fraction of zero for any peak
+    that overlaps a masked region. In practice this has silently corrupted 60%+
+    of peaks in multiple ARES runs when GC-matched controls were being built.
+    Using this helper in matched-control pipelines keeps the fraction correct
+    regardless of case and ignores non-ATGC characters (N, IUPAC codes).
+    """
+    if not seq:
+        return 0.0
+    s = seq.upper()
+    gc = s.count("G") + s.count("C")
+    atgc = gc + s.count("A") + s.count("T")
+    return gc / atgc if atgc > 0 else 0.0
+
+
+FIMO_CANONICAL_COLUMNS = [
+    "motif_id", "motif_alt_id", "sequence_name", "start", "stop",
+    "strand", "score", "p-value", "q-value", "matched_sequence", "peak_id",
+]
+
+
+def _empty_fimo_df() -> pd.DataFrame:
+    """Return a properly-typed empty FIMO result DataFrame.
+
+    Callers can treat a zero-hit legitimate result the same as any
+    other result (e.g. ``len(df) == 0`` or ``df[df.motif_id == 'X']``)
+    without needing to special-case schema-less empty outputs.
+    """
+    return pd.DataFrame(columns=FIMO_CANONICAL_COLUMNS)
+
+
 def parse_fimo_tsv(
     path: str | Path,
     p_value_threshold: float | None = None,
@@ -101,7 +151,17 @@ def parse_fimo_tsv(
 ) -> pd.DataFrame:
     """Parse FIMO TSV output robustly.
 
-    Handles the common header form `#pattern name` and preserves only tabular lines.
+    Handles:
+    - Old FIMO format where the column header is a single-`#` line like
+      ``#pattern name\\tsequence name\\t...`` (renamed via ``rename_map``).
+    - Modern FIMO (5.x+) where metadata comments are single-`#` prose lines
+      (``# FIMO ...``, ``# The format ...``, ``# fimo --oc ...``) appended
+      at the end of the file, and the real header has no `#` prefix.
+    - **Zero-hit legitimate results**: FIMO 5.5.5 writes ONLY the three
+      metadata comments when it finds zero motif occurrences — no header,
+      no data rows. This function detects that case and returns a properly
+      typed empty DataFrame instead of raising.
+
     Adds:
     - `peak_id` parsed from `sequence_name`
     """
@@ -112,10 +172,18 @@ def parse_fimo_tsv(
                 continue
             if line.startswith("##"):
                 continue
+            # A single-`#` line is either the old-style header
+            # (``#pattern name\tsequence name\t...`` — always contains tabs)
+            # or a modern metadata comment (``# FIMO ...`` — prose, no tabs).
+            # Distinguish them by tab presence so we skip metadata but keep
+            # the legacy header.
+            if line.startswith("#") and "\t" not in line:
+                continue
             rows.append(line)
 
     if not rows:
-        raise ValueError("FIMO TSV is empty after removing comment lines")
+        # FIMO legitimately found zero hits — return an empty, typed DataFrame.
+        return _empty_fimo_df()
 
     text = "".join(rows)
     df = pd.read_csv(StringIO(text), sep="\t")
@@ -129,16 +197,25 @@ def parse_fimo_tsv(
     }
     df = df.rename(columns=rename_map)
 
-    # Drop trailing FIMO comment rows — FIMO appends lines like
-    # "# fimo was run with..." that start with a single '#' and get
-    # parsed as data rows with NaN in sequence_name and other columns.
+    # Drop trailing FIMO comment rows — modern FIMO appends lines like
+    # "# fimo was run with..." that get parsed as data rows with NaN in
+    # sequence_name and other columns.
     if "sequence_name" in df.columns:
         df = df.dropna(subset=["sequence_name"]).copy()
 
     required = {"motif_id", "sequence_name", "start", "stop", "p-value"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"Missing expected FIMO columns: {sorted(missing)}")
+        # Malformed / unrecognised header — treat as no hits rather than
+        # crashing the caller. We've seen this happen in real runs when the
+        # file contains only metadata comment lines that slip through the
+        # filter above (e.g. FIMO version with novel comment formatting).
+        return _empty_fimo_df()
+
+    if len(df) == 0:
+        # Header present but no data rows (empty hit set after dropping
+        # trailing comments). Return typed empty DataFrame with peak_id.
+        return _empty_fimo_df()
 
     df["peak_id"] = df["sequence_name"].astype(str).map(parse_peak_id_from_fasta_header)
     df["p-value"] = pd.to_numeric(df["p-value"], errors="coerce")
@@ -259,6 +336,68 @@ def load_gencode_genes(
     genes["start"] = pd.to_numeric(genes["start"], errors="raise").astype(int)
     genes["end"] = pd.to_numeric(genes["end"], errors="raise").astype(int)
     return genes
+
+
+def lookup_tpm_by_symbol(
+    gene_symbol: str,
+    rnaseq_path: str | Path | pd.DataFrame,
+    gencode_path: str | Path | pd.DataFrame,
+) -> dict[str, Any]:
+    """Look up a gene's expression level by gene symbol via gencode → ENSG → RNA-seq.
+
+    This is the canonical and robust way to query expression in this pipeline.
+    Do NOT search the RNA-seq table by gene symbol or by hardcoded Entrez ID — the
+    gene_id column may contain a mix of formats (Ensembl IDs, miRBase numeric IDs)
+    and gene symbol matching against Ensembl IDs always fails.
+
+    Args:
+        gene_symbol: e.g. "ATF6", "REST", "SP1"
+        rnaseq_path: path to the RSEM/Salmon output (or pre-loaded DataFrame)
+        gencode_path: path to the gencode GTF (or pre-loaded DataFrame)
+
+    Returns:
+        {
+            "gene_symbol": "ATF6",
+            "ensembl_id": "ENSG00000118217",
+            "tpm": 9.19,
+            "found": True,
+            "error": None,
+        }
+        On lookup failure, `found=False` and `error` describes why. `tpm` is None
+        when not found, NOT 0 — distinguish "looked up and missing" from "looked
+        up and zero TPM".
+    """
+    result: dict[str, Any] = {
+        "gene_symbol": gene_symbol,
+        "ensembl_id": None,
+        "tpm": None,
+        "found": False,
+        "error": None,
+    }
+    try:
+        genes = load_gencode_genes(gencode_path, protein_coding_only=False)
+        match = genes[genes["gene_name"] == gene_symbol]
+        if match.empty:
+            result["error"] = f"Gene symbol {gene_symbol!r} not found in gencode"
+            return result
+        ensg = str(match.iloc[0]["gene_id_clean"])
+        result["ensembl_id"] = ensg
+
+        rnaseq_df, _gene_id_col, clean_col, expr_col = load_rnaseq_expression(rnaseq_path)
+        rnaseq_match = rnaseq_df[rnaseq_df[clean_col] == ensg]
+        if rnaseq_match.empty:
+            result["error"] = (
+                f"Ensembl ID {ensg!r} for {gene_symbol!r} not found in RNA-seq table "
+                f"(gene_id_clean column has {rnaseq_df[clean_col].nunique()} unique IDs)"
+            )
+            return result
+        tpm_value = float(rnaseq_match.iloc[0][expr_col])
+        result["tpm"] = tpm_value
+        result["found"] = True
+        return result
+    except Exception as e:
+        result["error"] = f"{type(e).__name__}: {e}"
+        return result
 
 
 def create_tss_bed_from_gencode(
@@ -1007,11 +1146,13 @@ def run_fimo_on_peaks(
                 print(f"[run_fimo_on_peaks] stderr: {fimo_proc.stderr[:500]}")
                 raise RuntimeError(f"fimo failed: {fimo_proc.stderr[:300]}")
 
-            # Step 4: parse output
+            # Step 4: parse output. parse_fimo_tsv now returns a properly
+            # typed empty DataFrame when FIMO legitimately finds zero hits
+            # (modern FIMO writes only metadata comment lines in that case),
+            # so no extra handling is needed beyond the size-zero guard.
             fimo_tsv = fimo_out_dir / "fimo.tsv"
             if not fimo_tsv.exists() or fimo_tsv.stat().st_size == 0:
-                return pd.DataFrame(columns=["motif_id", "sequence_name", "start", "stop",
-                                              "p-value", "peak_id"])
+                return _empty_fimo_df()
 
             return parse_fimo_tsv(fimo_tsv, p_value_threshold=p_value_threshold,
                                   motif_ids=[motif_id])
@@ -1433,6 +1574,68 @@ def matched_bin(
         print(f"WARNING: <80% of BG retained after binning — consider fewer bins")
 
     return fg, bg
+
+
+def matched_pair(
+    fg_df: pd.DataFrame,
+    bg_df: pd.DataFrame,
+    signal_col: str,
+    n_bins: int = 4,
+    random_state: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return size-matched FG and BG DataFrames after binning on ``signal_col``.
+
+    This is the canonical way to build a matched control comparison. It calls
+    ``matched_bin()`` to assign quantile bins, then subsamples BOTH sides per
+    bin to ``min(fg_count, bg_count)``. The returned DataFrames have equal
+    total length, equal per-bin counts, and matched ``signal_col`` distributions.
+
+    Use this instead of calling ``matched_bin()`` and subsampling manually —
+    a recurring bug in past runs has been "subsample BG only, leave FG full",
+    which produces unbalanced groups labeled as 'matched' and inflates the
+    test statistic in one direction. ``matched_pair()`` cannot fall into that trap.
+
+    Args:
+        fg_df: Foreground DataFrame (e.g. motif-positive peaks).
+        bg_df: Background DataFrame (e.g. motif-negative peaks).
+        signal_col: Column name to bin on (e.g. ``"dnase_signal"``).
+        n_bins: Number of quantile bins (default 4 = quartiles).
+        random_state: Seed for reproducible per-bin sampling.
+
+    Returns:
+        Tuple ``(fg_matched, bg_matched)`` with equal total length and equal
+        per-bin counts. Both have a ``"bin"`` column. Index is reset.
+    """
+    fg_binned, bg_binned = matched_bin(fg_df, bg_df, signal_col, n_bins=n_bins)
+    fg_binned = fg_binned[fg_binned["bin"].notna()].copy()
+    bg_binned = bg_binned[bg_binned["bin"].notna()].copy()
+
+    fg_parts: list[pd.DataFrame] = []
+    bg_parts: list[pd.DataFrame] = []
+    fg_counts = fg_binned["bin"].value_counts()
+    bg_counts = bg_binned["bin"].value_counts()
+    for b in sorted(set(fg_counts.index) & set(bg_counts.index)):
+        n = int(min(fg_counts[b], bg_counts[b]))
+        if n == 0:
+            continue
+        fg_bin_rows = fg_binned[fg_binned["bin"] == b]
+        bg_bin_rows = bg_binned[bg_binned["bin"] == b]
+        fg_parts.append(fg_bin_rows.sample(n=n, random_state=random_state))
+        bg_parts.append(bg_bin_rows.sample(n=n, random_state=random_state))
+
+    if not fg_parts:
+        return (
+            fg_binned.iloc[0:0].reset_index(drop=True),
+            bg_binned.iloc[0:0].reset_index(drop=True),
+        )
+
+    fg_matched = pd.concat(fg_parts, ignore_index=True)
+    bg_matched = pd.concat(bg_parts, ignore_index=True)
+    print(
+        f"matched_pair: FG={len(fg_matched)} BG={len(bg_matched)} "
+        f"(per-bin counts: {fg_matched['bin'].value_counts().sort_index().to_dict()})"
+    )
+    return fg_matched, bg_matched
 
 
 def load_string_links(

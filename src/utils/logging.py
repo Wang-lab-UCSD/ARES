@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -85,9 +86,21 @@ def setup_logging(
     _log_dir = Path(log_dir)
     _log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create log file with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = _log_dir / f"pipeline_{timestamp}.jsonl"
+    # Create a unique log file path. Second-resolution timestamps can collide when
+    # multiple Slurm jobs start in the same second, so include microseconds plus
+    # job/process identity and fall back to a numeric suffix if needed.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    stem_parts = [f"pipeline_{timestamp}"]
+    slurm_job_id = os.environ.get("SLURM_JOB_ID")
+    if slurm_job_id:
+        stem_parts.append(f"job{slurm_job_id}")
+    stem_parts.append(f"pid{os.getpid()}")
+    log_stem = "_".join(stem_parts)
+    log_file = _log_dir / f"{log_stem}.jsonl"
+    suffix = 1
+    while log_file.exists():
+        log_file = _log_dir / f"{log_stem}_{suffix}.jsonl"
+        suffix += 1
 
     # Configure root logger
     root_logger = logging.getLogger("pipeline")

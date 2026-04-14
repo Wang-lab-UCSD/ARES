@@ -4,19 +4,23 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 import subprocess
 
 from src.utils.bioio import (
+    _read_table_like,
     annotate_peaks_with_chromhmm,
     create_tss_bed_from_gencode,
     find_shared_string_partners,
     find_string_interaction,
+    gc_content,
     load_gencode_genes,
     load_rnaseq_expression,
     load_rnaseq_with_gene_id,
     load_string_links,
     merge_rnaseq_with_nearest_genes,
     parse_bedtools_closest,
+    parse_bedtools_wa_wb,
     parse_chromhmm_intersect,
     parse_fimo_tsv,
     parse_peak_id_from_fasta_header,
@@ -43,6 +47,24 @@ def test_parse_peak_id_from_fasta_header():
     assert parse_peak_id_from_fasta_header("peak_002") == "peak_002"
 
 
+def test_gc_content_handles_mixed_case_and_non_atgc():
+    # Uppercase
+    assert gc_content("GCGC") == 1.0
+    assert gc_content("ATAT") == 0.0
+    assert gc_content("GGCCAATT") == 0.5
+    # Lowercase (soft-masked output from bedtools getfasta)
+    assert gc_content("gcgc") == 1.0
+    assert gc_content("ggccaatt") == 0.5
+    # Mixed case (real getfasta output over a partially masked region)
+    assert gc_content("GGccAATT") == 0.5
+    # N and IUPAC characters should not count toward denominator
+    assert gc_content("GGCCNNNN") == 1.0
+    assert gc_content("GGCCNNAA") == pytest.approx(2 / 3)
+    # Empty / all-N edge cases
+    assert gc_content("") == 0.0
+    assert gc_content("NNNN") == 0.0
+
+
 def test_parse_fimo_tsv_handles_hash_header_and_filters(tmp_path: Path):
     fimo_tsv = tmp_path / "fimo.tsv"
     fimo_tsv.write_text(
@@ -56,6 +78,195 @@ def test_parse_fimo_tsv_handles_hash_header_and_filters(tmp_path: Path):
 
     assert list(out["motif_id"]) == ["MA0001.1"]
     assert list(out["peak_id"]) == ["peak1"]
+
+
+def test_parse_fimo_tsv_handles_modern_format_with_real_hits(tmp_path: Path):
+    """Modern FIMO 5.x format: header without `#`, trailing `# ...` metadata."""
+    fimo_tsv = tmp_path / "fimo.tsv"
+    fimo_tsv.write_text(
+        "motif_id\tmotif_alt_id\tsequence_name\tstart\tstop\tstrand\tscore\tp-value\tq-value\tmatched_sequence\n"
+        "YY1|jaspar|MA0095.3\t\tirf9_peak_3489::chrX:100611117-100611417\t34\t45\t+\t16.49\t5.62e-08\t0.048\tACCAAAATGGCG\n"
+        "YY1|jaspar|MA0095.3\t\tirf9_peak_2620::chr3:166832719-166833019\t45\t56\t+\t16.49\t5.62e-08\t0.048\tACCAAAATGGCG\n"
+        "\n"
+        "# FIMO (Find Individual Motif Occurrences): Version 5.5.5 compiled on May 11 2024 at 13:18:19\n"
+        "# The format of this file is described at https://meme-suite.org/meme/doc/fimo-output-format.html#tsv_results.\n"
+        "# fimo --oc /tmp/fimo_out --motif YY1|jaspar|MA0095.3 --thresh 1e-4 ...\n"
+    )
+
+    out = parse_fimo_tsv(fimo_tsv)
+    assert len(out) == 2
+    assert list(out["motif_id"]) == ["YY1|jaspar|MA0095.3", "YY1|jaspar|MA0095.3"]
+    assert list(out["peak_id"]) == ["irf9_peak_3489", "irf9_peak_2620"]
+
+
+def test_parse_fimo_tsv_zero_hits_returns_empty_typed_frame(tmp_path: Path):
+    """Modern FIMO zero-hit output: only metadata comments, no header, no data.
+
+    Before the fix, this raised ``ValueError: Missing expected FIMO columns``
+    19 times across Apr 12-13 runs because FIMO 5.5.5 writes only metadata
+    lines when zero hits are found (a legitimate biological result).
+    """
+    fimo_tsv = tmp_path / "fimo.tsv"
+    fimo_tsv.write_text(
+        "# FIMO (Find Individual Motif Occurrences): Version 5.5.5 compiled on May 11 2024 at 13:18:19\n"
+        "# The format of this file is described at https://meme-suite.org/meme/doc/fimo-output-format.html#tsv_results.\n"
+        "# fimo --oc /tmp/fimo_out --motif ETS1|jaspar|MA0098.2 --thresh 1e-4 motifs.meme peaks.fa\n"
+    )
+
+    out = parse_fimo_tsv(fimo_tsv)
+    assert len(out) == 0
+    # Empty but properly typed so downstream code can filter/groupby freely
+    for col in ("motif_id", "sequence_name", "start", "stop", "p-value", "peak_id"):
+        assert col in out.columns
+
+
+def test_parse_fimo_tsv_header_only_no_data_returns_empty(tmp_path: Path):
+    """Edge case: real header present but zero data rows."""
+    fimo_tsv = tmp_path / "fimo.tsv"
+    fimo_tsv.write_text(
+        "motif_id\tmotif_alt_id\tsequence_name\tstart\tstop\tstrand\tscore\tp-value\tq-value\tmatched_sequence\n"
+    )
+
+    out = parse_fimo_tsv(fimo_tsv)
+    assert len(out) == 0
+    assert "peak_id" in out.columns
+
+
+def test_parse_fimo_tsv_completely_empty_file_returns_empty(tmp_path: Path):
+    fimo_tsv = tmp_path / "fimo.tsv"
+    fimo_tsv.write_text("")
+
+    out = parse_fimo_tsv(fimo_tsv)
+    assert len(out) == 0
+    assert "peak_id" in out.columns
+
+
+# -----------------------------------------------------------------------------
+# _read_table_like: three-way dispatch (path / DataFrame / multi-line string)
+# -----------------------------------------------------------------------------
+
+def test_read_table_like_reads_path(tmp_path: Path):
+    p = tmp_path / "data.tsv"
+    p.write_text("chr1\t10\t20\nchr2\t30\t40\n")
+
+    df = _read_table_like(p, sep="\t", header=None)
+
+    assert df.shape == (2, 3)
+    assert df.iloc[0, 0] == "chr1"
+    assert df.iloc[1, 2] == 40
+
+
+def test_read_table_like_returns_defensive_dataframe_copy():
+    original = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+
+    out = _read_table_like(original)
+
+    assert out.equals(original)
+    # Defensive copy — mutating the returned frame must not affect the input
+    out.loc[0, "a"] = 999
+    assert original.loc[0, "a"] == 1
+
+
+def test_read_table_like_multiline_string_is_parsed_as_content():
+    """Regression test for the Apr 13 ARID4B/YY1 crash.
+
+    Previously, passing ``subprocess.run(...).stdout`` (a multi-line string)
+    into any bioio helper caused pandas to treat the entire string as a
+    filesystem path and raise ``OSError: [Errno 36] File name too long``
+    with the **full input embedded in the error message**, which blew out
+    the coding-agent conversation history and killed the run with a
+    MiniMax ``context window exceeds limit`` error on the next turn.
+    """
+    stdout = "chr1\t10\t20\tpeakA\nchr2\t30\t40\tpeakB\nchr3\t50\t60\tpeakC\n"
+
+    df = _read_table_like(stdout, sep="\t", header=None)
+
+    assert df.shape == (3, 4)
+    assert list(df.iloc[:, 3]) == ["peakA", "peakB", "peakC"]
+
+
+def test_read_table_like_preserves_path_strings_without_newline(tmp_path: Path):
+    """Single-line strings are still treated as paths (backward compat)."""
+    p = tmp_path / "no_newline.tsv"
+    p.write_text("chr1\t10\t20\n")
+
+    # Pass as plain str (no newline in the path itself)
+    df = _read_table_like(str(p), sep="\t", header=None)
+
+    assert df.shape == (1, 3)
+    assert df.iloc[0, 0] == "chr1"
+
+
+# -----------------------------------------------------------------------------
+# parse_bedtools_wa_wb: subprocess-stdout pattern end-to-end
+# -----------------------------------------------------------------------------
+
+def test_parse_bedtools_wa_wb_accepts_path(tmp_path: Path):
+    p = tmp_path / "intersect.tsv"
+    p.write_text(
+        "chr1\t100\t200\tpeakA\t1000\t.\tchr1\t150\t180\t9_EnhA1\n"
+        "chr2\t300\t400\tpeakB\t1000\t.\tchr2\t320\t360\t1_TssA\n"
+    )
+
+    df = parse_bedtools_wa_wb(p, a_col_count=6, b_col_count=4)
+
+    assert df.shape == (2, 10)
+    assert list(df.columns) == [f"a_{i}" for i in range(6)] + [f"b_{i}" for i in range(4)]
+    assert df["a_3"].tolist() == ["peakA", "peakB"]
+    assert df["b_3"].tolist() == ["9_EnhA1", "1_TssA"]
+
+
+def test_parse_bedtools_wa_wb_accepts_subprocess_stdout_string():
+    """End-to-end check that the Apr 13 ARID4B/YY1 crash pattern now works.
+
+    Simulates ``subprocess.run(['bedtools','intersect',...,'-wa','-wb'], capture_output=True, text=True).stdout``
+    being passed directly into the helper.
+    """
+    stdout = (
+        "chr1\t100\t200\tpeakA\t1000\t.\tchr1\t150\t180\t9_EnhA1\n"
+        "chr1\t100\t200\tpeakA\t1000\t.\tchr1\t170\t190\t10_EnhA2\n"
+        "chr2\t300\t400\tpeakB\t1000\t.\tchr2\t320\t360\t1_TssA\n"
+    )
+
+    df = parse_bedtools_wa_wb(stdout, a_col_count=6, b_col_count=4)
+
+    assert df.shape == (3, 10)
+    assert df["a_3"].tolist() == ["peakA", "peakA", "peakB"]
+    assert df["b_3"].tolist() == ["9_EnhA1", "10_EnhA2", "1_TssA"]
+
+
+def test_parse_bedtools_wa_wb_large_stdout_does_not_crash():
+    """Worst-case regression: a 30k-row stdout string should parse, not
+    explode into an OSError embedding the entire input in the error
+    message (which is what killed the Apr 13 run).
+    """
+    row = "chr1\t100\t200\tpeakA\t1000\t.\tchr1\t150\t180\t9_EnhA1\n"
+    stdout = row * 30_000
+
+    df = parse_bedtools_wa_wb(stdout, a_col_count=6, b_col_count=4)
+
+    assert len(df) == 30_000
+    assert df["b_3"].iloc[0] == "9_EnhA1"
+
+
+def test_parse_bedtools_wa_wb_rejects_wrong_column_count():
+    """Column-count guard still fires on inputs with the wrong shape."""
+    stdout = "chr1\t100\t200\n"  # only 3 columns
+
+    with pytest.raises(ValueError, match="Expected 10 columns"):
+        parse_bedtools_wa_wb(stdout, a_col_count=6, b_col_count=4)
+
+
+def test_read_narrowpeak_accepts_multiline_string():
+    """Integration: the fix applies to all helpers that route through _read_table_like."""
+    narrowpeak_line = "chr1\t100\t300\t.\t1000\t.\t500.0\t-1\t2.3\t150\n"
+    stdout = narrowpeak_line * 3
+
+    df = read_narrowpeak(stdout)
+
+    assert len(df) == 3
+    assert df["chrom"].iloc[0] == "chr1"
+    assert df["summit"].iloc[0] == 250  # start 100 + peak_offset 150
 
 
 def test_load_rnaseq_with_gene_id_detects_named_column():

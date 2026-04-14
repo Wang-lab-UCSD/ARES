@@ -262,46 +262,25 @@ class Orchestrator:
 
         llm_config = self.config.llm
 
-        self.hypothesis_llm = create_provider(
-            provider_name=llm_config.hypothesis_model.provider,
-            model=llm_config.hypothesis_model.model,
-            api_key=llm_config.hypothesis_model.get_api_key(),
-            temperature=llm_config.hypothesis_model.temperature,
-            max_tokens=llm_config.hypothesis_model.max_tokens,
-            base_url=llm_config.hypothesis_model.base_url,
-            reasoning_effort=llm_config.hypothesis_model.reasoning_effort,
-        )
+        def _make(mc):
+            return create_provider(
+                provider_name=mc.provider,
+                model=mc.model,
+                api_key=mc.get_api_key(),
+                temperature=mc.temperature,
+                max_tokens=mc.max_tokens,
+                base_url=mc.base_url,
+                reasoning_effort=mc.reasoning_effort,
+                service_tier=mc.service_tier,
+                thinking_level=mc.thinking_level,
+            )
 
-        self.coding_llm = create_provider(
-            provider_name=llm_config.coding_model.provider,
-            model=llm_config.coding_model.model,
-            api_key=llm_config.coding_model.get_api_key(),
-            temperature=llm_config.coding_model.temperature,
-            max_tokens=llm_config.coding_model.max_tokens,
-            base_url=llm_config.coding_model.base_url,
-            reasoning_effort=llm_config.coding_model.reasoning_effort,
-        )
-
-        self.summary_llm = create_provider(
-            provider_name=llm_config.summary_model.provider,
-            model=llm_config.summary_model.model,
-            api_key=llm_config.summary_model.get_api_key(),
-            temperature=llm_config.summary_model.temperature,
-            max_tokens=llm_config.summary_model.max_tokens,
-            base_url=llm_config.summary_model.base_url,
-            reasoning_effort=llm_config.summary_model.reasoning_effort,
-        )
+        self.hypothesis_llm = _make(llm_config.hypothesis_model)
+        self.coding_llm = _make(llm_config.coding_model)
+        self.summary_llm = _make(llm_config.summary_model)
 
         if llm_config.review_model is not None:
-            self.review_llm = create_provider(
-                provider_name=llm_config.review_model.provider,
-                model=llm_config.review_model.model,
-                api_key=llm_config.review_model.get_api_key(),
-                temperature=llm_config.review_model.temperature,
-                max_tokens=llm_config.review_model.max_tokens,
-                base_url=llm_config.review_model.base_url,
-                reasoning_effort=llm_config.review_model.reasoning_effort,
-            )
+            self.review_llm = _make(llm_config.review_model)
         else:
             self.review_llm = self.hypothesis_llm
 
@@ -470,6 +449,9 @@ class Orchestrator:
                 timeout_seconds=self.config.execution.timeout_seconds,
                 working_dir=run_dir,
             )
+            # Wire the restart callback so the executor can re-inject data_files
+            # after a kernel force-restart (triggered by repeated timeouts / dead kernel).
+            self.executor.on_restart = self._inject_data_files
             await self.executor.start()
 
             # Inject data_files into the kernel as a flat dict so generated code
@@ -540,6 +522,22 @@ class Orchestrator:
                         hypothesis=hypothesis,
                         tested_hypotheses=self.state.tested_hypotheses,
                     )
+
+                    # Apply reviewer revisions if approve_with_revision
+                    if hypo_review.approved and hypo_review.revised_prediction:
+                        self.logger.info("Hypothesis revised by review", {
+                            "hypothesis": hypothesis.get("name", "N/A"),
+                            "revised_prediction": hypo_review.revised_prediction[:200],
+                        })
+                        self._display_message(
+                            f"Review revised hypothesis: {'; '.join(hypo_review.issues_found)[:200]}",
+                            "info"
+                        )
+                        hypothesis["prediction"] = hypo_review.revised_prediction
+                        if hypo_review.revised_verification_plan:
+                            hypothesis["verification_plan"] = hypo_review.revised_verification_plan
+                        # Reset consecutive rejections — revision counts as progress
+                        consecutive_hypo_rejections = 0
 
                     if not hypo_review.approved:
                         # If the review LLM failed, approve rather than reject —
@@ -629,7 +627,7 @@ class Orchestrator:
                             self.logger.warning(
                                 "Regeneration returned no hypothesis, falling back to refine_hypotheses()"
                             )
-                            available_bl, used_bl = self._biology_layers_for_convergence()
+                            available_bl, used_bl, _ = self._biology_layers_for_convergence()
                             unused_bl = [k for k in available_bl if k not in used_bl] if available_bl else None
                             has_support = any(
                                 h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0
@@ -787,6 +785,9 @@ class Orchestrator:
                     # Update state to match
                     self.state.tested_hypotheses[-1]["result"] = result["support_level"]
                     self.state.tested_hypotheses[-1]["evidence_summary"] = result["summary"]
+                    simpler_expl = evaluation.get("simpler_supported_explanation")
+                    if simpler_expl:
+                        self.state.tested_hypotheses[-1]["simpler_supported_explanation"] = simpler_expl
                     self.state.evidence[-1]["support_level"] = result["support_level"]
                     self.state.evidence[-1]["confidence"] = result["confidence"]
                     self.state.evidence[-1]["summary"] = result["summary"]
@@ -955,7 +956,11 @@ class Orchestrator:
             code_path = run_dir / "file_inspection.py"
             code_path.write_text(code)
 
-            result = await self.executor.execute(code)
+            # One-shot inspection — skip the REPL output cap so long file
+            # summaries (30+ files on larger manifests) aren't truncated
+            # into state.file_summaries. The truncation cap is tuned for
+            # per-turn REPL observations, not for persistent iter-0 output.
+            result = await self.executor.execute(code, skip_truncation=True)
             stdout = result.stdout or ""
 
             if stdout.strip():
@@ -1029,15 +1034,39 @@ class Orchestrator:
 
     BIOLOGY_LAYERS = ("rnaseq", "phyloP", "string")  # expression / conservation / PPI; tracked for convergence nudge
 
-    def _biology_layers_for_convergence(self) -> tuple[list[str], list[str]]:
-        """Compute which biology layers are available and which were used in any tested hypothesis.
+    @staticmethod
+    def _looks_like_go_or_pathway_characterization(th: dict[str, Any]) -> bool:
+        """Heuristic detector for GO/pathway-based functional characterization."""
+        fields: list[str] = [
+            str(th.get("name", "")),
+            str(th.get("prediction", "")),
+            str(th.get("evidence_summary", "")),
+        ]
+        plan = th.get("verification_plan", [])
+        if isinstance(plan, list):
+            fields.extend(str(step) for step in plan)
+        else:
+            fields.append(str(plan))
+        text = "\n".join(fields).lower()
+        go_markers = (
+            "go enrichment",
+            "gene ontology",
+            "go term",
+            "pathway enrichment",
+            "run_go_enrichment",
+            "pathway analysis",
+        )
+        return any(marker in text for marker in go_markers)
+
+    def _biology_layers_for_convergence(self) -> tuple[list[str], list[str], dict[str, Any]]:
+        """Compute which biology layers are available, which were used, and 5a/5b status.
 
         "Used" includes any support level (SUPPORTS, REJECTS, INCONCLUSIVE) — the goal is to
         ensure the pipeline at least attempts functional/conservation characterization, not
         that it must succeed.
 
         Returns:
-            (available_biology_layers, used_biology_layers)
+            (available_biology_layers, used_biology_layers, biology_gate_status)
         """
         data = self.manifest.model_dump().get("data", {}) or {}
         available = [k for k in self.BIOLOGY_LAYERS if k in data]
@@ -1045,15 +1074,43 @@ class Orchestrator:
         if "string" not in available:
             available.append("string")
         used_set: set[str] = set()
+        qc_excluded_layers: set[str] = set()
+        string_attempted = False
+        functional_5b_attempted = False
+        functional_5b_sources: list[str] = []
         for th in self.state.tested_hypotheses:
-            # QC (iteration 0) uses rnaseq for TPM check — not functional characterization
-            if th.get("iteration", -1) == 0:
-                continue
+            tops: set[str] = set()
             for key in th.get("required_data", []):
                 top = key.split(".", 1)[0].split(":", 1)[0]
                 if top in self.BIOLOGY_LAYERS:
-                    used_set.add(top)
-        return available, sorted(used_set)
+                    tops.add(top)
+
+            # QC (iteration 0) uses rnaseq for TPM check — exclude from 5b.
+            if th.get("iteration", -1) == 0:
+                qc_excluded_layers.update(tops.intersection({"rnaseq", "phyloP"}))
+                continue
+
+            used_set.update(tops)
+            if "string" in tops:
+                string_attempted = True
+
+            if (
+                "rnaseq" in tops
+                or "phyloP" in tops
+                or self._looks_like_go_or_pathway_characterization(th)
+            ):
+                functional_5b_attempted = True
+                functional_5b_sources.append(
+                    f"iter {th.get('iteration', '?')}: {th.get('name', 'unnamed')}"
+                )
+
+        biology_gate_status = {
+            "string_attempted": string_attempted,
+            "functional_5b_attempted": functional_5b_attempted,
+            "functional_5b_sources": functional_5b_sources,
+            "qc_excluded_layers": sorted(qc_excluded_layers),
+        }
+        return available, sorted(used_set), biology_gate_status
 
     def _build_group_summary(self, hypothesis: dict[str, Any]) -> str | None:
         """Build a summary if the hypothesis's group is now fully tested.
@@ -1116,7 +1173,7 @@ class Orchestrator:
 
         # Step 1: Independent convergence check — SummaryAgent uses a fresh context
         raw_output = last_result.pop("_raw_output", None)
-        available_biology_layers, used_biology_layers = self._biology_layers_for_convergence()
+        available_biology_layers, used_biology_layers, biology_gate_status = self._biology_layers_for_convergence()
         convergence = await self.summary_agent.check_convergence(
             finding=self.state.finding,
             tested_hypotheses=self.state.tested_hypotheses,
@@ -1125,8 +1182,30 @@ class Orchestrator:
             investigation_objective=self.manifest.investigation_objective or None,
             available_biology_layers=available_biology_layers,
             used_biology_layers=used_biology_layers,
+            biology_gate_status=biology_gate_status,
             causal_capable_data=getattr(self.manifest, "causal_capable_data", False),
         )
+
+        needs_5b = any(layer in available_biology_layers for layer in ("rnaseq", "phyloP"))
+        missing_criteria: list[str] = []
+        if not biology_gate_status.get("string_attempted", False):
+            missing_criteria.append("5a (STRING/PPI never attempted)")
+        if needs_5b and not biology_gate_status.get("functional_5b_attempted", False):
+            missing_criteria.append("5b (no non-QC functional characterization via rnaseq/phyloP/GO)")
+
+        if convergence.get("converged", False) and missing_criteria:
+            self.logger.warning(
+                "Convergence check returned converged=true despite unsatisfied biology-layer criteria; overriding to converged=false",
+                {
+                    "missing_criteria": missing_criteria,
+                    "biology_gate_status": biology_gate_status,
+                },
+            )
+            prior_reasoning = convergence.get("reasoning", "")
+            extra = "Deterministic override: convergence cannot be true because " + "; ".join(missing_criteria) + "."
+            convergence["converged"] = False
+            convergence["conclusion"] = ""
+            convergence["reasoning"] = (prior_reasoning + "\n\n" + extra).strip()
 
         has_any_supports = any(
             h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0
@@ -1177,7 +1256,7 @@ class Orchestrator:
             h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0
             for h in self.state.tested_hypotheses
         )
-        available_bl, used_bl = self._biology_layers_for_convergence()
+        available_bl, used_bl, _ = self._biology_layers_for_convergence()
         unused_biology_layers = [k for k in available_bl if k not in used_bl] if available_bl else None
 
         refinement = await self.hypothesis_agent.refine_hypotheses(

@@ -10,12 +10,65 @@ import queue
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from jupyter_client import KernelManager
 from jupyter_client.kernelspec import NoSuchKernel
 
 from src.utils.logging import get_logger
+
+
+# Per-channel caps on captured output. Keeps any single execution from
+# bloating the REPL observation history and blowing the next LLM call's
+# context window. Seen in the wild: the Apr 13 ARID4B/YY1 run crashed when a
+# `parse_bedtools_wa_wb(subprocess_stdout)` call triggered a pandas
+# OSError whose traceback embedded the entire 3MB stdout, ballooning the
+# next MiniMax request from 19K to 138K tokens.
+#
+# 20 KB per channel ≈ 5K tokens — enough to retain full context for
+# normal output while still bounding worst-case growth.
+_MAX_STDOUT_BYTES = 20_000
+_MAX_STDERR_BYTES = 20_000
+_MAX_TRACEBACK_BYTES = 20_000
+_TRUNCATION_HEAD_FRACTION = 0.6  # 60% head, 40% tail
+
+
+def _truncate_output(text: str, max_bytes: int) -> str:
+    """Cap a captured output channel to ``max_bytes`` with a head+tail split.
+
+    Preserves the first 60% of the budget from the start of the text (where
+    echoed commands and setup usually live) and the last 40% from the end
+    (where errors, final results, and the most recent stack frame usually
+    live). Inserts a single marker line in between that reports how many
+    bytes were dropped so the LLM can see that truncation happened.
+
+    Returns the input unchanged if it already fits.
+
+    Notes:
+    - Byte-length is measured via ``len(text)`` (Python str == code points,
+      which is sufficient for the ASCII-dominated output we see in practice).
+    - ``max_bytes`` must be large enough to fit the marker; values < 200
+      fall back to "just return the tail" to avoid degenerate slices.
+    """
+    if max_bytes <= 0 or len(text) <= max_bytes:
+        return text
+
+    original_len = len(text)
+
+    # Degenerate-tiny budget: just keep the tail (most recent output).
+    if max_bytes < 200:
+        return text[-max_bytes:]
+
+    marker = (
+        f"\n... [truncated {original_len - max_bytes:,} of {original_len:,} bytes; "
+        f"showing first {int(max_bytes * _TRUNCATION_HEAD_FRACTION):,} + last "
+        f"{max_bytes - int(max_bytes * _TRUNCATION_HEAD_FRACTION):,} bytes] ...\n"
+    )
+
+    head_budget = int(max_bytes * _TRUNCATION_HEAD_FRACTION)
+    tail_budget = max_bytes - head_budget
+
+    return text[:head_budget] + marker + text[-tail_budget:]
 
 
 @dataclass
@@ -135,6 +188,8 @@ class JupyterExecutor:
         self._km: KernelManager | None = None
         self._kc = None  # Kernel client
         self._execution_count = 0
+        self._consecutive_timeouts = 0
+        self.on_restart: Callable[[], Awaitable[None]] | None = None
         self.project_root = Path(__file__).resolve().parents[2]
 
     def _build_kernel_bootstrap_code(self) -> str:
@@ -288,11 +343,22 @@ pd.set_option('display.max_colwidth', 40)
             self._km = None
             self._kc = None
 
-    async def execute(self, code: str) -> ExecutionResult:
+    async def execute(
+        self,
+        code: str,
+        *,
+        skip_truncation: bool = False,
+    ) -> ExecutionResult:
         """Execute Python code in the kernel.
 
         Args:
             code: Python code to execute
+            skip_truncation: If True, return the full captured stdout/stderr/
+                traceback with no size cap. Use for one-shot inspection calls
+                where the output is stored persistently (e.g. file
+                familiarization at iter 0). The default REPL path keeps the
+                cap so a single runaway print doesn't blow the next LLM call's
+                context window.
 
         Returns:
             ExecutionResult with stdout, stderr, outputs, etc.
@@ -337,6 +403,28 @@ pd.set_option('display.max_colwidth', 40)
                             "Failed to interrupt kernel after timeout",
                             {"error": str(intr_err)},
                         )
+                    self._consecutive_timeouts += 1
+                    # After a timeout, verify the kernel actually recovered by
+                    # running a trivial canary. If the canary also hangs, the
+                    # kernel is unrecoverable — force-restart it. Without this
+                    # check, past runs have burned 2+ hours sending 1+1 to a
+                    # dead kernel that keeps returning "timed out" for every
+                    # subsequent execution.
+                    if await self._kernel_is_dead():
+                        self.logger.warning(
+                            "Kernel is unresponsive after interrupt — force-restarting",
+                            {"consecutive_timeouts": self._consecutive_timeouts},
+                        )
+                        await self._force_restart_after_death()
+                    elif self._consecutive_timeouts >= 2:
+                        # Canary passed but we've timed out twice in a row —
+                        # the kernel is probably accumulating broken state.
+                        # Restart proactively.
+                        self.logger.warning(
+                            "Two consecutive timeouts — restarting kernel proactively",
+                            {"consecutive_timeouts": self._consecutive_timeouts},
+                        )
+                        await self._force_restart_after_death()
                     return ExecutionResult(
                         success=False,
                         error="Execution timed out",
@@ -395,12 +483,36 @@ pd.set_option('display.max_colwidth', 40)
             )
 
         success = error is None
+        # Execution returned — kernel is alive, reset the consecutive-timeout counter.
+        self._consecutive_timeouts = 0
+
+        # Cap each captured channel before persisting into ExecutionResult.
+        # See note at the top of the module for the Apr 13 ARID4B/YY1 crash
+        # that motivated this: a single 3MB pandas traceback blew the next
+        # MiniMax call's context window (19K → 138K tokens in one step).
+        # skip_truncation=True preserves full output for one-shot callers
+        # (e.g. file familiarization) that store results persistently.
+        raw_stdout = "".join(stdout_parts)
+        raw_stderr = "".join(stderr_parts)
+        if skip_truncation:
+            final_stdout = raw_stdout
+            final_stderr = raw_stderr
+            final_traceback = error_traceback
+        else:
+            final_stdout = _truncate_output(raw_stdout, _MAX_STDOUT_BYTES)
+            final_stderr = _truncate_output(raw_stderr, _MAX_STDERR_BYTES)
+            final_traceback = (
+                _truncate_output(error_traceback, _MAX_TRACEBACK_BYTES)
+                if error_traceback is not None
+                else None
+            )
+
         result = ExecutionResult(
             success=success,
-            stdout="".join(stdout_parts),
-            stderr="".join(stderr_parts),
+            stdout=final_stdout,
+            stderr=final_stderr,
             error=error,
-            error_traceback=error_traceback,
+            error_traceback=final_traceback,
             outputs=outputs,
             images=images,
             execution_count=self._execution_count,
@@ -409,12 +521,73 @@ pd.set_option('display.max_colwidth', 40)
         self.logger.debug("Execution complete", {
             "success": success,
             "stdout_length": len(result.stdout),
+            "stdout_raw_length": len(raw_stdout),
             "stderr_length": len(result.stderr),
+            "stderr_raw_length": len(raw_stderr),
             "output_count": len(outputs),
             "image_count": len(images),
         })
 
         return result
+
+    async def _kernel_is_dead(self, canary_timeout: float = 5.0) -> bool:
+        """Run a trivial canary command to check if the kernel is responsive.
+
+        Returns True if the canary times out or errors — meaning the kernel
+        is stuck or dead and cannot execute even the simplest expression.
+        Returns False if the canary succeeds.
+
+        Note: this method sends directly to the kernel client and does NOT
+        recursively call execute() — doing so would loop on dead kernels.
+        """
+        if self._kc is None or self._km is None:
+            return True
+        try:
+            msg_id = self._kc.execute("1+1")
+            deadline = asyncio.get_event_loop().time() + canary_timeout
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    return True
+                try:
+                    msg = self._kc.get_iopub_msg(timeout=min(remaining, 1.0))
+                except queue.Empty:
+                    continue
+                if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                    continue
+                if msg.get("msg_type") == "status" and msg.get("content", {}).get("execution_state") == "idle":
+                    return False  # canary completed — kernel is alive
+        except Exception as e:
+            self.logger.warning("Canary check failed with exception", {"error": str(e)})
+            return True
+
+    async def _force_restart_after_death(self) -> None:
+        """Kill the current kernel and start a fresh one.
+
+        Calls the on_restart callback (if set) so the orchestrator can
+        re-inject data_files and any other required kernel state.
+        """
+        try:
+            await self._force_stop()
+        except Exception as e:
+            self.logger.warning("Error during force-stop", {"error": str(e)})
+        self._km = None
+        self._kc = None
+        self._execution_count = 0
+        self._consecutive_timeouts = 0
+        try:
+            await self.start()
+            self.logger.info("Kernel force-restarted after unresponsiveness")
+        except Exception as e:
+            self.logger.error("Failed to restart kernel after death", {"error": str(e)})
+            return
+        # Let the orchestrator re-inject data_files and any other state
+        if self.on_restart is not None:
+            try:
+                await self.on_restart()
+                self.logger.info("on_restart callback completed — kernel state restored")
+            except Exception as e:
+                self.logger.error("on_restart callback failed", {"error": str(e)})
 
     async def execute_with_retry(
         self,

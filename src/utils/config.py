@@ -27,6 +27,14 @@ class LLMModelConfig(BaseModel):
         default=False,
         description="If True, API cost is $0 (e.g. MiniMax subscription plan). Tokens are still tracked but not billed.",
     )
+    service_tier: str | None = Field(
+        default=None,
+        description="Gemini only: service tier ('flex', 'standard', 'priority'). 'flex' cuts cost ~50% at the price of lower priority. Provider default is 'flex'.",
+    )
+    thinking_level: str | None = Field(
+        default=None,
+        description="Gemini only: reasoning effort ('MINIMAL', 'LOW', 'MEDIUM', 'HIGH'). Lower levels cut thinking tokens (billed as output). Provider default is 'MEDIUM'.",
+    )
 
     @field_validator("provider")
     @classmethod

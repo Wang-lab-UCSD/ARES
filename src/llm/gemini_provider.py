@@ -1,4 +1,4 @@
-"""Google Gemini LLM provider implementation."""
+"""Google Gemini LLM provider implementation (google-genai SDK)."""
 
 from __future__ import annotations
 
@@ -12,103 +12,173 @@ from src.utils.logging import get_logger
 
 
 # Retry configuration
-MAX_RETRIES = 3
-RETRY_DELAY_BASE = 2.0  # seconds, will be multiplied by attempt number
+# Linear backoff: delay[i] = RETRY_DELAY_BASE * (i + 1)
+# Total window: sum(5, 10, 15, ..., 50) = 275s (~4.5 min), tuned to ride out
+# Gemini flex-tier queueing delays and transient 5xx outages.
+MAX_RETRIES = 10
+RETRY_DELAY_BASE = 5.0
+
+# HTTP statuses we consider transient and worth retrying
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class GeminiProvider(LLMProvider):
     """Google Gemini API provider.
 
-    Requires the google-generativeai package: pip install google-generativeai
-    """
+    Uses the google-genai SDK (replaces the deprecated google-generativeai).
+    Install with: pip install google-genai
 
-    # Errors that should trigger a retry
-    RETRYABLE_ERRORS = (ConnectionError, TimeoutError)
+    Supports per-call cost controls specific to reasoning models:
+      - service_tier: 'flex' cuts cost ~50% at the price of lower priority.
+      - thinking_level: 'MEDIUM' reduces internal reasoning tokens (which are
+        billed at output rate) vs the default HIGH for Pro models.
+    Both can be overridden via config kwargs or per-call kwargs.
+    """
 
     def __init__(self, model: str, api_key: str, **kwargs: Any):
         super().__init__(model, api_key, **kwargs)
         self.logger = get_logger("gemini")
         self._client = None
-        self._setup_retryable_errors()
 
-    def _setup_retryable_errors(self):
-        """Set up retryable error types after google-generativeai is imported."""
-        try:
-            from google.api_core.exceptions import (
-                ServiceUnavailable, DeadlineExceeded, ResourceExhausted
-            )
-            GeminiProvider.RETRYABLE_ERRORS = (
-                ServiceUnavailable, DeadlineExceeded, ResourceExhausted,
-                ConnectionError, TimeoutError
-            )
-        except ImportError:
-            pass  # Will use default errors only
+        # Cost-reduction defaults for Gemini 3.x reasoning models. Override
+        # by setting service_tier / thinking_level in the llm config block,
+        # or per-call via complete()/complete_json() kwargs. A None value
+        # from config falls back to these defaults (not to None).
+        self.service_tier = kwargs.get("service_tier") or "flex"
+        self.thinking_level = kwargs.get("thinking_level") or "MEDIUM"
 
-    async def _retry_with_backoff(self, operation, operation_name: str):
-        """Execute an operation with exponential backoff retry on transient errors.
+    def _get_client(self):
+        """Lazy initialization of the genai Client."""
+        if self._client is None:
+            try:
+                from google import genai
+            except ImportError:
+                raise ImportError(
+                    "google-genai package not installed. "
+                    "Install with: pip install google-genai"
+                )
+            self._client = genai.Client(api_key=self.api_key)
+        return self._client
 
-        Args:
-            operation: Async callable to execute
-            operation_name: Name for logging purposes
+    def _convert_messages(self, messages: list[Message]) -> tuple[str | None, list[dict]]:
+        """Convert Message objects to (system_instruction, contents) for genai.
 
         Returns:
-            Result of the operation
-
-        Raises:
-            The last exception if all retries fail
+            system_instruction: single string or None
+            contents: list of {"role": ..., "parts": [{"text": ...}]} dicts
         """
-        last_error = None
+        system_instruction: str | None = None
+        contents: list[dict] = []
+
+        for msg in messages:
+            if msg.role == Role.SYSTEM:
+                # Concatenate multiple system messages if present
+                if system_instruction is None:
+                    system_instruction = msg.content
+                else:
+                    system_instruction += "\n\n" + msg.content
+            elif msg.role == Role.USER:
+                contents.append({"role": "user", "parts": [{"text": msg.content}]})
+            elif msg.role == Role.ASSISTANT:
+                contents.append({"role": "model", "parts": [{"text": msg.content}]})
+
+        return system_instruction, contents
+
+    def _is_retryable(self, exc: BaseException) -> bool:
+        """Return True if the exception looks like a transient API error."""
+        if isinstance(exc, (ConnectionError, TimeoutError, asyncio.TimeoutError)):
+            return True
+        try:
+            from google.genai.errors import APIError, ServerError
+        except ImportError:
+            return False
+        if isinstance(exc, ServerError):
+            return True
+        if isinstance(exc, APIError):
+            status = getattr(exc, "code", None) or getattr(exc, "status", None)
+            if isinstance(status, int) and status in RETRYABLE_STATUS_CODES:
+                return True
+        return False
+
+    async def _retry_with_backoff(self, operation, operation_name: str):
+        """Execute an async operation with exponential backoff on transient errors."""
+        last_error: BaseException | None = None
         for attempt in range(MAX_RETRIES + 1):
             try:
                 return await operation()
-            except self.RETRYABLE_ERRORS as e:
+            except BaseException as e:  # noqa: BLE001 — re-raised if not retryable
+                if not self._is_retryable(e):
+                    raise
                 last_error = e
                 if attempt < MAX_RETRIES:
                     delay = RETRY_DELAY_BASE * (attempt + 1)
                     self.logger.warning(
                         f"{operation_name} failed, retrying in {delay}s",
-                        {"error": str(e), "attempt": attempt + 1, "max_retries": MAX_RETRIES}
+                        {"error": str(e), "attempt": attempt + 1, "max_retries": MAX_RETRIES},
                     )
                     await asyncio.sleep(delay)
                 else:
                     self.logger.error(
                         f"{operation_name} failed after {MAX_RETRIES + 1} attempts",
-                        {"error": str(e)}
+                        {"error": str(e)},
                     )
+        assert last_error is not None
         raise last_error
 
-    def _get_client(self):
-        """Lazy initialization of Gemini client."""
-        if self._client is None:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                self._client = genai.GenerativeModel(self.model)
-            except ImportError:
-                raise ImportError(
-                    "google-generativeai package not installed. "
-                    "Install with: pip install google-generativeai"
+    def _build_config(
+        self,
+        *,
+        system_instruction: str | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        response_mime_type: str | None,
+        service_tier_override: str | None,
+        thinking_level_override: str | None,
+    ):
+        """Assemble a GenerateContentConfig with cost-reduction options applied."""
+        from google.genai import types
+
+        config_kwargs: dict[str, Any] = {
+            "temperature": self._get_temperature(temperature),
+        }
+        if system_instruction:
+            config_kwargs["system_instruction"] = system_instruction
+
+        # Only set max_output_tokens when explicitly configured. When None,
+        # let the API use its own default (avoids capping reasoning-heavy
+        # models at the 4096 fallback).
+        effective_max = max_tokens if max_tokens is not None else self.default_max_tokens
+        if effective_max is not None:
+            config_kwargs["max_output_tokens"] = effective_max
+
+        if response_mime_type:
+            config_kwargs["response_mime_type"] = response_mime_type
+
+        # Thinking level: downgrade from default HIGH to MEDIUM on Pro models
+        # to reduce thinking-token cost (thinking tokens bill at output rate).
+        thinking_level = thinking_level_override or self.thinking_level
+        if thinking_level:
+            level_enum = getattr(types.ThinkingLevel, thinking_level.upper(), None)
+            if level_enum is not None:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level_enum)
+            else:
+                self.logger.warning(
+                    "Unknown thinking_level, ignoring",
+                    {"thinking_level": thinking_level},
                 )
-        return self._client
 
-    def _convert_messages(self, messages: list[Message]) -> tuple[str | None, list[dict]]:
-        """Convert Message objects to Gemini format.
+        # Service tier: 'flex' cuts cost ~50% at the price of lower priority.
+        service_tier = service_tier_override or self.service_tier
+        if service_tier:
+            try:
+                config_kwargs["service_tier"] = types.ServiceTier(service_tier.lower())
+            except ValueError:
+                self.logger.warning(
+                    "Unknown service_tier, ignoring",
+                    {"service_tier": service_tier},
+                )
 
-        Returns:
-            Tuple of (system_instruction, conversation_history)
-        """
-        system_instruction = None
-        history = []
-
-        for msg in messages:
-            if msg.role == Role.SYSTEM:
-                system_instruction = msg.content
-            elif msg.role == Role.USER:
-                history.append({"role": "user", "parts": [msg.content]})
-            elif msg.role == Role.ASSISTANT:
-                history.append({"role": "model", "parts": [msg.content]})
-
-        return system_instruction, history
+        return types.GenerateContentConfig(**config_kwargs)
 
     async def complete(
         self,
@@ -117,85 +187,67 @@ class GeminiProvider(LLMProvider):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        """Generate a completion using Gemini API."""
+        """Generate a completion using the Gemini API."""
         self.logger.debug("Sending completion request", {
             "model": self.model,
             "message_count": len(messages),
         })
 
-        # Check cost before making API call
         self._check_cost(messages)
 
         try:
-            import google.generativeai as genai
+            client = self._get_client()
+            system_instruction, contents = self._convert_messages(messages)
 
-            system_instruction, history = self._convert_messages(messages)
-
-            # Create model with system instruction if present
-            if system_instruction:
-                model = genai.GenerativeModel(
-                    self.model,
-                    system_instruction=system_instruction,
-                )
-            else:
-                model = self._get_client()
-
-            # Configure generation
-            # Some google-generativeai versions support response_mime_type="application/json"
-            # which improves structured output reliability. We pass it through when provided.
             response_mime_type = kwargs.pop("response_mime_type", None)
+            service_tier_override = kwargs.pop("service_tier", None)
+            thinking_level_override = kwargs.pop("thinking_level", None)
 
-            # Only set max_output_tokens when explicitly configured.
-            # When None, let the API use its own default (avoids capping
-            # reasoning-heavy models at the 4096 fallback).
-            effective_max = max_tokens if max_tokens is not None else self.default_max_tokens
-            gen_kwargs: dict = {"temperature": self._get_temperature(temperature)}
-            if effective_max is not None:
-                gen_kwargs["max_output_tokens"] = effective_max
-
-            try:
-                if response_mime_type:
-                    gen_kwargs["response_mime_type"] = response_mime_type
-                generation_config = genai.GenerationConfig(**gen_kwargs)
-            except TypeError:
-                # Older library version: ignore response_mime_type
-                gen_kwargs.pop("response_mime_type", None)
-                generation_config = genai.GenerationConfig(**gen_kwargs)
-
-            # Start chat with history (excluding the last user message)
-            chat = model.start_chat(history=history[:-1] if len(history) > 1 else [])
-
-            # Send the last message with retry
-            last_message = history[-1]["parts"][0] if history else ""
+            config = self._build_config(
+                system_instruction=system_instruction,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_mime_type=response_mime_type,
+                service_tier_override=service_tier_override,
+                thinking_level_override=thinking_level_override,
+            )
 
             async def _make_request():
-                return await chat.send_message_async(
-                    last_message,
-                    generation_config=generation_config,
+                return await client.aio.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=config,
                 )
 
             response = await self._retry_with_backoff(_make_request, "Completion")
 
             content = response.text or ""
 
-            # Gemini doesn't provide detailed token usage in the same way
-            # Try to get usage metadata if available
+            # IMPORTANT: Gemini reasoning models (3.1 Pro, etc.) bill thinking
+            # tokens at the output-token rate, but the API reports them in
+            # `thoughts_token_count` SEPARATELY from `candidates_token_count`.
+            # Both must be summed for output-token cost, or the tracker will
+            # underestimate by 5-10x for reasoning-heavy calls.
             prompt_tokens = 0
             completion_tokens = 0
+            thoughts_tokens = 0
             cached_tokens = 0
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
-                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
-                cached_tokens = getattr(response.usage_metadata, 'cached_content_token_count', 0) or 0
+            if response.usage_metadata is not None:
+                prompt_tokens = response.usage_metadata.prompt_token_count or 0
+                completion_tokens = response.usage_metadata.candidates_token_count or 0
+                thoughts_tokens = response.usage_metadata.thoughts_token_count or 0
+                cached_tokens = response.usage_metadata.cached_content_token_count or 0
+
+            billable_output_tokens = completion_tokens + thoughts_tokens
 
             usage = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
+                "thoughts_tokens": thoughts_tokens,
+                "total_tokens": prompt_tokens + billable_output_tokens,
             }
 
-            # Record actual usage for cost tracking (may be 0 if not provided)
-            self._record_usage(prompt_tokens, completion_tokens, cached_tokens)
+            self._record_usage(prompt_tokens, billable_output_tokens, cached_tokens)
 
             self.logger.debug("Received completion")
 
@@ -221,7 +273,7 @@ class GeminiProvider(LLMProvider):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Generate a JSON completion using Gemini API.
+        """Generate a JSON completion using the Gemini API.
 
         Retries the full LLM call up to JSON_PARSE_RETRIES times when the
         response is not valid JSON (truncated output, extra prose, etc.).
@@ -231,7 +283,7 @@ class GeminiProvider(LLMProvider):
             "has_schema": schema is not None,
         })
 
-        # Add JSON instruction
+        # Add JSON instruction to the system message
         json_messages = list(messages)
         schema_instruction = ""
         if schema:
@@ -249,6 +301,7 @@ class GeminiProvider(LLMProvider):
             ))
 
         last_parse_error: Exception | None = None
+        content = ""
 
         for json_attempt in range(1 + self.JSON_PARSE_RETRIES):
             response = await self.complete(

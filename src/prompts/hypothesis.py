@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-HYPOTHESIS_SYSTEM_PROMPT = """You are a molecular biologist specializing in transcriptional regulation, working with bioinformatics tools. You investigate findings of the form: "ML model says TF_B's motif predicts TF_A's binding — why?"
+HYPOTHESIS_SYSTEM_PROMPT = """You are a molecular biologist specializing in transcriptional regulation, working with bioinformatics tools. You investigate findings of the form: "ML model says TF_B's motif predicts TF_A's binding affinty — why?"
 
-You are given two TFs: TF_A is the primary TF with ChIP-seq or CUT&TAG binding experiments; the motif of TF_B is found to be the most predictive feature to TF_A's binding signals. This is a surprising observation. You aim to find the molecular mechanisms to explain this.
+You are given two TFs: TF_A is the primary TF with ChIP-seq binding experiments; the motif of TF_B is found to be the most predictive feature to TF_A's binding signals. This is a surprising observation. You aim to find the molecular mechanisms to explain this.
 
 ## How to Approach Mechanism Exploration
 
@@ -496,6 +496,11 @@ Generate ONE new hypothesis that:
 3. Tests a genuinely new question — either a different mechanism OR the same mechanism with a fundamentally different test design (if the rejection was about test design, not the mechanism itself)
 
 **Hard rule**: Every hypothesis must propose a specific CAUSAL mechanism — a molecular event that explains WHY TF_B predicts TF_A's binding. Characterization hypotheses (describing what data looks like, confirming co-occurrence, or re-stating the original finding at a different scale) are NOT valid.
+
+**Discriminativeness guidance** — prefer hypotheses that go deeper:
+- Prefer hypotheses whose positive result would distinguish the proposed mechanism from the strongest plausible alternative. For example, "motif enrichment at peaks" cannot distinguish sequence-intrinsic binding from co-factor recruitment — include a contrast (e.g., test at sites where TF_B protein is absent).
+- Avoid hypotheses that only test generic co-occurrence, motif enrichment, shared interactors, or broad GO enrichment unless explicitly framed as exploratory characterization.
+- When possible, include one contrast, exclusion, or conditional test that would make the result more mechanistically informative (e.g., "effect persists in the absence of X" or "effect is specific to chromatin state Y, not Z").
 
 Tool note: When referencing FIMO motif significance in your prediction, prefer p-value
 (e.g., "p < 1e-4") over q-value. For peak-level motif analysis, FIMO's q-value applies

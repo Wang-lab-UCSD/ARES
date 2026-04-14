@@ -252,6 +252,13 @@ class PipelineState(BaseModel):
             data_used = ', '.join(hypo.get('required_data', [])) or 'not specified'
             parts.append(f"  Data used: {data_used}")
             parts.append(f"  Evidence: {hypo.get('evidence_summary', 'N/A')}")
+            simpler = hypo.get('simpler_supported_explanation')
+            if simpler:
+                parts.append(f"  Residual signal: {simpler}")
+            conv_reasoning = hypo.get('convergence_reasoning')
+            if conv_reasoning:
+                # Keep it short — full reasoning can be long
+                parts.append(f"  Convergence feedback: {conv_reasoning[:400]}")
             parts.append("")
 
         return "\n".join(parts)

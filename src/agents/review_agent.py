@@ -25,6 +25,8 @@ class ReviewResult:
     issues_found: list[str]
     reasoning: str
     rejection_category: str | None = None  # "wrong_mechanism" or None
+    revised_prediction: str | None = None
+    revised_verification_plan: list[str] | None = None
 
 
 class HypothesisReviewAgent:
@@ -76,12 +78,27 @@ class HypothesisReviewAgent:
                 max_tokens=self.llm.default_max_tokens,
             )
 
-            approved = result.get("approved", True)
+            # Support both old (approved: bool) and new (decision: str) formats
+            decision = result.get("decision")
+            if decision is not None:
+                approved = decision in ("approve", "approve_with_revision")
+            else:
+                approved = result.get("approved", True)
+                decision = "approve" if approved else "reject"
+
             issues = result.get("issues", [])
             reasoning = result.get("reasoning", "")
-            rejection_category = result.get("rejection_category") if not approved else None
+            rejection_category = result.get("rejection_category") if decision == "reject" else None
+
+            # Extract revision fields for approve_with_revision
+            revised_prediction = None
+            revised_verification_plan = None
+            if decision == "approve_with_revision":
+                revised_prediction = result.get("revised_prediction")
+                revised_verification_plan = result.get("revised_verification_plan")
 
             self.logger.info("Hypothesis review complete", {
+                "decision": decision,
                 "approved": approved,
                 "issues_count": len(issues),
                 "rejection_category": rejection_category,
@@ -97,6 +114,8 @@ class HypothesisReviewAgent:
                 issues_found=issues,
                 reasoning=reasoning,
                 rejection_category=rejection_category,
+                revised_prediction=revised_prediction,
+                revised_verification_plan=revised_verification_plan,
             )
 
         except Exception as e:

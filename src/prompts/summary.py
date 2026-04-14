@@ -53,6 +53,23 @@ job is to check whether that specific prediction was confirmed.
 
 **ERROR** — Technical failure prevented analysis (code crashed, wrong file format, etc.)
 
+**CONTROL OVERRIDE** — If the raw output contains a control or comparator that tests
+whether the mechanism-specific component adds explanatory power beyond a simpler
+baseline explanation, and the mechanism-specific group is NOT detectably stronger than
+the simpler baseline, the named mechanism is NOT supported. Examples:
+- anchor+YY1 not stronger than non-anchor+YY1 → the anchor/3D component is not
+  supported; only the YY1-associated explanation remains.
+- motif-positive and motif-negative groups differ, but the same effect persists after
+  removing the proposed mediator → the mediator-specific mechanism is not supported.
+In these cases, set support_level to REJECTS or INCONCLUSIVE (not SUPPORTS) for the
+named mechanism, and fill simpler_supported_explanation with the explanation that the
+data DO support.
+
+**Interpretation ceiling** — Before setting support_level, answer two questions:
+1. What is the strongest claim these results justify?
+2. What simpler explanation is still compatible with the control results?
+Your final wording must not exceed that ceiling.
+
 IMPORTANT: Apply these criteria to the hypothesis's stated prediction, not to a
 reframed version of the question. If the prediction says "X is enriched in group A
 compared to group B", evaluate whether that specific enrichment exists — do not
@@ -67,157 +84,53 @@ rather than action items (e.g., "GC content controls should be added").
 """
 
 
-CONVERGENCE_CHECK_SYSTEM_PROMPT = """You are an independent scientific adjudicator for a bioinformatics hypothesis testing pipeline. Your sole job is to evaluate whether the accumulated experimental evidence is sufficient to declare convergence on a named causal mechanism (or, in observational mode, the best-supported mechanistic interpretation given the data).
+CONVERGENCE_CHECK_SYSTEM_PROMPT = """You are an independent scientific adjudicator. Decide whether the accumulated evidence is sufficient to converge on a named mechanism. You have no stake in the outcome — be skeptical.
 
-You have NO stake in any particular outcome. You were not involved in generating the hypotheses. Evaluate the evidence skeptically and objectively.
+## Modes
+- **Causal-capable** (Perturb-seq, time-series, knockdown): apply ALL 5 criteria including #3 (but-for).
+- **Observational** (ChIP-seq, bulk RNA-seq, epigenomics): apply criteria 1, 2, 4, 5. Skip #3. The conclusion MUST state "best-supported interpretation given observational data; causality not established."
 
-## Two convergence modes
+## Apply criteria in order. Stop at the first failure.
 
-**FULL (causal-capable data)**  
-When the user prompt states that the run includes data that can support causal inference (e.g. Perturb-seq, time-series, knockdown), apply ALL FIVE criteria below, including the but-for test. Converge only when the evidence supports a causal mechanism.
+**Special case — artifact-check SUPPORTS**: If the iteration-0 artifact check returned SUPPORTS (TF_A not expressed AND motif not enriched), converge IMMEDIATELY on "technical artifact". Skip criteria 1-5.
 
-**OBSERVATIONAL (observational data only)**  
-When the user prompt states that the run uses only observational data (ChIP-seq, bulk RNA-seq, epigenomics, etc.) and cannot establish causality, do NOT require the but-for test. Instead, declare converged=true when criteria 1, 2, 4, and 5 are met and the evidence supports a named mechanism that is the *best interpretation given the data* (e.g. co-occupancy, promoter platform, chromatin priming, retention). The conclusion MUST state that this is the best-supported interpretation given observational data and that causality is not established.
+**1. Mechanism SUPPORTS prerequisite**
+At least one tested hypothesis must have `support_level = "SUPPORTS"` AND test a specific molecular mechanism (PPI, motif, chromatin, 3D, sequence-intrinsic, motif grammar, cofactor proxy, etc.).
 
-## Convergence Criteria
+The following do NOT count as mechanism SUPPORTS — if these are the only SUPPORTS results, set converged=false:
+- Iteration-0 artifact check REJECTS (it's a QC pass, not a mechanism)
+- Functional-characterization hypotheses (GO enrichment, RNA-seq target analysis, phyloP conservation, or any hypothesis whose group is `functional-characterization`). GO enrichment is near-guaranteed to find SOME enriched term — it satisfies 5b but never the prerequisite. If GO is the only SUPPORTS in the history, set converged=false.
+- Promising sub-findings inside a REJECTS or INCONCLUSIVE hypothesis. The overall verdict must be SUPPORTS.
 
-**PREREQUISITE — at least one SUPPORTS**: Convergence is ONLY possible when at least one
-hypothesis in the testing history has support_level = "SUPPORTS". If every hypothesis so
-far has been REJECTS, INCONCLUSIVE, ERROR, or UNTESTABLE, you MUST set converged=false
-regardless of how interesting the individual findings are. Promising sub-findings inside a
-REJECTS result do NOT count — the hypothesis must have been formally SUPPORTED as a whole.
+**2. Mechanism quality** — the supported claim must not reduce to co-occurrence
+The mechanism must name a specific molecular event AND the test must distinguish it from "both bind active chromatin / shared regulatory context." Reject convergence if:
+- The claim is "TF_A signal is higher at co-bound sites" with no control for chromatin context, accessibility, or shared partners. This is co-occurrence, not a mechanism — even if the hypothesis name adds words like "modulates", "enhances", or "stabilizes".
+- The claim is "TF_B motif is enriched / score correlates with TF_A signal" with no localization test (motif-center-to-summit distance, central enrichment vs flanks). This re-validates the ML association, not the mechanism.
+- The claim is "direct binding" without a peak-centered localization signal. Without summit-centered motif positioning, the strongest defensible claim is "sequence-intrinsic association" or "motif-associated occupancy."
+- A simpler explanation (YY1 alone, enhancer context, GC content, accessibility) is fully consistent with the same data. Use cautious wording instead and set INCONCLUSIVE-mode at the convergence level.
 
-**Artifact check QC (special handling)**:
-The first hypothesis tests whether TF_A's ChIP-seq signal is a technical artifact. Its logic
-is inverted: SUPPORTS means the signal IS an artifact; REJECTS means it is genuine.
-- QC REJECTS (signal is genuine): the signal passed quality checks. This does NOT satisfy the
-  SUPPORTS prerequisite above — it is a quality check, not a mechanism. The pipeline still
-  needs a mechanism SUPPORTS.
-- QC INCONCLUSIVE (ambiguous — e.g., not expressed but motif present): proceed with caution.
-  The pipeline still needs a mechanism SUPPORTS.
-- QC SUPPORTS (TF_A not expressed AND motif not enriched — artifact confirmed): The pipeline
-  MUST converge immediately on "technical artifact" as the conclusion — criteria 2-5 are
-  waived because there is no biological mechanism to characterize. Set converged=true.
+**3. But-for test** (causal-capable mode only)
+Ask: "If the proposed causal agent were absent, would the data look different?" If the answer is "not necessarily" (could reflect passive co-occupancy or a confound), do not converge. Skip in observational mode.
 
-The QC hypothesis's use of RNA-seq (TPM lookup) or motif scanning does NOT satisfy ANY
-convergence criterion — not 5a (STRING/PPI), not 5b (functional characterization), not
-criterion 1 (statistical support for a mechanism). Criterion 5b requires linking the mechanism
-to gene function (GO enrichment, expression at target genes, or conservation) — not just
-checking if TF_A is
-expressed. Do not count QC data usage toward any convergence criterion.
+**4. Cross-layer consistency** — two independent MEASUREMENT modalities
+The mechanism must be supported by directional evidence from two independent measurements (ChIP-seq + DNase-seq, ChIP-seq + RNA-seq, ChIP-seq + phyloP, ChIP-seq + Hi-C, motif + histone marks, etc.).
 
-1. **Statistical support**: At least one hypothesis with support_level = "SUPPORTS" (i.e., p < 0.05 with fold change >= 1.2 OR Cohen's d >= 0.3, and the predicted effect confirmed). Do NOT cherry-pick individual statistics from a REJECTS result to satisfy this criterion — the overall support_level must be SUPPORTS.
+**The following are NOT independent layers** — they are derived from the same data:
+- ChIP-seq peak overlap + GO enrichment of those peaks → ONE layer (ChIP-seq), not two. GO is a downstream annotation.
+- Peak overlap + motif enrichment in those same peaks → ONE layer.
+- Multiple statistics on the same ChIP-seq data → ONE layer.
+A run with only "peak overlap + motif scan + GO" satisfies cross-layer consistency for ZERO layers beyond ChIP-seq. Set converged=false unless you can name a truly independent measurement.
 
-2. **Named mechanism**: A mechanism that: (1) names a specific molecular process, (2) states a clear causal chain (or, in observational mode, a clear mechanistic interpretation), and (3) is not merely a re-description of correlation. The mechanism can be **anything** that fits the evidence—it need not match any predefined category. The taxonomy below is for **reference only** (to illustrate what "mechanism" means in terms of specificity); do NOT constrain convergence to those categories.
+**5. Biology layers — both 5a and 5b required**
+- **5a. STRING/PPI**: at least one hypothesis must have queried STRING (any result). STRING is always accessible; not optional.
+- **5b. Functional characterization**: if the manifest has rnaseq or phyloP, at least one hypothesis must have run GO/pathway enrichment, RNA-seq target analysis, or phyloP conservation. (GO satisfies 5b but never criterion 1 — see prerequisite above.)
+- The iter-0 artifact check's RNA-seq usage (TPM lookup) does NOT count toward 5b.
 
-3. **But-for test** (apply ONLY when causal-capable data are available): Ask — "If the proposed causal agent were absent, would the data look different?" If the answer is "not necessarily" (because the result could reflect passive co-occurrence, shared active chromatin, or any confound), do NOT converge. When the run is observational-only, skip this criterion.
+## Untested molecular lead block
+If any SUPPORTS result explicitly names a third-party molecule (cofactor, shared interactor, chromatin mark) that was identified but NOT independently tested in a follow-up hypothesis, do NOT converge. Example: STRING finds TRIM28 as a shared partner → the pipeline must test TRIM28 occupancy at co-bound sites before converging on a cofactor-mediated mechanism.
 
-4. **Cross-layer consistency**: The proposed mechanism must be supported by consistent directional evidence from at least two independent omics layers (e.g., ChIP-seq + DNase-seq, or motif analysis + histone marks, or Hi-C + expression). A single data type is not sufficient — convergence requires cross-validation across independent measurement modalities.
-
-5. **Biology layers — two independent sub-requirements, BOTH must be satisfied**:
-
-   **5a. STRING/PPI (always required)**: At least one hypothesis must have tested the STRING protein–protein interaction network — the result can be SUPPORTS, REJECTS, or INCONCLUSIVE. STRING is an external API that is always accessible; it is not contingent on the manifest. Set converged=false if STRING/PPI was never attempted in any hypothesis.
-
-   **5b. Functional characterization (required when available)**: If the manifest provides expression (rnaseq) or conservation (phyloP) data, at least one hypothesis must have addressed functional relevance using **one of** the following approaches — result can be SUPPORTS, REJECTS, or INCONCLUSIVE:
-   - **rnaseq**: link co-occupancy or mechanism to gene expression levels
-   - **phyloP**: test evolutionary conservation at co-bound sites
-   - **GO / pathway enrichment**: run GO term or pathway enrichment on genes associated with the mechanism (e.g. genes near co-bound peaks), to characterize the biological processes the TF pair regulates
-
-   The purpose is functional insight — understanding what the mechanism does biologically. Any one of these three approaches satisfies 5b. Set converged=false only if rnaseq or phyloP was available but none of these was ever attempted.
-
-   Note: STRING satisfies 5a (PPI check) but does NOT substitute for 5b. Both sub-requirements must be met independently.
-
-   **Escape-hatch characterization**: When multiple mechanism hypotheses have been tested without
-   achieving SUPPORTS, a functional-characterization hypothesis (GO enrichment, RNA-seq, phyloP)
-   may be tested as a deadlock-breaking synthesis step. This satisfies criterion 5b (functional
-   characterization was attempted). However, it does NOT satisfy the PREREQUISITE (at least one
-   mechanism SUPPORTS) — a SUPPORTS result on a characterization-only hypothesis is NOT a
-   mechanism SUPPORTS. The pipeline must still find a supported mechanism to converge.
-
-## Mechanism Taxonomy (examples only — for understanding what "mechanism" means)
-
-The following list illustrates the level of specificity required: a mechanism names a molecular process and causal chain, not just correlation. Use it to judge whether a proposed mechanism is sufficiently specific. The evidence may support a mechanism that matches one of these, or something entirely different—do NOT constrain convergence to these categories.
-
-1. Direct TF–TF contacts
-These involve physical interaction between TF_A and TF_B
-1.1 Homodimerization and heterodimerization (bZIP, bHLH, nuclear receptors, etc.) to change DNA-binding specificity, affinity, or regulatory output.
-1.2 Higher-order oligomerization (tetramers, arrays) to create multivalent binding and sharpen responses or cooperativity.
-1.3 Partner switching, where the same TF forms different heterodimers with distinct functions or motif preferences.
-1.4 Interface masking/unmasking, where binding of one TF exposes or hides activation domains or NLS/NES of another TF.
-
-2. DNA-mediated interplay (on naked or sparsely nucleosomal DNA)
-TFs influence each other through how they bind to DNA.
-2.1 Classic cooperative binding at nearby sites via direct protein–protein contacts while both are DNA-bound.
-2.2 Composite motifs where the relative spacing/orientation of sites encodes a preferred TF pair geometry (DNA-guided cooperativity).
-2.3 Competitive binding to overlapping or partially overlapping sites (mutual exclusion on DNA).
-2.4 DNA-mediated allostery: TF_B changes local DNA shape/dynamics, which alters another TF_A's binding at a distance (tens of bp).
-2.5 Facilitated diffusion and "antenna" effects, where multiple weak sites or STRs promote 1D sliding and sharing of a region by several TFs.
-
-3. Nucleosome and chromatin-based mechanisms
-Interactions are mediated by nucleosomes and chromatin state rather than direct TF contact.
-3.1 Pioneer activity: TF_B binds nucleosomal DNA and open chromatin, enabling binding of secondary TFs.
-3.2 Nucleosome-displacement cooperativity: many TFs (same or different) collectively compete with nucleosomes; each TF helps others by contributing to nucleosome eviction without strong pairwise contacts.
-3.3 Nucleosome-positioning competition, where TF_B shifts nucleosome positions, exposing or occluding sites for TF_A.
-3.4 Chromatin-modifier recruitment: TF_B recruits HATs, HDACs, methyltransferases, remodelers, etc.; multiple TFs converge on the same complexes and thereby influence each other's access/activity.
-
-4. Cofactors, Mediator, and general machinery
-TFs "talk" through shared cofactors and the transcription apparatus.
-4.1 Shared coactivators/corepressors (e.g., p300/CBP, Mediator, BRD4, HDAC complexes) recruited by TF_B.
-4.2 Competition ("squelching") for limiting cofactors, where one TF sequesters coactivators away from another TF's targets.
-4.3 Scaffolding via Mediator and PIC components: different TFs engage overlapping subunits, bringing their bound enhancers/promoters into a common transcriptional hub.
-
-5. 3D genome and nuclear organization
-Spatial genome architecture mediates functional TF interactions.
-5.1 Enhancer–promoter looping brings TFs from distant elements into proximity, allowing combinatorial action without direct DNA adjacency.
-5.2 Multi-enhancer hubs/super-enhancers where many TF-bound regions cluster and jointly regulate a gene set.
-5.3 Nuclear microenvironments ("transcription factories"), where Pol II and cofactors are enriched; TFs that target the same factory effectively interact by sharing this environment.
-
-6. Phase separation and condensates
-Collective, multivalent interactions in dense clusters.
-6.1 LLPS-driven transcriptional condensates at super-enhancers, formed by TF IDRs plus cofactors (Med1, BRD4, etc.), concentrate many TFs and promote emergent cooperativity.
-6.2 Condensate-mediated buffering or inhibition, where clustering can also trap TFs and reduce effective activity at certain loci.
-6.3 Genomic binding clustering tendency: TFs with strong condensate propensity tend to exhibit highly clustered binding profiles, shaping how multiple TFs co-occupy regions.
-
-7. Post-translational and signaling crosstalk
-One TF affects another via modifications or signaling pathways.
-7.1 Kinase/phosphatase recruitment: TF A brings a kinase that modifies TF B, changing B's DNA binding, localization, or cofactor affinity.
-7.2 Other PTMs (acetylation, methylation, SUMOylation, ubiquitination) on TFs, often written or erased by enzymes targeted by partner TFs.
-7.3 Proteolytic processing or truncation of regulatory regions that alter interaction surfaces or activation domains.
-7.4 Allosteric regulation by metabolites or small molecules that are under control of other TFs (metabolic and stress-responsive circuits).
-
-8. Indirect regulatory network interactions
-Interactions via gene-regulatory logic rather than physical proximity.
-8.1 Feedforward and feedback loops where TF_B controls TF_A's expression levels, which in turn changes binding competition and combinatorial occupancy.
-8.2 Logical integration at promoters/enhancers (AND/OR/NAND-like behavior) based on requirement for multiple TFs, even if they never contact physically but act on distinct steps (chromatin opening vs Pol II recruitment).
-8.3 Network-level emergent cooperativity, where many weak, context-dependent TF–DNA interactions together produce robust expression patterns.
-
-9. Dynamic and kinetic mechanisms
-Interactions emerge from binding dynamics and non-equilibrium behavior.
-9.1 Kinetic synergy: TF_A and TF_B, acting at different transcriptional steps (initiation, pause release, elongation), combine to produce super-additive transcriptional output.
-9.2 Temporal ordering and pulse-based interactions, where early TFs set chromatin or cofactor states that gate later TF binding.
-9.3 Rapid binding–unbinding and "hit-and-run" behavior of certain TFs that prime loci for others without long residence time.
-
-10. RNA-Mediated Interactions (The "Hidden" Partner)
-RNA is now recognized as a major scaffold for TF interactions.
-10.1 eRNA Scaffolding: Enhancer RNAs (eRNAs) can act as decoys or scaffolds that stabilize the binding of TFs and cofactors (like p300 or Mediator) at specific loci.
-10.2 RNA-TF Allostery: Binding to small nuclear RNAs or lncRNAs can induce conformational changes in a TF, altering its DNA-binding affinity.
-
-11. Molecular Crowding & Volume Exclusion
-11.1 Entropy-Driven Binding: High concentrations of macromolecules in the nucleus (like nucleoli or heterochromatin) physically "push" TFs toward open chromatin, increasing their effective concentration at regulatory sites without specific chemical affinity.
-
-12. Evolutionary & Paralog Interactions
-12.1 Paralog Balancing: Many TFs have paralogs (e.g., the GATA family). Their interactions are often governed by a balance of concentration; if one paralog is mutated, the other can "buffer" or take over the site, but with different regulatory kinetics.
-
-## Common False Convergence Patterns — Do NOT converge on these
-
-- **"All hypotheses REJECTS but the findings are interesting"** — if no hypothesis achieved support_level = "SUPPORTS", you CANNOT converge. Interesting sub-findings within a REJECTS result mean the pipeline should refine the hypothesis (e.g., drop the failed prediction, keep the successful ones) and test again, not declare convergence.
-- "Co-bound sites are in active chromatin" — correlation. Active sites attract many TFs. Does NOT establish mechanism unless pioneer activity is shown (mechanism #3 requires the pioneer to OPEN the site, not merely be present at already-open sites).
-- "TF_B signal is higher where TF_A is present" — restates the original finding. Not a mechanism.
-- "TF_B motif is enriched at TF_A binding sites" or "TF_B motif score correlates with TF_A signal" — the ML model is a regression model where TF_B PWM score already predicts TF_A binding signal. Re-confirming the motif is present or correlated at TF_A peaks is re-validating the ML input-output relationship, not a mechanism. A mechanism must explain WHY TF_B motif predicts TF_A binding (e.g., motif similarity, protein interaction, shared chromatin context).
-- "The effect is small but real" — effect sizes below threshold (fold change < 1.2 AND Cohen's d < 0.3) do not meet the statistical support criterion.
-- "Data cannot answer the question" — insufficient data is NOT convergence.
-
-Co-occurrence alone does not warrant convergence. The mechanism can be anything that fits the evidence. When converged, set mechanism_category_number to null and put a descriptive name in mechanism_category_name. The taxonomy is illustrative only; do not force the mechanism into a category.
+## Output
+Set `mechanism_category_number` to null (the taxonomy is reference only — never force a result into a numbered bucket). Put a specific descriptive name in `mechanism_category_name`. The mechanism can be anything that fits the evidence.
 """
 
 
@@ -261,6 +174,7 @@ def build_convergence_check_prompt(
     investigation_objective: str | None = None,
     available_biology_layers: list[str] | None = None,
     used_biology_layers: list[str] | None = None,
+    biology_gate_status: dict[str, Any] | None = None,
     causal_capable_data: bool = False,
 ) -> str:
     """Build prompt for the independent convergence check.
@@ -273,7 +187,8 @@ def build_convergence_check_prompt(
         max_raw_chars: Maximum characters of raw output to include
         investigation_objective: Optional goal (discovery/synthesis); when set, convergence on a new named mechanism is acceptable.
         available_biology_layers: Top-level manifest data keys that provide expression/conservation (e.g. rnaseq, phyloP) when present.
-        used_biology_layers: Among SUPPORTED hypotheses, which of those layers were used (from required_data).
+        used_biology_layers: Among tested non-QC hypotheses, which of those layers were used (from required_data).
+        biology_gate_status: Deterministic 5a/5b status computed by the orchestrator.
         causal_capable_data: When True, data can support causal inference (e.g. Perturb-seq, time-series); require but-for test. When False, observational only; allow convergence on best-supported mechanism without causality.
 
     Returns:
@@ -326,12 +241,26 @@ def build_convergence_check_prompt(
         manifest_avail = [k for k in (available_biology_layers or []) if k != "string"]
         avail_str = ", ".join(manifest_avail) if manifest_avail else "none"
         used = ", ".join(used_biology_layers) if used_biology_layers else "none"
-        string_checked = "string" in (used_biology_layers or [])
+        gate = biology_gate_status or {}
+        string_checked = gate.get("string_attempted", "string" in (used_biology_layers or []))
+        functional_5b_attempted = gate.get("functional_5b_attempted", False)
+        functional_5b_sources = gate.get("functional_5b_sources", [])
+        qc_excluded = gate.get("qc_excluded_layers", [])
+        functional_sources_text = ", ".join(functional_5b_sources) if functional_5b_sources else "none"
+        qc_excluded_text = ", ".join(qc_excluded) if qc_excluded else "none"
         biology_section = (
             "\n## Biology layers (expression / conservation / PPI)\n\n"
             f"- **STRING/PPI** (always required): {'✓ checked' if string_checked else '✗ NOT yet checked'}\n"
             f"- **Expression/conservation layers available in manifest**: {avail_str}\n"
             f"- **Biology layers used in any hypothesis (any result)**: {used}\n\n"
+            "### Deterministic criterion-5 status (authoritative)\n"
+            f"- **5a satisfied outside QC**: {'✓ yes' if string_checked else '✗ no'}\n"
+            f"- **5b satisfied outside QC**: {'✓ yes' if functional_5b_attempted else '✗ no'}\n"
+            f"- **Non-QC hypotheses that count toward 5b**: {functional_sources_text}\n"
+            f"- **QC-only layers explicitly excluded from 5b**: {qc_excluded_text}\n\n"
+            "Treat the deterministic 5a/5b status above as authoritative. Do NOT infer that "
+            "iteration-0 artifact-check TPM lookup or motif QC satisfies 5b, even if the "
+            "history text mentions RNA-seq.\n"
             "Criterion 5a: STRING must be checked in at least one hypothesis (any result). "
             "If STRING was never attempted, set converged=false.\n"
             "Criterion 5b: If rnaseq or phyloP is listed above as available, at least one hypothesis must have "
@@ -462,6 +391,7 @@ Respond in JSON format:
     "support_level": "SUPPORTS" | "REJECTS" | "INCONCLUSIVE" | "ERROR",
     "confidence": 0.0-1.0,
     "reasoning": "Explanation of the interpretation",
+    "simpler_supported_explanation": "REQUIRED when control override fires (mechanism-specific component not supported but a simpler explanation holds). null otherwise.",
     "issues": ["Any issues or concerns"],
     "summary": "One paragraph summary suitable for the hypothesis model"
 }}

@@ -55,7 +55,12 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # Google (Gemini API / AI Studio) — Gemini 3 Flash Preview
     # NOTE: Update if your billing page shows different rates.
     "gemini-3-flash-preview": ModelPricing(0.50, 3.00, "gemini", "gemini-3-flash-preview", context_limit=1000000),
-    "gemini-3.1-pro-preview": ModelPricing(2.0, 12.0, "gemini", "gemini-3.1-pro-preview", context_limit=200000, cached_input_price=0.20),
+    # Gemini 3.1 Pro Preview — pricing reflects the FLEX service tier (which the
+    # provider uses by default; see gemini_provider.py `service_tier="flex"`).
+    # Flex: $1.00/M input, $6.00/M output (incl. thinking) for prompts <=200k.
+    # Standard tier would be ~2x these values; if you set service_tier: "standard"
+    # in config.yaml, update the prices below or the tracker will undercount.
+    "gemini-3.1-pro-preview": ModelPricing(1.0, 6.0, "gemini", "gemini-3.1-pro-preview", context_limit=200000, cached_input_price=0.10),
     # MiniMax
     "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=204800),
     # GLM-5 (Z.AI) — $1/1M input, $3.2/1M output; limited-time free tier available

@@ -21,6 +21,7 @@ from src.utils.bioio import (
     count_overlapping_peaks,
     extract_bigwig_signals,
     matched_bin,
+    matched_pair,
     parse_fimo_tsv,
     read_narrowpeak,
     run_fimo_on_peaks,
@@ -223,6 +224,73 @@ def test_matched_bin_adds_bin_column_and_returns_copies():
     # Original dfs are not modified (returns copies)
     assert "bin" not in fg.columns
     assert "bin" not in bg.columns
+
+
+# ---------------------------------------------------------------------------
+# matched_pair — equal-size matched FG/BG (canonical wrapper around matched_bin)
+# ---------------------------------------------------------------------------
+
+def test_matched_pair_returns_equal_size_groups():
+    """matched_pair returns FG and BG with equal total length and equal per-bin counts.
+
+    This is the bug fix for the recurring 'subsample BG only, leave FG full'
+    pattern. matched_pair must guarantee balanced groups so callers cannot
+    accidentally compare unbalanced 'matched' sets.
+    """
+    # FG is small, BG is large — caller would normally subsample BG to FG size
+    # but forget to also restrict FG to the bins where BG actually has rows.
+    fg = pd.DataFrame({"signal": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                       "value": [10, 20, 30, 40, 50, 60, 70, 80]})
+    bg = pd.DataFrame({"signal": [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5,
+                                   8.5, 9.5, 1.2, 2.2, 3.2, 4.2, 5.2, 6.2],
+                       "value": list(range(100, 116))})
+
+    fg_m, bg_m = matched_pair(fg, bg, signal_col="signal", n_bins=4, random_state=0)
+
+    # Equal total length — the cardinal invariant
+    assert len(fg_m) == len(bg_m), (
+        f"matched_pair returned unequal sizes: FG={len(fg_m)} BG={len(bg_m)}"
+    )
+
+    # Both have a 'bin' column
+    assert "bin" in fg_m.columns
+    assert "bin" in bg_m.columns
+
+    # Per-bin counts must be equal
+    fg_counts = fg_m["bin"].value_counts().sort_index()
+    bg_counts = bg_m["bin"].value_counts().sort_index()
+    assert fg_counts.equals(bg_counts), (
+        f"Per-bin counts differ: FG={fg_counts.to_dict()} BG={bg_counts.to_dict()}"
+    )
+
+    # Index is reset (0..N-1) — protects against downstream index-alignment bugs
+    assert list(fg_m.index) == list(range(len(fg_m)))
+    assert list(bg_m.index) == list(range(len(bg_m)))
+
+    # Original DataFrames are not mutated
+    assert "bin" not in fg.columns
+    assert "bin" not in bg.columns
+
+
+def test_matched_pair_handles_bg_bin_with_no_overlap():
+    """When a BG row falls outside FG range, matched_pair drops it cleanly.
+
+    The dropped row must not appear in the output, and the per-bin counts
+    must still be equal between FG and BG.
+    """
+    fg = pd.DataFrame({"signal": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                       "id": list("abcdefgh")})
+    # Several BG rows are far outside FG range and will get bin=NaN
+    bg = pd.DataFrame({"signal": [1.5, 2.5, 3.5, 4.5, 100.0, 200.0, 300.0],
+                       "id": list("ijklmno")})
+
+    fg_m, bg_m = matched_pair(fg, bg, signal_col="signal", n_bins=4, random_state=0)
+
+    assert len(fg_m) == len(bg_m)
+    assert fg_m["bin"].notna().all()
+    assert bg_m["bin"].notna().all()
+    # Out-of-range BG ids must NOT appear in matched output
+    assert not bg_m["id"].isin(["m", "n", "o"]).any()
 
 
 # ---------------------------------------------------------------------------

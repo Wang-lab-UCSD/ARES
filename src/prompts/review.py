@@ -7,7 +7,7 @@ from typing import Any
 
 HYPOTHESIS_REVIEW_SYSTEM_PROMPT = """You review scientific hypotheses before they are tested. Your job is to catch duplicates, association/characterization hypotheses, and verification steps that are irrelevant to the stated mechanism — all BEFORE expensive code generation and execution.
 
-You have exactly THREE checklist items. Reject ONLY when one of them is violated. Do NOT evaluate statistical methodology (test choice, power, controls, causal inference validity) — that is not your job. Your job is to check whether the hypothesis is novel, causal, and whether each verification step is testing the right thing for the stated mechanism."""
+You have exactly FOUR checklist items. Reject ONLY when one of them is violated. Do NOT evaluate statistical methodology (test choice, power, controls, causal inference validity) — that is not your job. Your job is to check whether the hypothesis is novel, causal, discriminative, and whether each verification step is testing the right thing for the stated mechanism."""
 
 
 def build_hypothesis_review_prompt(
@@ -77,51 +77,65 @@ def build_hypothesis_review_prompt(
 
 # Review Checklist
 
-You have exactly THREE checks. Apply ONLY these. Do not invent additional criteria.
+You have exactly FOUR checks. Apply ONLY these. Do not invent additional criteria.
 
 **1. Already answered**
 Read the prior iterations carefully — the **prediction**, **what was actually tested**,
 **data layers used**, and **evidence** are all shown above. Then ask:
 
-> "Given what has already been measured and observed, does this new hypothesis genuinely
->  ask a different question, or is it re-measuring something already established?"
+> "Does the new hypothesis ask a different BIOLOGICAL QUESTION, or is it re-measuring
+>  something already established with a different metric?"
+
+The key distinction: **same question** = duplicate. **Different question at the same loci** = novel.
+
+**MANDATORY BEFORE REJECTING ON CHECK 1**: You MUST explicitly answer these two questions
+in your reasoning before you may reject:
+  (a) "What specific molecule, mark, or data modality does the new hypothesis measure
+       that was NOT measured in any prior iteration?" — If you can name one (e.g., TRIM28,
+       H3K27ac, WGBS methylation, RNA-seq expression, motif containment/substring), the
+       hypothesis is NOVEL and you MUST NOT reject on Check 1.
+  (b) "What is the exact prior iteration whose test is equivalent?" — Name the iteration
+       number and explain what measurement is identical (not just related).
+If you cannot answer (a) with "none — every molecule/mark/modality was already tested"
+AND answer (b) with a specific iteration, you may not reject on Check 1.
+
+In TF-pair investigations, almost every hypothesis starts from peak overlap between TF_A
+and TF_B — that is the fundamental design pattern, NOT a sign of duplication. The question
+is what NEW molecule, mark, or functional readout is being measured at those loci.
 
 A hypothesis is a duplicate (REJECT) if:
-- It tests the same observable using the same data layers as a prior iteration, even if
-  the metric is different (e.g., overlap % vs signal at overlapping sites, or correlation
-  vs fold-change between groups — both measure "are A and B co-bound")
-- It rebrands a previously-measured phenomenon as a "new mechanism" without actually
-  proposing a new molecular event (e.g., calling co-binding "quantitative modulation"
-  when no new causal step has been proposed)
-- It would produce evidence already present in the prior result (e.g., if iter 2 already
-  showed REST signal is enriched at ATF6 peaks, asking "is ATF6 signal correlated with
-  REST signal at co-bound peaks" is the same observation viewed differently)
-- It is the logical inverse of a confirmed result (e.g., prior SUPPORTS enrichment → testing
-  depletion is redundant)
+- It measures the same relationship with a different metric (e.g., overlap % vs signal
+  correlation vs fold-change — all asking "do TF_A and TF_B co-bind?")
+- It rebrands a previously-measured phenomenon without a new molecular player (e.g.,
+  calling co-binding "quantitative modulation" when no new causal step is proposed)
+- It is the logical inverse of a confirmed result
 
-A hypothesis is novel (APPROVE) if:
-- It tests a fundamentally different molecular event (e.g., switching from "do they co-bind"
-  to "is the motif a sequence proxy for a third factor")
-- It uses a fundamentally different data modality (e.g., moving from ChIP-seq overlap to
-  RNA-seq expression, phyloP conservation, or Hi-C looping) to test the same mechanism class
-- It proposes a specific molecular event (steric competition, motif containment, indirect
-  recruitment via cofactor X, etc.) that introduces a new causal step beyond what's been measured
-
-**CRITICAL EXCEPTION**: Testing the same mechanism class using a fundamentally different
-data modality (e.g. ChIP-seq → RNA-seq → phyloP) is NOT a duplicate — it is REQUIRED for
-cross-layer convergence. APPROVE these.
+A hypothesis is novel (APPROVE) if it does ANY of these — even if the starting point
+is TF_A/TF_B peak overlap:
+- **Introduces a new molecular player**: e.g., measures TRIM28, RNF2, H3K27me3, or
+  another factor at co-bound sites. Prior test measured TF_A signal; new test measures
+  a third protein/mark = different question.
+- **Tests a different causal pathway**: e.g., prior test asked "does TF_B protein recruit
+  TF_A?" (protein tethering); new test asks "does TF_B create accessible chromatin for
+  TF_A?" (chromatin remodeling). Different molecular event = novel.
+- **Uses a different data modality**: e.g., ChIP-seq → RNA-seq, phyloP, Hi-C, WGBS.
+  This is REQUIRED for cross-layer convergence.
+- **Adds a conditional slice or exclusion**: e.g., "test at sites where TF_B protein is
+  absent," "compare repressed vs active chromatin," "control for GC content."
+- **Measures a new genomic feature**: e.g., DNA methylation, motif spacing, loop anchors,
+  conservation scores — even if measured at the same peaks.
 
 **Check the rebranding trap**: The hypothesis agent sometimes rebrands an INCONCLUSIVE
-result by changing the hypothesis name and prediction wording while testing the same
-underlying observation. Look at the **data layers** and **what was actually tested** in the
-verification plan, not just the hypothesis name. If the new hypothesis would compute on the
-same data as a prior iteration to answer the same biological question, it's a duplicate.
+result by changing the name while testing the same underlying relationship. Look at WHAT
+IS BEING MEASURED, not the hypothesis name. If the new hypothesis computes the same
+metric on the same molecules as a prior iteration, it's a duplicate — even if the
+mechanism label changed. But if it measures a DIFFERENT molecule or mark, it's novel.
 
 If the prior list is empty, this check cannot trigger — approve.
 
 **2. Mechanism vs. association**
 The hypothesis must name a specific causal mechanism — a molecular event explaining WHY
-TF_B predicts TF_A binding. Reject if it merely describes the data (where, what, how much)
+TF_B motif predicts TF_A binding affinity. Reject if it merely describes the data (where, what, how much)
 or re-confirms co-occurrence without proposing a mechanism.
 
 **EXCEPTION 1**: If no hypotheses have been tested yet (first hypothesis) AND the hypothesis
@@ -140,7 +154,6 @@ BAD (characterization or co-occurrence re-statement — reject):
 - "Are the shared sites at promoters or enhancers?" — describes where, not why
 - "Does the correlation hold genome-wide?" — confirms co-occurrence at larger scale
 - "What chromatin states do co-occupied sites fall in?" — describes, does not explain
-- "Is TF_A enrichment higher where TF_B is present?" — re-states the original finding
 - "TF_B motif is enriched at TF_A binding sites" or "TF_B motif score correlates with TF_A
   signal" — the ML model is a regression model that already established TF_B PWM score predicts
   TF_A binding signal. Confirming the motif is present or correlated is re-validating the ML
@@ -157,39 +170,103 @@ GOOD (causal mechanism — approve):
 
 **3. Verification plan — each step must directly test the stated mechanism**
 
-For each step in `verification_plan`, ask: "If this step came back negative, would it falsify or significantly undermine this specific hypothesis?" If the answer is no for any step, reject and name the offending step(s).
+For each step in `verification_plan`, ask: "If this step came back negative, would it falsify or significantly undermine this specific hypothesis?" Flag any step where the answer is no, and name the offending step(s).
 
-Common irrelevant steps to catch:
-- STRING/PPI query in a hypothesis about DNA-sequence or chromatin architecture — protein interaction data cannot falsify a DNA-level mechanism
-- GO enrichment or gene expression in a hypothesis about motif co-occurrence or pioneer activity — functional annotation describes context, does not test the mechanism
-- ChromHMM or TSS-distance annotation in a hypothesis about protein-protein interaction — genomic context does not falsify a PPI claim
-
-Also reject if any step requires a **genome-wide FIMO scan** or any operation on the full genome
+Also flag any step requiring a **genome-wide FIMO scan** or any operation on the full genome
 FASTA — these will time out. Motif scans must be scoped to peak regions, not the whole genome.
+
+**Special rule for direct DNA-binding / direct-recognition claims**:
+If the hypothesis claims that TF_A directly binds, directly recognizes, cross-binds, or
+mimics TF_B's motif sequence, the verification plan must include at least one **peak-centered
+localization test** asking whether the motif itself is positioned at the TF_A ChIP-seq summit
+or tightly concentrated around it. Acceptable examples:
+- motif-center-to-summit distance distribution
+- central enrichment versus peak flanks
+- narrow motif centering around the summit in peak-centered windows
+
+Motif enrichment, motif-positive vs motif-negative signal differences, motif score
+correlation, or merely scanning summit-centered windows are NOT sufficient by themselves
+for a direct-binding claim. If this localization test is missing, prefer
+**approve_with_revision** — either add the localization step or weaken the mechanism to a
+sequence-intrinsic / motif-associated occupancy claim.
+
+**Decision rule**: If the mechanism itself is novel (passes Check 1) and causal (passes Check 2),
+but the verification plan has one or more irrelevant steps or a disallowed operation,
+prefer **approve_with_revision** — remove or replace the offending step(s) while keeping
+the mechanism. Only hard-reject on Check 3 if the ENTIRE plan is irrelevant to the stated
+mechanism (not just one fixable step).
 
 Do NOT reject for:
 - The number of steps (1–3 steps are all fine)
 - Statistical methodology concerns (test design, controls, bias, confounding)
 - Missing implementation details (file paths, column names, tool parameters)
-- Low discriminating power (same-direction counterfactual is advisory, not a reject)
+
+**4. Discriminativeness — would a positive result distinguish this mechanism from the strongest alternative?**
+
+Identify the strongest plausible alternative explanation for a positive result. Then ask:
+
+> "If this hypothesis is supported, would that result distinguish the proposed mechanism
+>  from this alternative?"
+
+- **Approve with revision** (PREFERRED) if the biological idea is sound but the test could be made more discriminative by adding one contrast, exclusion, or conditional check. Suggest the revision.
+- **Approve** if the test already includes a discriminating element (e.g., testing at TF_B-free sites, comparing against a matched null, or conditioning on a specific chromatin state).
+- **Reject** ONLY if a positive result would be equally explained by a generic alternative (e.g., GC-content bias, general active-chromatin co-occurrence, or the ML model's own training signal) AND no reasonable revision could fix it. If you can think of a contrast or control that would make the test discriminative, use approve_with_revision instead.
+
+For direct-binding / direct-recognition hypotheses, "discriminative" includes distinguishing
+"the motif marks these loci" from "TF_A directly binds the motif." A positive result based
+only on motif enrichment, motif-positive > motif-negative signal, or motif-score correlation
+does NOT distinguish direct binding from a broader sequence-context proxy. Require a
+localization-style narrowing test (motif centering / summit distance / central enrichment)
+before approving a direct-binding claim as sufficiently discriminative.
+
+EXCEPTION: First-iteration artifact checks and functional characterization hypotheses (GO, RNA-seq, phyloP) are exempt from this check.
 
 # Task
 
-Review the hypothesis against ONLY the three checks above. Respond in JSON:
+Review the hypothesis against the four checks above. Respond in JSON with one of three decisions:
 
+**APPROVE** — hypothesis is novel, causal, and discriminative:
 {{
-    "approved": true,
+    "decision": "approve",
     "issues": [],
-    "reasoning": "Hypothesis is novel and names a causal mechanism"
+    "reasoning": "Hypothesis is novel and names a causal mechanism",
+    "leading_alternative": "The strongest alternative explanation considered",
+    "discrimination_rationale": "Why the test distinguishes the proposed mechanism from the alternative",
+    "interpretation_ceiling": "The strongest interpretation a positive result could justify"
 }}
 
-OR if one of the two checks fails:
-
+**APPROVE WITH REVISION** — biological idea is sound, but the test needs one more contrast/exclusion to be discriminative. Provide the revised prediction and verification plan:
 {{
-    "approved": false,
-    "rejection_category": "wrong_mechanism",
-    "issues": ["Which check failed and why"],
-    "reasoning": "Why this hypothesis should not be tested"
+    "decision": "approve_with_revision",
+    "issues": ["What needs strengthening and why"],
+    "reasoning": "The biological idea is sound but the test is not yet discriminative enough",
+    "leading_alternative": "The alternative that the current test cannot rule out",
+    "discrimination_rationale": "How the revision fixes the discrimination gap",
+    "interpretation_ceiling": "The strongest interpretation the revised test could justify",
+    "revised_prediction": "The improved prediction with the added contrast/exclusion",
+    "revised_verification_plan": ["Step 1...", "Step 2...", "Step 3 (the added discriminating test)..."]
 }}
+
+**REJECT** — a check fundamentally fails (true duplicate, pure characterization, irrelevant plan, or fundamentally non-discriminative):
+{{
+    "decision": "reject",
+    "rejection_category": "duplicate" | "wrong_mechanism" | "irrelevant_plan" | "not_discriminative",
+    "check1_new_molecule_or_modality": "REQUIRED — name the new molecule/mark/modality introduced by this hypothesis, or 'none' if truly nothing new",
+    "check1_equivalent_prior_iteration": "REQUIRED — the specific prior iteration number whose test is equivalent, or 'none' if no exact equivalent",
+    "issues": ["Which check failed and why"],
+    "reasoning": "Why this hypothesis should not be tested",
+    "leading_alternative": "The alternative that the test cannot rule out",
+    "discrimination_rationale": "Why the test fails to discriminate",
+    "interpretation_ceiling": "What a positive result would actually show (weaker than claimed)"
+}}
+
+Set `rejection_category` to:
+- `"duplicate"` if Check 1 failed (same biological question as a prior iteration)
+- `"wrong_mechanism"` if Check 2 failed (characterization, not a causal mechanism)
+- `"irrelevant_plan"` if Check 3 failed (verification plan does not test the stated mechanism)
+- `"not_discriminative"` if Check 4 failed (generic alternative not ruled out, unfixable)
+
+Prefer "approve_with_revision" over "reject" when the biological idea is sound. Only reject when the hypothesis is a true duplicate, pure characterization, or fundamentally untestable.
+**Self-check before submitting REJECT**: If `check1_new_molecule_or_modality` is anything other than "none", you MUST NOT reject on Check 1 — switch to approve or approve_with_revision.
 """
     return prompt

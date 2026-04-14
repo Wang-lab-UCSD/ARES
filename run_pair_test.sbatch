@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=ARES
-#SBATCH --output=logs/slurm_%j.out
-#SBATCH --error=logs/slurm_%j.err
+#SBATCH --output=logs_3/slurm_%j.out
+#SBATCH --error=logs_3/slurm_%j.err
 #SBATCH --time=24:00:00
 #SBATCH --mem=30G
 #SBATCH --cpus-per-task=4
@@ -24,10 +24,10 @@ if [[ -f "${REPO_DIR}/load_api_keys.sh" ]]; then
   source "${REPO_DIR}/load_api_keys.sh"
 fi
 
-mkdir -p logs
+mkdir -p logs_3
 
 CONFIG_FILE="${CONFIG_FILE:-config/config.yaml}"
-MANIFEST_FILE="${MANIFEST_FILE:-examples/znf79_yy1_K562/manifest.yaml}"
+MANIFEST_FILE="${MANIFEST_FILE:-examples/arid4b_yy1_K562/manifest.yaml}"
 
 python -m src.main \
   --config "${CONFIG_FILE}" \

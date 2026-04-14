@@ -124,6 +124,9 @@ llm:
     provider: "gemini"
     model: "gemini-3.1-pro-preview"
     api_key_env: "GOOGLE_API_KEY"
+    # Gemini-only cost knobs. Defaults if omitted: service_tier="flex", thinking_level="MEDIUM".
+    # service_tier: "flex"       # flex | standard | priority  — flex is ~50% cheaper, lower priority
+    # thinking_level: "MEDIUM"   # MINIMAL | LOW | MEDIUM | HIGH  — thinking tokens bill at output rate
 
   # coding_model:
   #   provider: "openai"
@@ -150,11 +153,16 @@ llm:
   #   model: "glm-5"
   #   api_key_env: "Z_AI_API_KEY"
   #   base_url: "https://api.z.ai/api/paas/v4/"
+  # review_model:
+  #   provider: "openai"
+  #   model: "gpt-5-mini"
+  #   api_key_env: "OPENAI_API_KEY"
   review_model:
     provider: "openai"
-    model: "gpt-5-mini"
+    model: "gpt-5.4-mini"
     api_key_env: "OPENAI_API_KEY"
-    
+    reasoning_effort: "medium"
+
   # Model for summarizing results
   # summary_model:
   #   provider: "gemini"
@@ -162,23 +170,25 @@ llm:
   #   api_key_env: "GOOGLE_API_KEY"
   #   max_tokens: 8192  # Gemini Flash truncates JSON mid-string at the 4096 fallback when reasoning is long (e.g. 2+ SUPPORTS results requiring full 5-criteria evaluation)
   # summary_model:
-  #   provider: "gemini"
-  #   model: "gemini-3.1-pro-preview"
-  #   api_key_env: "GOOGLE_API_KEY"
+  #   provider: "openai"
+  #   model: "gpt-5.4-mini"
+  #   api_key_env: "OPENAI_API_KEY"
   summary_model:
-    provider: "openai"
-    model: "gpt-5.4-mini"
-    api_key_env: "OPENAI_API_KEY"
+    provider: "gemini"
+    model: "gemini-3.1-pro-preview"
+    api_key_env: "GOOGLE_API_KEY"
+    # service_tier: "flex"       # flex | standard | priority  (default: flex)
+    # thinking_level: "MEDIUM"   # MINIMAL | LOW | MEDIUM | HIGH  (default: MEDIUM)
 
 execution:
   type: "jupyter"
   timeout_seconds: 900  # 15 min max per execution — covers FIMO + bigWig; kernel death is detected
-  max_retries: 9  # Each retry = 4 REPL iterations; total REPL budget = max_retries * 4 = 36
+  max_retries: 12  # Each retry = 4 REPL iterations; total REPL budget = max_retries * 4 = 48
   # max_static_rejections removed — v2 uses REPL loop, no static pre-gate
 
 pipeline:
-  max_iterations: 8  # Maximum hypothesis-verification loops
+  max_iterations: 10  # Maximum hypothesis-verification loops
   max_consecutive_hypothesis_rejections: 6  # If reached and any SUPPORTS exist, synthesize and report; else stop
-  log_dir: "logs"
-  output_dir: "outputs_2"
+  log_dir: "logs_3"
+  output_dir: "outputs_3"
   save_intermediate: true  # Save state after each iteration

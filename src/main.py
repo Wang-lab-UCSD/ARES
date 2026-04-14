@@ -186,13 +186,25 @@ def main() -> int:
     """Main entry point."""
     args = parse_args()
 
-    # Setup logging
+    # Peek at the config file for log_dir BEFORE setting up logging so
+    # all entries land in the configured directory (e.g. logs_3) rather
+    # than the default logs/.
     import logging
     level = logging.DEBUG if args.verbose else logging.INFO
-    setup_logging(level=level)
+    bootstrap_log_dir = "logs"
+    if args.config is not None and args.config.exists():
+        try:
+            import yaml
+            with open(args.config) as _cf:
+                _cfg_raw = yaml.safe_load(_cf) or {}
+            bootstrap_log_dir = (
+                (_cfg_raw.get("pipeline") or {}).get("log_dir") or "logs"
+            )
+        except Exception:
+            pass  # fall back to default on any parse error
+    setup_logging(level=level, log_dir=bootstrap_log_dir)
 
     logger = get_logger("main")
-    logger.info("Starting ARES (Automated Regulatory Solver)")
 
     # Register signal handler for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
@@ -228,6 +240,8 @@ def main() -> int:
         except Exception as e:
             logger.error("Failed to load config", {"error": str(e)})
             return 1
+
+    logger.info("Starting ARES (Automated Regulatory Solver)")
 
     # Apply CLI overrides for cost tracking
     if args.no_cost_limit:

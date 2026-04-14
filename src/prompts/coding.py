@@ -259,9 +259,11 @@ HELPER_BUNDLES: dict[str, dict[str, Any]] = {
     "always": {
         "hard_bans": [
             "`pd.qcut()` on any DataFrame column → use `matched_bin(fg, bg, col)` instead",
+            "`seq.count('G') + seq.count('C')` or similar naive GC counting → `bedtools getfasta` returns soft-masked repeats in lowercase, so this silently reports GC=0 for any peak overlapping a repeat region (has corrupted 60%+ of peaks in prior runs). Use `gc_content(seq)` from bioio, which handles both cases and ignores non-ATGC characters.",
             "`.merge(... on='name' ...)` on narrowPeak frames → ENCODE `name` column is always `'.'`; join on coordinates or `peak_id`. Never pass a `lambda` as a `merge` key — pandas does not support it and raises `KeyError`",
             "Writing `df[['chrom','start','end','peak']]` to a BED file for FIMO → narrowPeak column `peak` is the **summit offset** (a small int like 52, 142, 245), NOT a peak identifier. Using it as col 4 silently collapses thousands of peaks into ~100 unique peak_ids in FIMO output. Either assign `df['peak_id'] = 'peak_' + df.index.astype(str)` first and use `peak_id` as col 4, or pass the DataFrame straight through `run_fimo_on_peaks` without writing your own BED.",
             "`subprocess.run(..., shell=True)` or `bash -lc` for CLI tools → use `subprocess.run([...], shell=False)`",
+            "Direct `subprocess.run(['fimo', ...])` or `subprocess.run(['bedtools', 'getfasta', ...])` calls → use `run_fimo_on_peaks()` for motif scanning (handles peak IDs, --no-pgc, FASTA extraction, and output parsing automatically). Use `load_rnaseq_expression()` for RNA-seq loading (handles mixed Entrez/Ensembl ID files). If a helper exists for the operation, you MUST use it — do not reimplement from scratch.",
             "Hardcoded ENCFF IDs anywhere in the script → use `data_files['key']` (pre-injected dict)",
             "Reassigning `data_files = ...` anywhere in your code → `data_files` is pre-injected by the orchestrator at the start of every iteration with the canonical manifest keys (exact case). NEVER overwrite it. If `data_files['SP1_peaks']` fails, the correct fix is to `print(sorted(data_files.keys()))` and use the real key, not to rebuild the dict with your own guesses.",
             "Bare `except:` or `except Exception:` that only `print()`s and continues → silently hides `KeyError`, `NameError`, `AttributeError`, typos, and the very bugs we need to see. Let errors propagate so the REPL loop reports them as observations. If you truly need to test for a variable's existence, use `if 'sp1_peaks' in dir():` instead of try/except.",
@@ -271,7 +273,8 @@ HELPER_BUNDLES: dict[str, dict[str, Any]] = {
         "helper_table_rows": [
             "| Peak overlap fraction | `count_overlapping_peaks(query, subject)` | manual `-a`/`-b` or hand-count |",
             "| bigWig signal | `extract_bigwig_signals(df, bw_path)` | `bw.stats()` or row loops |",
-            "| Signal-matched controls | `matched_bin(fg, bg, signal_col)` | `pd.qcut()` |",
+            "| GC content of a sequence | `gc_content(seq)` (case-insensitive, ignores N/IUPAC) | `seq.count('G') + seq.count('C')` |",
+            "| Signal-matched controls | `matched_pair(fg, bg, signal_col)` (equal-size matched groups) | manual `matched_bin` + subsample |",
             "| narrowPeak loading | `read_narrowpeak(path)` | `pd.read_csv` with column guesses |",
             "| Two-peak coordinate join | `intersect_peaks(df_a, df_b, mode='flag'/'count'/'wa-wb')` | `.merge(on='name')` or manual bedtools |",
             "| bedtools `-wa -wb` output | `parse_bedtools_wa_wb(path, a_col_count, b_col_count)` | positional indexing |",
@@ -279,8 +282,8 @@ HELPER_BUNDLES: dict[str, dict[str, Any]] = {
         ],
         "imports": [
             "read_narrowpeak", "count_overlapping_peaks", "extract_bigwig_signals",
-            "matched_bin", "intersect_peaks",
-            "parse_bedtools_closest", "parse_bedtools_wa_wb",
+            "matched_bin", "matched_pair", "intersect_peaks",
+            "parse_bedtools_closest", "parse_bedtools_wa_wb", "gc_content",
         ],
         "helper_notes": """\
 # --- count_overlapping_peaks --------------------------------------------------
@@ -300,29 +303,32 @@ HELPER_BUNDLES: dict[str, dict[str, Any]] = {
 #   extract_bigwig_signals(df, bw, start_col="summit_start", end_col="summit_end")
 # Otherwise you will get KeyError: "['start', 'end'] not in index".
 #
-# PEAK-STRENGTH METRIC CHOICE — read this before comparing signal between peak groups:
-#   If your hypothesis is "TF_A binds MORE STRONGLY at sites where TF_B is also bound"
-#   (or any per-peak signal intensity comparison), do NOT use
-#   `extract_bigwig_signals(..., stat='mean')` on the full peak intervals:
-#     - called peaks are already thresholded, so mean fold-change within peaks has
-#       limited dynamic range — two groups often come out within 0.01 of each other
-#     - mean over wide peaks dilutes the summit signal
-#   Better options, in order of preference:
-#     1. Use the narrowPeak `signal_value` column (already loaded by read_narrowpeak
-#        — it's the peak-call's own quantitative strength score). No bigWig needed:
-#           ets2_peaks["signal_value"].groupby(ets2_peaks["overlaps_b"]).mean()
-#     2. extract_bigwig_signals(summit_window_df, bw_path, stat='max')
-#        where summit_window_df has intervals of (summit - 250, summit + 250).
-#        Use read_narrowpeak()'s `summit` column to build the windows.
-#   Only use stat='mean' over full peaks for HISTONE MARKS or ACCESSIBILITY tracks
-#   (H3K27ac, DNase, etc.), where the peak width is biologically meaningful.
+# PEAK-STRENGTH METRIC — for TF signal comparisons between peak groups:
+#   summit_df = peaks_df.assign(start=peaks_df['summit']-250, end=peaks_df['summit']+250)
+#   peaks_df['tf_signal'] = extract_bigwig_signals(summit_df, bw_path, stat='max')
+#   Do NOT use narrowPeak `signal_value` — ENCODE stores width-integrated values there,
+#   not per-position signal, so it conflates strong with wide. OK as a matching
+#   covariate, never as the dependent variable.
+#   For histone marks / accessibility (H3K27ac, DNase, H3K27me3), stat='mean' over full
+#   peaks is fine — peak width is biologically meaningful there.
 
-# --- matched_bin --------------------------------------------------------------
-# Returns (fg_copy, bg_copy) each with an added "bin" int column. BG rows outside
-# FG range get bin=NaN — drop with .dropna(subset=["bin"]).
-# ALIGNMENT TRAP: fg_binned shares fg_df's index but may differ in row order.
-# NEVER assign fg_binned["bin"].values back to fg_df positionally — use index
-# alignment: `fg_df = fg_df.loc[fg_binned.index].copy(); fg_df["bin"] = fg_binned["bin"]`
+# --- gc_content ---------------------------------------------------------------
+# For any GC-based matching or control construction, use gc_content(seq).
+# Getting the case right matters: bedtools getfasta leaves repeat-masked
+# regions lowercase, and naive seq.count('G')+seq.count('C') silently returns
+# zero for those peaks. gc_content() uppercases first and ignores non-ATGC.
+#   df['gc'] = df['sequence'].apply(gc_content)
+
+# --- matched_pair (PREFERRED) / matched_bin ----------------------------------
+# For matched-control comparisons, use `matched_pair(fg, bg, signal_col)`:
+#   fg_m, bg_m = matched_pair(fg, bg, "dnase_signal", n_bins=4)
+# Returns equal-size FG and BG with matched per-bin distributions. Both sides
+# are reset_index'd. This is the only safe way — a recurring bug has been
+# calling matched_bin() and subsampling BG manually while leaving FG full,
+# which produces unbalanced groups labeled "matched".
+#
+# matched_bin() is the lower-level primitive (adds a "bin" column only, no
+# subsampling). Use it only if you genuinely need custom per-bin logic.
 
 # --- intersect_peaks ----------------------------------------------------------
 # Coordinate-based peak join — use instead of .merge(on='name')
@@ -331,6 +337,11 @@ counted = intersect_peaks(df_a, df_b, mode="count")  # adds overlap_count column
 joined  = intersect_peaks(df_a, df_b, mode="wa-wb")  # one row per overlapping pair
 # NOTE: the boolean column is ALWAYS named `overlaps_b` — NOT `overlaps_yy1`,
 # `overlaps_NFYA`, or any TF-specific name. Use `flagged['overlaps_b']`.
+#
+# wa-wb column mapping: a_0=chrom, a_1=start, a_2=end, a_3=peak_id (e.g. "a_42"),
+# b_0=chrom, b_1=start, b_2=end, b_3=peak_id. To get the A peak index:
+#   joined["a_peak_idx"] = joined["a_3"].str.split("_").str[1].astype(int)
+# Then join back: df_a.iloc[joined["a_peak_idx"].values]
 """,
     },
 
@@ -421,16 +432,34 @@ partners_df, shared = fetch_shared_partners(
     },
 
     "rnaseq": {
-        "hard_bans": [],
+        "hard_bans": [
+            "Manual gene-symbol lookup in RNA-seq tables — the `gene_id` column may contain a mix of Ensembl IDs (`ENSG...`) and miRBase numeric IDs in the same file. Searching by gene symbol or hardcoded Entrez ID will silently fail and report TPM=0 for genes that ARE expressed. Always use `lookup_tpm_by_symbol(symbol, rnaseq_path, gencode_path)` instead.",
+        ],
         "helper_table_rows": [
+            "| Gene TPM by symbol | `lookup_tpm_by_symbol('ATF6', rnaseq_path, gencode_path)` | manual symbol search in RNA-seq |",
             "| RNA-seq loading | `load_rnaseq_with_gene_id(path)` or `load_rnaseq_expression(path)` | manual column parsing |",
             "| Nearest TSS + expression | `link_peaks_to_expression(peaks, rnaseq, gtf)` | chained TSS calls |",
         ],
         "imports": [
+            "lookup_tpm_by_symbol",
             "load_rnaseq_with_gene_id", "load_rnaseq_expression",
             "link_peaks_to_expression", "merge_rnaseq_with_nearest_genes",
         ],
         "helper_notes": """\
+# --- lookup_tpm_by_symbol (CANONICAL — use this for any gene-symbol → TPM lookup) ---
+# Resolves a gene symbol to its Ensembl ID via gencode, then looks up TPM in the
+# RNA-seq table. Handles the mixed-format gene_id column (ENSG + miRBase numeric).
+#
+#   result = lookup_tpm_by_symbol("ATF6", data_files["gene_quantification"], data_files["gencode"])
+#   # {"gene_symbol": "ATF6", "ensembl_id": "ENSG00000118217", "tpm": 9.19,
+#   #  "found": True, "error": None}
+#
+# IMPORTANT: tpm is None when not found, NOT 0. Distinguish "looked up and missing"
+# from "looked up and zero TPM". `found=False` means the lookup failed (gene not in
+# gencode, or Ensembl ID not in RNA-seq); read the `error` field for the reason.
+# Do NOT fall back to manual symbol matching, hardcoded Entrez IDs, or string search
+# in `gene_id_clean` — those silently miss genes.
+
 # --- load_rnaseq_with_gene_id ------------------------------------------------
 # Returns a 2-tuple: (rnaseq_df, gene_id_col)
 #   rnaseq_df, gene_id_col = load_rnaseq_with_gene_id(path)
@@ -923,7 +952,7 @@ def _build_review_constraints_block(issues: list[str]) -> str:
         required.append("extract_bigwig_signals(df, bw_path)  # from src.utils.bioio")
 
     if "empty bedtools output" in joined or "no columns to parse from file" in joined:
-        required.append("Use safe_read_csv_0_safe(...) for any bedtools output file reads to avoid EmptyDataError / empty-file crashes")
+        required.append("Guard bedtools output reads with `if os.path.getsize(path) == 0:` and return an empty DataFrame to avoid pandas EmptyDataError / empty-file crashes")
 
     if "fractional" in joined and "median" in joined and "peak" in joined:
         forbidden.append("['peak'].median(")

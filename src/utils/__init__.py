@@ -3,6 +3,7 @@
 from src.utils.bioio import (
     annotate_peaks_with_chromhmm,
     create_tss_bed_from_gencode,
+    gc_content,
     load_gencode_genes,
     load_rnaseq_expression,
     load_rnaseq_with_gene_id,
@@ -25,6 +26,7 @@ __all__ = [
     "get_logger",
     "annotate_peaks_with_chromhmm",
     "create_tss_bed_from_gencode",
+    "gc_content",
     "load_gencode_genes",
     "load_rnaseq_expression",
     "load_rnaseq_with_gene_id",

@@ -258,6 +258,67 @@ Check each prediction against the reported evidence:
 - INCONCLUSIVE: Mixed results — some predictions pass, some fail, or results are ambiguous.
   Use this when the evidence is genuinely mixed, not when it clearly fails.
 
+**Artifact-check special case** (when `group=artifact-check` or iteration 0):
+SUPPORTS means the signal IS an artifact: TF_A NOT expressed AND motif NOT enriched.
+If TF_A IS expressed (TPM ≥ 0.5) OR its motif IS enriched (≥1.2-fold), the signal is
+genuine and you MUST set REJECTS, regardless of how the prediction is phrased. Ignore
+any "if genuine: X" clause in compound predictions — that describes the negation of
+the hypothesis, not the hypothesis itself.
+
+## Sub-prediction discipline (CRITICAL)
+
+Predictions in this pipeline are often compound — e.g., "STRING will reveal a direct
+interaction OR shared partners; AND overlap > 10%; AND signal higher at co-bound sites".
+Decompose every compound prediction into its sub-predictions and evaluate EACH ONE
+separately. Then aggregate:
+
+- **All sub-predictions pass** → SUPPORTS
+- **All sub-predictions fail** → REJECTS
+- **Some pass, some fail** → INCONCLUSIVE (this is the default for mixed results)
+
+A compound prediction joined by "AND" requires ALL parts to pass for SUPPORTS. A part
+joined by "OR" only requires one of the OR-options to pass — but if the prediction was
+"A AND (B OR C)", you still need A to pass.
+
+**Common error to avoid**: cherry-picking the strongest sub-prediction and ignoring the
+failed ones. Example from a real run: prediction was "STRING reveals direct interaction
+(score>=700) OR shared partners (score>=400); AND overlap >10%; AND signal higher at
+co-bound sites." The result was: STRING direct=NOT FOUND (FAILED), shared partners=6
+found (passed), overlap=14% (passed), signal FC=1.21 (passed). The verdict was wrongly
+called SUPPORTS because the cherry-picked summary only mentioned the passing parts.
+The CORRECT verdict is INCONCLUSIVE because the direct-interaction sub-prediction
+failed and the shared-partners sub-prediction is a weaker substitute (the original
+hypothesis named direct PPI as the primary mechanism).
+
+When you call SUPPORTS, your `reasoning` must walk through every sub-prediction and
+confirm each one passed. If you skip a sub-prediction in the walk-through, you are
+cherry-picking.
+
+## CONTROL OVERRIDE (critical)
+If the raw output contains a control or comparator that tests whether the
+mechanism-specific component adds explanatory power beyond a simpler baseline, and
+the mechanism-specific group is NOT detectably stronger than the simpler baseline,
+the named mechanism is NOT supported. Set support_level to REJECTS (or INCONCLUSIVE
+if the control is underpowered), and fill `simpler_supported_explanation` with the
+explanation that the data DO support.
+
+Examples:
+- anchor+YY1 not stronger than non-anchor+YY1 → the anchor/3D component is not
+  supported; only the YY1-associated explanation remains.
+- motif+ vs motif- groups differ, but the same effect persists after removing the
+  proposed mediator → the mediator-specific mechanism is not supported.
+
+Look for phrases in the raw output like "entirely explained by", "no additional
+effect", "control shows", or comparisons where the mechanism-specific group is not
+significantly different from the simpler-explanation group.
+
+## Interpretation ceiling
+Before setting support_level, answer two questions:
+1. What is the strongest claim these results justify?
+2. What simpler explanation is still compatible with the control results?
+Your `summary` and `reasoning` must not exceed that ceiling. State the ceiling in
+the `interpretation_ceiling` field.
+
 ## Fabrication check (CRITICAL)
 The coding agent sometimes hardcodes biological entities as string literals — e.g., a
 "Notable shared partners: EP300, CREBBP, JUN" line that was typed by the model rather
@@ -305,13 +366,38 @@ Each bullet in `findings` must include the relevant numbers: sample sizes (n), m
 or medians for each group, effect size (FC, Cohen's d, OR, or Spearman r), and the
 p-value. A finding without numbers is not a finding.
 
+## Verification step coverage (CRITICAL — do not selectively report)
+
+The verification plan above lists every step the coding agent was supposed to run.
+For EACH step in the plan, your `findings` MUST include at least one bullet that
+reports its result, even if the result is negative, null, or inconvenient for the
+verdict you would prefer.
+
+- If the step ran a tool (STRING, FIMO, GO enrichment, bedtools, bigWig, etc.) and
+  found nothing, report it: "STRING direct ATF6-REST interaction: NOT FOUND
+  (combined_score=0)" or "STRING shared partners (score>=400): HDAC1 (994), CREB1
+  (731), JUN (655), TP53 (718), PPARG (577), SP1 (428)".
+- If the step ran but the prediction it tested was falsified, report the falsifying
+  number AND lower the support_level accordingly. A SUPPORTS verdict that omits a
+  failed prediction is **selective reporting** and is forbidden.
+- If the raw output contains a result for a verification step, but you do NOT
+  include it in `findings`, you are stripping evidence. The downstream agents will
+  never see it. Treat this as a hard rule: every executed step must produce a
+  finding bullet.
+- Named third-party molecules from STRING / co-IP / shared-partner queries MUST be
+  surfaced verbatim in the findings, with their scores. These are downstream leads
+  that the convergence check needs to see (see "Untested molecular lead" rule).
+
 Respond in JSON:
 {{
     "support_level": "SUPPORTS" | "REJECTS" | "INCONCLUSIVE",
     "confidence": 0.0 to 1.0,
     "summary": "2-3 sentence summary with the key numbers inline",
     "findings": ["each finding must include n, means, effect size, and p-value"],
-    "reasoning": "explanation of how each prediction was evaluated, citing numbers"
+    "reasoning": "explanation of how each prediction was evaluated, citing numbers",
+    "interpretation_ceiling": "strongest claim these results justify; the simpler explanation still compatible",
+    "control_override_applied": true | false,
+    "simpler_supported_explanation": "REQUIRED when control_override_applied is true. The explanation the data DO support after downgrading the named mechanism. null otherwise."
 }}"""
 
         try:
@@ -325,6 +411,9 @@ Respond in JSON:
                         "summary": {"type": "string"},
                         "findings": {"type": "array", "items": {"type": "string"}},
                         "reasoning": {"type": "string"},
+                        "interpretation_ceiling": {"type": "string"},
+                        "control_override_applied": {"type": "boolean"},
+                        "simpler_supported_explanation": {"type": ["string", "null"]},
                     },
                     "required": ["support_level", "confidence", "summary", "findings", "reasoning"],
                 },
@@ -389,6 +478,7 @@ Respond in JSON:
         investigation_objective: str | None = None,
         available_biology_layers: list[str] | None = None,
         used_biology_layers: list[str] | None = None,
+        biology_gate_status: dict[str, Any] | None = None,
         causal_capable_data: bool = False,
     ) -> dict[str, Any]:
         """Independently check whether the evidence warrants convergence.
@@ -405,7 +495,8 @@ Respond in JSON:
             raw_output: Raw stdout from the last execution (will be truncated)
             investigation_objective: Optional goal (discovery/synthesis); when set, convergence on a new named mechanism is acceptable.
             available_biology_layers: Manifest data categories for expression/conservation (e.g. rnaseq, phyloP) when present.
-            used_biology_layers: Among SUPPORTED hypotheses, which of those categories were used.
+            used_biology_layers: Among tested non-QC hypotheses, which of those categories were used.
+            biology_gate_status: Deterministic 5a/5b status computed by the orchestrator.
             causal_capable_data: When True, require but-for/causality. When False, observational mode: converge on best-supported mechanism without requiring causality.
 
         Returns:
@@ -417,6 +508,7 @@ Respond in JSON:
             "last_support_level": last_result.get("support_level"),
             "available_biology_layers": available_biology_layers,
             "used_biology_layers": used_biology_layers,
+            "biology_gate_status": biology_gate_status,
             "causal_capable_data": causal_capable_data,
         })
 
@@ -428,6 +520,7 @@ Respond in JSON:
             investigation_objective=investigation_objective,
             available_biology_layers=available_biology_layers,
             used_biology_layers=used_biology_layers,
+            biology_gate_status=biology_gate_status,
             causal_capable_data=causal_capable_data,
         )
 
