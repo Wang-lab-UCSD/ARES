@@ -140,7 +140,12 @@ llm:
     api_key_env: "MINIMAX_API_KEY"
     base_url: "https://api.minimax.io/v1"
     subscription: true
-    
+    max_tokens: 24000  # Cap per-call output. MiniMax default is ~64,000 and a
+                       # stuck call at 64K per step blows the 204,800 context
+                       # window within 2-3 turns (seen in the Apr 14 ELK3 crash).
+                       # 24K covers 100% of legitimate calls observed across
+                       # 11,254 historical MiniMax calls (max legit = 23,001).
+
   # coding_model:
   #   provider: "openai"
   #   model: "deepseek-chat"

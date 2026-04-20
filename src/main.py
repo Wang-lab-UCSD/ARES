@@ -111,10 +111,89 @@ Examples:
         help="Enable interactive approval mode for hypotheses and code",
     )
 
+    # Production ledger integration
+    parser.add_argument(
+        "--pair-key",
+        type=str,
+        default=None,
+        help="Production ledger key for this run (e.g. K562_ADNP_YY1). "
+             "When combined with --ledger, writes a completion row on exit.",
+    )
+    parser.add_argument(
+        "--ledger",
+        type=Path,
+        default=None,
+        help="Path to production/ledger.csv. Writes completed/failed row on exit "
+             "if --pair-key is also provided.",
+    )
+    parser.add_argument(
+        "--source-csv",
+        type=str,
+        default="",
+        help="Passthrough field for the ledger row (records which pair-list CSV "
+             "this pair came from).",
+    )
+
     return parser.parse_args()
 
 
-async def run_pipeline_with_config(config: Config, manifest_path: Path, output_dir: Path | None = None) -> int:
+def _write_ledger_completion(
+    ledger_path: Path,
+    pair_key: str,
+    status: str,
+    result: dict | None,
+    source_csv: str = "",
+    notes: str = "",
+) -> None:
+    """Append a completion row to the production ledger.
+
+    Called from both the success path (result dict available) and the failure
+    paths (result=None, notes populated with the exception). Never raises —
+    ledger writes must not mask the original exit condition.
+    """
+    try:
+        from src.production.ledger import LedgerRow, append_row, make_pair_key, now_iso
+
+        # Derive cell_line/tf_a/tf_b from pair_key for convenience querying
+        parts = pair_key.split("_", 2)
+        cell_line = parts[0] if len(parts) > 0 else ""
+        tf_a = parts[1] if len(parts) > 1 else ""
+        tf_b = parts[2] if len(parts) > 2 else ""
+
+        row_kwargs: dict = {
+            "pair_key": pair_key,
+            "cell_line": cell_line,
+            "tf_a": tf_a,
+            "tf_b": tf_b,
+            "source_csv": source_csv,
+            "status": status,
+            "finished_at": now_iso(),
+            "notes": notes,
+        }
+
+        if result is not None:
+            row_kwargs.update({
+                "converged": str(result.get("converged", "")),
+                "confidence": f"{result.get('confidence', 0):.2f}" if result.get("confidence") is not None else "",
+                "mechanism": str(result.get("mechanism_category_name") or result.get("conclusion", "")[:120] or ""),
+                "output_dir": str(result.get("output_dir") or result.get("report_file") or ""),
+                "run_id": str(result.get("run_id") or ""),
+                "total_cost_usd": f"{result.get('total_cost_usd', 0):.4f}" if result.get("total_cost_usd") is not None else "",
+            })
+
+        row = LedgerRow(**row_kwargs)
+        append_row(ledger_path, row)
+    except Exception as e:  # noqa: BLE001 — ledger failure must not mask pipeline exit
+        try:
+            get_logger("main").warning(
+                "Failed to write ledger completion row",
+                {"pair_key": pair_key, "ledger": str(ledger_path), "error": str(e)},
+            )
+        except Exception:
+            pass
+
+
+async def run_pipeline_with_config(config: Config, manifest_path: Path, output_dir: Path | None = None) -> dict:
     """Run the hypothesis generation pipeline with a pre-loaded config.
 
     Args:
@@ -123,7 +202,8 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         output_dir: Optional output directory override
 
     Returns:
-        Exit code (0 for success, non-zero for failure)
+        Result dict from orchestrator.run() augmented with output_dir and
+        total_cost_usd for ledger recording. Raises on pipeline failure.
     """
     logger = get_logger("main")
 
@@ -175,7 +255,20 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         print(f"\nFull report: {result.get('report_file')}")
         print("=" * 60)
 
-        return 0
+        # Augment result with fields the ledger needs.
+        report_file = result.get("report_file")
+        if report_file:
+            result["output_dir"] = str(Path(report_file).parent)
+            result["run_id"] = Path(report_file).parent.name
+        try:
+            if getattr(orchestrator, "cost_tracker", None) is not None:
+                result["total_cost_usd"] = float(
+                    getattr(orchestrator.cost_tracker, "session_total_usd", 0.0)
+                )
+        except Exception:
+            pass
+
+        return result
 
     except Exception as e:
         logger.error("Pipeline failed", {"error": str(e)})
@@ -276,14 +369,46 @@ def main() -> int:
             logger.error("Configuration validation failed", {"error": str(e)})
             return 1
 
-    # Run pipeline
+    # Run pipeline (with optional ledger completion hook)
+    write_ledger = args.pair_key is not None and args.ledger is not None
+
     try:
-        return asyncio.run(run_pipeline_with_config(config, args.manifest, args.output))
+        result = asyncio.run(run_pipeline_with_config(config, args.manifest, args.output))
+        if write_ledger:
+            from src.production.ledger import STATUS_COMPLETED
+            _write_ledger_completion(
+                args.ledger,
+                args.pair_key,
+                STATUS_COMPLETED,
+                result,
+                source_csv=args.source_csv,
+            )
+        return 0
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user")
+        if write_ledger:
+            from src.production.ledger import STATUS_FAILED
+            _write_ledger_completion(
+                args.ledger,
+                args.pair_key,
+                STATUS_FAILED,
+                None,
+                source_csv=args.source_csv,
+                notes="KeyboardInterrupt",
+            )
         return 130
     except Exception as e:
         logger.error("Unexpected error", {"error": str(e)})
+        if write_ledger:
+            from src.production.ledger import STATUS_FAILED
+            _write_ledger_completion(
+                args.ledger,
+                args.pair_key,
+                STATUS_FAILED,
+                None,
+                source_csv=args.source_csv,
+                notes=f"{type(e).__name__}: {str(e)[:400]}",
+            )
         return 1
 
 

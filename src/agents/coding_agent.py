@@ -16,6 +16,162 @@ from src.prompts.coding import (
 from src.utils.logging import get_logger
 
 
+# MiniMax M2.7 occasionally enters a "protocol-confusion" state where it spams
+# a single control-flow token thousands of times instead of closing its turn
+# cleanly. Across three observed runs, three different tokens have triggered
+# the same underlying failure:
+#
+#   ELK3   (Apr 14): `<invoke name="..."><parameter ...>...</parameter></invoke>`
+#                    — Anthropic tool-call syntax (wrong framework)
+#   ZNF445 (Apr 15): `<end_turn>` repeated ~4700 times per response
+#                    — MiniMax's own turn-terminator (wrong protocol)
+#   PTTG1  (Apr 15): `</execute>` dangling close tags, thousands per response
+#                    — orphan close tags with no matching open
+#
+# Left alone, each junk response grows to ~50-90KB and gets saved into the
+# coding agent's conversation history. Within 3-10 REPL turns the cumulative
+# history exceeds MiniMax's 204,800-token context window and the run dies
+# with TokenLimitExceeded. We strip all three patterns before the response
+# is appended to history. None of the three patterns can appear in
+# legitimate Python code, thinking, or solution text, so the strip never
+# touches valid content.
+
+
+# `<invoke name="..." ...>...</invoke>` blocks (attributes may be quoted with
+# " or ' or absent entirely).
+_INVOKE_TAG_RE = re.compile(
+    r"<invoke\b[^>]*>.*?</invoke\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# `<end_turn>` markers (with or without self-closing slash, any case).
+# The trailing `\s*` consumes any whitespace/newlines the model may have
+# emitted between consecutive tokens in the runaway pattern — collapsing
+# the 4700-tag ZNF445 response from ~52KB to a few hundred bytes.
+_END_TURN_RE = re.compile(
+    r"<end_turn\s*/?>\s*",
+    re.IGNORECASE,
+)
+
+# Matches a single `<execute ...>` or `</execute ...>` tag plus any
+# trailing whitespace. Used by the orphan-close stripper to walk the
+# response and track open/close balance.
+_EXECUTE_TAG_RE = re.compile(
+    r"<(/?)execute\b[^>]*>\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_invoke_tags(content: str) -> tuple[str, int]:
+    """Remove `<invoke>...</invoke>` blocks from an LLM response.
+
+    Returns (cleaned_content, n_removed). Legitimate content — thinking,
+    execute blocks, solution, plain text — is unchanged.
+    """
+    if not content or "<invoke" not in content.lower():
+        return content, 0
+    n_removed = 0
+
+    def _sub(_m: re.Match) -> str:
+        nonlocal n_removed
+        n_removed += 1
+        return ""
+
+    cleaned = _INVOKE_TAG_RE.sub(_sub, content)
+    return cleaned, n_removed
+
+
+def _strip_end_turn_tokens(content: str) -> tuple[str, int]:
+    """Remove `<end_turn>` markers from an LLM response.
+
+    `<end_turn>` is MiniMax's internal turn-terminator token. The ARES
+    REPL protocol uses `<solution>` to end a turn, so `<end_turn>` is
+    never valid content — any occurrence is junk.
+    """
+    if not content or "<end_turn" not in content.lower():
+        return content, 0
+    n_removed = 0
+
+    def _sub(_m: re.Match) -> str:
+        nonlocal n_removed
+        n_removed += 1
+        return ""
+
+    cleaned = _END_TURN_RE.sub(_sub, content)
+    return cleaned, n_removed
+
+
+def _strip_orphan_execute_closes(content: str) -> tuple[str, int]:
+    """Remove orphan `</execute>` close tags using open/close balance tracking.
+
+    Walks the response left-to-right counting `<execute>` opens and
+    `</execute>` closes. A close tag is "orphan" if the balance counter
+    is already zero (no unmatched open to pair with). Strips only orphan
+    closes; legitimate balanced pairs are preserved byte-for-byte even
+    when spam is directly adjacent.
+
+    Observed failure: the Apr 15 PTTG1 crash had one legitimate balanced
+    `<execute>...</execute>` block directly followed by ~15,000 orphan
+    close tags. A naive "strip runs of 3+ closes" regex would eat the
+    legitimate close as the first of the run. The balance-aware approach
+    correctly keeps the legitimate close and strips only the orphans.
+
+    Returns (cleaned, n_removed). A minimum threshold of 3 orphans is
+    required to strip — a single stray close (very rare but not
+    impossible in unusual but valid content) is left in place.
+    """
+    if not content or "</execute" not in content.lower():
+        return content, 0
+
+    balance = 0
+    orphan_ranges: list[tuple[int, int]] = []  # (start, end) for each orphan match
+
+    for m in _EXECUTE_TAG_RE.finditer(content):
+        is_close = m.group(1) == "/"
+        if is_close:
+            if balance > 0:
+                balance -= 1
+            else:
+                orphan_ranges.append((m.start(), m.end()))
+        else:
+            balance += 1
+
+    # Conservative threshold: only strip if 3+ orphans found, avoiding
+    # accidental matches on unusual-but-legitimate single stray closes.
+    if len(orphan_ranges) < 3:
+        return content, 0
+
+    # Build cleaned content by skipping orphan ranges (including their
+    # trailing whitespace, which the _EXECUTE_TAG_RE pattern consumes).
+    parts: list[str] = []
+    last_end = 0
+    for start, end in orphan_ranges:
+        parts.append(content[last_end:start])
+        last_end = end
+    parts.append(content[last_end:])
+    cleaned = "".join(parts)
+    return cleaned, len(orphan_ranges)
+
+
+def _strip_runaway_tokens(content: str) -> tuple[str, dict[str, int]]:
+    """Apply all three runaway-pattern strippers to a response.
+
+    Returns (cleaned_content, counts) where counts is a dict with keys
+    `invoke`, `end_turn`, and `orphan_close` giving the number of each
+    pattern removed. Applied in sequence; later strippers see content
+    with earlier patterns already removed, which is safe because the
+    three patterns don't overlap.
+    """
+    c1, n_invoke = _strip_invoke_tags(content)
+    c2, n_end_turn = _strip_end_turn_tokens(c1)
+    c3, n_orphan = _strip_orphan_execute_closes(c2)
+    return c3, {
+        "invoke": n_invoke,
+        "end_turn": n_end_turn,
+        "orphan_close": n_orphan,
+    }
+
+
 class CodingAgent:
     """Agent that verifies a hypothesis via an incremental REPL conversation.
 
@@ -118,12 +274,37 @@ class CodingAgent:
             response = await self.llm.complete(messages)
             content = response.content
 
-            # Save LLM turn
+            # Save the RAW LLM turn (pre-cleaning) so post-mortem debugging can
+            # still inspect whatever the model actually emitted, including any
+            # hallucinated junk.
             try:
                 (debug_dir / f"iter{self.state_iter}_repl{iteration}_llm.txt"
                  ).write_text(content, encoding="utf-8")
             except Exception:
                 pass
+
+            # Strip MiniMax runaway-token junk BEFORE any downstream processing.
+            # Three observed failure patterns, all the same underlying bug —
+            # the model spams a single control token thousands of times:
+            #   <invoke>...</invoke>    (Anthropic tool-call syntax, ELK3 Apr 14)
+            #   <end_turn>              (MiniMax terminator, ZNF445 Apr 15)
+            #   </execute></execute>... (orphan close spam, PTTG1 Apr 15)
+            # Left alone, each response balloons to 50-90KB and fills the
+            # conversation history within 3-10 REPL turns, triggering
+            # TokenLimitExceeded. None of these patterns can appear in
+            # legitimate Python code, thinking, or solution text.
+            content, strip_counts = _strip_runaway_tokens(content)
+            if any(v > 0 for v in strip_counts.values()):
+                self.logger.warning(
+                    "REPL: stripped runaway tokens from response",
+                    {
+                        "iteration": iteration,
+                        "invoke_tags_removed": strip_counts["invoke"],
+                        "end_turn_tokens_removed": strip_counts["end_turn"],
+                        "orphan_close_tags_removed": strip_counts["orphan_close"],
+                        "cleaned_length": len(content),
+                    },
+                )
 
             # Extract execute blocks first — if present, run them even if a
             # <solution> also appears in the same message (prevents hallucination

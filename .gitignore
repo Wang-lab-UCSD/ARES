@@ -35,10 +35,15 @@ MANIFEST
 # Runtime
 logs/
 logs_3/
+logs_production/
 outputs/
 outputs_2/
 outputs_3/
+outputs_production/
+production/
 *.log
+*.sbatch
+analysis/
 
 # IDE
 .idea/
