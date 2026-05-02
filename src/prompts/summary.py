@@ -366,13 +366,41 @@ def build_result_summary_prompt(
 ```
 {outputs_section}
 
+# Grading Rubric — authoritative thresholds for support_level
+
+When assigning `support_level`, apply BOTH:
+  (a) the prediction's stated threshold (if any), AND
+  (b) the pipeline default effect-size threshold for the test type shown below.
+
+A result is **SUPPORTS** only when BOTH (a) and (b) are met in the correct direction. If the prediction did not state an effect-size threshold (e.g. "p < 0.05" alone, or qualitative "higher" / "enriched" / "correlated"), apply the pipeline default as the effective threshold.
+
+| Test type                       | Effect-size metric      | Pipeline default |
+|---------------------------------|-------------------------|------------------|
+| Mean / median comparison        | fold change             | >= 1.2           |
+| Mean / median comparison        | Cohen's d               | >= 0.2           |
+| Correlation                     | \|Spearman/Pearson r\|  | >= 0.2           |
+| Peak overlap (cooperative)      | overlap %               | >= 30%           |
+| Peak overlap (tethering)        | overlap %               | >= 10%           |
+| Peak overlap (unbiased screen)  | overlap %               | >= 15%           |
+| Motif enrichment                | fold change vs shuffled | >= 1.5           |
+| GO / pathway enrichment         | FDR                     | < 0.05 (no effect-size required) |
+| STRING (interaction present?)   | categorical             | score >= 400 shared or >= 700 direct |
+
+**Grading rules**:
+- **SUPPORTS**: statistically significant AND effect size clears the default AND direction matches the prediction.
+- **REJECTS**: statistically significant but effect is in the wrong direction, OR clearly fails the default despite adequate power (e.g. observed FC = 0.95 when FC >= 1.2 was required, p < 0.05).
+- **INCONCLUSIVE**: statistically significant but effect is directionally correct yet below the default (e.g. Mann-Whitney p = 0.001 with Cohen's d = 0.02); OR statistically non-significant with borderline effect size; OR the test was run but critical controls are missing.
+- **Do NOT grade SUPPORTS on p-value alone.** A small p-value in a large ChIP-seq sample (n >= 10,000 peaks) can reflect a biologically trivial effect.
+
+When the stated prediction's threshold differs from the pipeline default, use the MORE CONSERVATIVE of the two (the stricter threshold). If the prediction demanded FC >= 1.5 and the observed was 1.3 — REJECTS (failed stated threshold). If the prediction demanded only p < 0.05 and the observed was FC = 1.13, Cohen's d = 0.04 — INCONCLUSIVE (below pipeline default despite significance).
+
 # Task
 
 Analyze the execution results and provide a summary. Determine:
 
 1. **Success**: Did the code execute successfully?
-2. **Findings**: What were the key numerical results?
-3. **Support Level**: Does this support, refuse, or is inconclusive for the hypothesis?
+2. **Findings**: What were the key numerical results? (Include FC, Cohen's d, |r|, overlap %, etc. so support_level is auditable.)
+3. **Support Level**: Apply the grading rubric above. State which threshold(s) the observed effect cleared or missed.
 4. **Confidence**: How confident are you in this interpretation?
 5. **Issues**: Were there any data quality issues or anomalies?
 

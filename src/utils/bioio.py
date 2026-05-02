@@ -6,6 +6,7 @@ logic for common file formats and tool outputs.
 
 from __future__ import annotations
 
+import functools
 import math
 import subprocess
 from io import StringIO
@@ -241,12 +242,11 @@ def _find_named_column(
     return None
 
 
-def load_rnaseq_with_gene_id(
-    path: str | Path | pd.DataFrame,
-    gene_id_candidates: Iterable[str] | None = None,
+def _load_rnaseq_with_gene_id_impl(
+    path_or_df: str | Path | pd.DataFrame,
+    gene_id_candidates: Iterable[str] | None,
 ) -> tuple[pd.DataFrame, str]:
-    """Load RNA-seq table and detect the gene-id column by name."""
-    df = _read_table_like(path, sep="\t")
+    df = _read_table_like(path_or_df, sep="\t")
     gene_id_col = _find_named_column(
         df.columns,
         gene_id_candidates or DEFAULT_GENE_ID_CANDIDATES,
@@ -257,6 +257,31 @@ def load_rnaseq_with_gene_id(
             f"Available columns: {list(df.columns)}"
         )
     return df, gene_id_col
+
+
+@functools.lru_cache(maxsize=4)
+def _load_rnaseq_with_gene_id_cached(
+    path_str: str,
+    candidates_tuple: tuple[str, ...] | None,
+) -> tuple[pd.DataFrame, str]:
+    return _load_rnaseq_with_gene_id_impl(Path(path_str), candidates_tuple)
+
+
+def load_rnaseq_with_gene_id(
+    path: str | Path | pd.DataFrame,
+    gene_id_candidates: Iterable[str] | None = None,
+) -> tuple[pd.DataFrame, str]:
+    """Load RNA-seq table and detect the gene-id column by name.
+
+    Memoized for filesystem paths — see `load_gencode_genes` for the rationale.
+    Pass a pre-loaded DataFrame to skip caching.
+    """
+    if isinstance(path, pd.DataFrame):
+        return _load_rnaseq_with_gene_id_impl(path, gene_id_candidates)
+    candidates_tuple = (
+        tuple(gene_id_candidates) if gene_id_candidates is not None else None
+    )
+    return _load_rnaseq_with_gene_id_cached(str(Path(path).resolve()), candidates_tuple)
 
 
 def load_rnaseq_expression(
@@ -298,11 +323,10 @@ def load_rnaseq_expression(
     return df, gene_id_col, "gene_id_clean", expr_col
 
 
-def load_gencode_genes(
-    path: str | Path | pd.DataFrame,
-    protein_coding_only: bool = True,
+def _load_gencode_genes_impl(
+    path_or_df: str | Path | pd.DataFrame,
+    protein_coding_only: bool,
 ) -> pd.DataFrame:
-    """Load GENCODE gene records and normalize IDs to version-free ENSG IDs."""
     columns = [
         "chrom",
         "source",
@@ -314,12 +338,12 @@ def load_gencode_genes(
         "frame",
         "attributes",
     ]
-    if isinstance(path, pd.DataFrame):
-        df = path.copy()
+    if isinstance(path_or_df, pd.DataFrame):
+        df = path_or_df.copy()
         if list(df.columns) == list(range(len(columns))):
             df.columns = columns
     else:
-        df = _read_table_like(path, sep="\t", comment="#", header=None, names=columns)
+        df = _read_table_like(path_or_df, sep="\t", comment="#", header=None, names=columns)
     genes = df[df["feature"] == "gene"].copy()
 
     genes["gene_id"] = genes["attributes"].str.extract(r'gene_id "([^"]+)"')
@@ -336,6 +360,29 @@ def load_gencode_genes(
     genes["start"] = pd.to_numeric(genes["start"], errors="raise").astype(int)
     genes["end"] = pd.to_numeric(genes["end"], errors="raise").astype(int)
     return genes
+
+
+@functools.lru_cache(maxsize=4)
+def _load_gencode_genes_cached(path_str: str, protein_coding_only: bool) -> pd.DataFrame:
+    return _load_gencode_genes_impl(Path(path_str), protein_coding_only)
+
+
+def load_gencode_genes(
+    path: str | Path | pd.DataFrame,
+    protein_coding_only: bool = True,
+) -> pd.DataFrame:
+    """Load GENCODE gene records and normalize IDs to version-free ENSG IDs.
+
+    Memoized: when a filesystem path is passed, the parsed result is cached and
+    subsequent calls with the same (path, protein_coding_only) return the same
+    DataFrame in O(1). This prevents the OOM hangs seen when an LLM-written
+    loop calls `lookup_tpm_by_symbol` over thousands of genes (each call would
+    otherwise re-read+re-parse the ~1.4 GB GTF). Pass a pre-loaded DataFrame
+    to skip caching.
+    """
+    if isinstance(path, pd.DataFrame):
+        return _load_gencode_genes_impl(path, protein_coding_only)
+    return _load_gencode_genes_cached(str(Path(path).resolve()), protein_coding_only)
 
 
 def lookup_tpm_by_symbol(

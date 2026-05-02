@@ -163,16 +163,37 @@ class PipelineState(BaseModel):
     # Final output
     conclusion: str | None = None
 
-    def add_hypothesis(self, hypothesis: dict[str, Any]) -> None:
-        """Add a new hypothesis, skipping duplicates by name."""
+    def add_hypothesis(self, hypothesis: dict[str, Any], force_unique: bool = False) -> bool:
+        """Add a new hypothesis to the queue.
+
+        Args:
+            hypothesis: Hypothesis dict to add.
+            force_unique: If True, name collisions are resolved by appending
+                a version suffix (" (v2)", " (v3)", ...) so the hypothesis
+                is always added. Use this for regeneration attempts where
+                the LLM is producing a fixed version of an already-queued
+                hypothesis. If False (default), name collisions silently
+                drop the new hypothesis (legitimate dedup of LLM repeats).
+
+        Returns:
+            True if the hypothesis was added; False if it was dropped as
+            a duplicate.
+        """
         name = hypothesis.get("name", "")
         if name:
             existing_names = {h.get("name", "") for h in self.hypotheses}
             if name in existing_names:
-                return
+                if not force_unique:
+                    return False
+                # Bump suffix until unique: "name (v2)", "name (v3)", ...
+                v = 2
+                while f"{name} (v{v})" in existing_names:
+                    v += 1
+                hypothesis["name"] = f"{name} (v{v})"
         hypothesis["id"] = len(self.hypotheses)
         hypothesis["iteration"] = self.current_iteration
         self.hypotheses.append(hypothesis)
+        return True
 
     def add_evidence(self, evidence: dict[str, Any]) -> None:
         """Add new evidence from an experiment."""

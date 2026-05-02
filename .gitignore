@@ -36,14 +36,26 @@ MANIFEST
 logs/
 logs_3/
 logs_production/
+logs_production_v1/
+logs_reproducibility/
+logs_reproducibility_2/
+logs_validation/
 outputs/
-outputs_2/
 outputs_3/
 outputs_production/
+outputs_production_v1/
+outputs_reproducibility/
+outputs_reproducibility_2/
+outputs_validation/
 production/
 *.log
-*.sbatch
 analysis/
+
+# Slurm / HPC submission scripts (machine-specific paths, not for repo)
+*.sbatch
+*.slurm
+run_pair_*.sbatch
+sbatch_*.sh
 
 # IDE
 .idea/
@@ -92,7 +104,7 @@ examples/
 !examples/sp1_nfya_K562/**
 !examples/atf6_rest_K562/
 !examples/atf6_rest_K562/**
-
+.string_cache/
 # Misc
 .mypy_cache/
 .dmypy.json

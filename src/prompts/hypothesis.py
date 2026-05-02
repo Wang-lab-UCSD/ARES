@@ -205,19 +205,26 @@ def build_refinement_prompt(
 **Issues / anomalies noted**:
 {issues_text}"""
     else:
-        latest_section = """# First Iteration
+        # Detect data availability for the artifact check.
+        # Check 1 needs RNA-seq; Check 2 needs the TF's own motif (must be checked at runtime).
+        has_rnaseq = bool(data_manifest.get("data", {}).get("rnaseq"))
 
-No hypotheses have been tested yet. This is the start of the investigation.
-
-Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant.
-
-**First hypothesis MUST be a standalone artifact check — do NOT combine it with
+        if has_rnaseq:
+            artifact_section = """**First hypothesis MUST be a standalone artifact check — do NOT combine it with
 any mechanism test.** The hypothesis asks: "Is the ChIP-seq signal a technical artifact?"
 
 Check 1 (Expression): Is TF_A expressed (TPM >= 0.5)?
 Check 2 (Motif): Is TF_A's known motif enriched at TF_A peaks (≥2-fold over background,
 p < 0.05)? Note: 1.2-2.0 fold is ambiguous (some direct + mostly indirect binding);
 ≥2-fold indicates confident direct binding.
+
+**Runtime data-availability fallbacks** (apply only when the relevant data is missing):
+- If `find_motif_ids_for_tf("<TF_A>")` returns NO motif IDs, TF_A has no motif in
+  the JASPAR/HOCOMOCO/CIS-BP file — skip Check 2 and base the verdict on Check 1
+  alone. Note the missing-motif caveat in the evidence summary.
+- If BOTH checks turn out to be unrunnable (Check 1 unavailable from this prompt
+  is impossible since RNA-seq is present, but if Check 2 also fails), fall back to
+  Check 1's verdict alone.
 
 Interpretation — the hypothesis predicts the signal is an artifact, so:
 - YES expression + YES motif (≥2-fold): signal is genuine, not an artifact → REJECTS.
@@ -233,6 +240,43 @@ Interpretation — the hypothesis predicts the signal is an artifact, so:
 Only call SUPPORTS (artifact confirmed) when BOTH checks fail. A single failing check
 should redirect the hypothesis, not confirm artifact. Do NOT add co-occupancy, chromatin,
 or any other mechanism steps to this hypothesis."""
+        else:
+            # No RNA-seq available — the artifact check is at most motif-based, and may have to
+            # be skipped entirely if the TF also lacks a JASPAR motif.
+            artifact_section = """**RNA-seq data is NOT available in this manifest.** The standard artifact-check
+expression test (Check 1) cannot run. Handle iter 1 as follows:
+
+A. **First, check motif availability** (runtime):
+   Call `find_motif_ids_for_tf("<TF_A>")`.
+
+B. **Branch based on the result**:
+   - If motif IDs are returned → run a **motif-only artifact check** (Check 2 below)
+     as the first hypothesis. Note in the evidence summary that expression check
+     was skipped due to missing RNA-seq.
+   - If NO motif IDs are returned → **skip the artifact check entirely**. Generate
+     a mechanism hypothesis as the first iteration instead. Note in the rationale
+     that artifact verification was not possible due to missing RNA-seq AND missing
+     motif annotation, and rely on ENCODE/source QC for ChIP-seq integrity.
+
+C. **Motif-only artifact check (Check 2)**: Is TF_A's known motif enriched at TF_A
+   peaks (≥2-fold over background, p < 0.05)?
+   - Motif enriched (≥2-fold): signal is genuine direct binding → REJECTS artifact.
+   - Motif weakly enriched (1.2-2.0 fold): signal likely genuine but with substantial
+     indirect component → REJECTS, hypothesize tethered/cooperative binding next.
+   - Motif NOT enriched (<1.2-fold): INCONCLUSIVE — without RNA-seq we cannot
+     distinguish "genuine indirect binding" from "technical artifact." Proceed
+     with caution, treating the data as provisional.
+
+Do NOT call SUPPORTS for artifact when RNA-seq is missing — without expression data
+we cannot confirm the signal is fake. Do NOT add co-occupancy, chromatin, or any
+other mechanism steps to the artifact-check hypothesis."""
+        latest_section = f"""# First Iteration
+
+No hypotheses have been tested yet. This is the start of the investigation.
+
+Before selecting data for your hypothesis, review all available files in the manifest above — pay balanced attention to each data category so you don't overlook information that may be directly relevant.
+
+{artifact_section}"""
 
     prompt = f"""# Scientific Finding Under Investigation
 
@@ -277,12 +321,37 @@ Add a third step only if there is a third such component. 3 is the hard cap.
 
 Before writing each step, ask: "If this came back negative, would it falsify the hypothesis?" If no, it does not belong. Do not add steps to be thorough, to characterize context, or to satisfy convergence criteria — add them only if they are independently falsifying.
 
+**Required thresholds in every prediction** — every falsifiable prediction MUST state BOTH a significance cutoff AND an effect-size cutoff. A prediction with only `p < 0.05` passes trivially at ChIP-seq sample sizes (n >= 10,000 peaks can make a Cohen's d of 0.02 significant). Use the pipeline defaults below unless you have a specific biological reason to deviate; if you deviate, state the reason in the prediction itself.
+
+| Test type                       | Effect-size metric      | Pipeline default |
+|---------------------------------|-------------------------|------------------|
+| Mean / median comparison        | fold change             | >= 1.2           |
+| Mean / median comparison        | Cohen's d               | >= 0.2           |
+| Correlation                     | \|Spearman/Pearson r\|  | >= 0.2           |
+| Peak overlap (cooperative)      | overlap %               | >= 30%           |
+| Peak overlap (tethering)        | overlap %               | >= 10%           |
+| Peak overlap (unbiased screen)  | overlap %               | >= 15%           |
+| Motif enrichment                | fold change vs shuffled | >= 1.5           |
+| GO / pathway enrichment         | FDR                     | < 0.05 (no effect-size cutoff required) |
+| STRING (interaction present?)   | categorical             | score >= 400 shared or >= 700 direct (no effect-size cutoff required) |
+
+Do NOT invent aggressive thresholds (>2.0 fold, >30% overlap for non-cooperative mechanisms, r > 0.4) — these cause genuine but moderate biological signals to be labeled REJECTS.
+
 Check type alignment (only use when directly required by the mechanism):
 - Spatial co-occurrence or overlap fractions → for co-binding / composite-element mechanisms
 - Signal enrichment comparison → for mechanisms predicting quantitative differences
 - Negative control slice ("TF_B present, TF_A absent") → for any mechanism claiming specificity
 - STRING/PPI → only for protein-interaction mechanisms, never for DNA-sequence or chromatin hypotheses
 - ChromHMM / TSS-distance / GO enrichment → only when the prediction explicitly involves chromatin state, promoter proximity, or gene function
+
+**STRING interpretation — bridge-factor rule**: STRING combined scores aggregate multiple evidence types (experimental, database, co-expression, text mining) and CANNOT distinguish direct binary contact from ternary-complex co-membership via a bridging scaffold. A high-confidence STRING edge (score >= 700) between TF_A and TF_B is consistent with BOTH:
+  (a) direct TF_A-TF_B binary contact, OR
+  (b) ternary complex TF_A-BRIDGE-TF_B where a shared scaffold protein co-binds both.
+
+Before concluding "direct binary interaction" from a STRING SUPPORTS, you MUST test candidate bridging factors:
+  1. Query STRING for shared interactors at score >= 700 for BOTH TF_A and TF_B (not just >=400).
+  2. If a shared high-confidence interactor exists AND its ChIP-seq is available in the all_tf_chipseq list, the next hypothesis MUST test its occupancy at co-bound sites (expect >= 30% overlap if it is a scaffold).
+  3. Only conclude "direct binary" after showing NO high-confidence shared interactor has substantial (>= 30%) co-occupancy at co-bound sites. Otherwise the correct mechanism name is "ternary complex via <bridge>".
 
 **Forbidden operations in verification plans** — these will time out and waste the entire iteration:
 - Genome-wide FIMO scans (scanning hg38 takes hours). Always scan within peak regions only.
@@ -299,10 +368,10 @@ Invalid (characterization — do NOT propose):
 - "Does the correlation hold genome-wide?" — confirms the association at larger scale
 - "What chromatin states do co-occupied sites fall in?" (unless predicting a specific pioneer/accessibility mechanism)
 
-Valid (causal mechanism — propose these):
-- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin (chromHMM heterochromatin states) relative to TF_A-only sites; AND TF_B-only sites should be more accessible than background"
-- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should exceed PWM match rate; check also if TF_B signal at co-bound sites predicts TF_A signal"
-- "TF_B and TF_A are tethered via protein-protein interaction: check co-occupancy fraction from both sides AND whether TF_A signal drops at TF_B sites when TF_B motif is absent"
+Valid (causal mechanism — propose these, note the explicit thresholds):
+- "TF_B acts as a pioneer factor: co-occupied sites should be enriched in closed chromatin (chromHMM heterochromatin states) relative to TF_A-only sites at **OR >= 1.5, p < 0.05**; AND TF_B-only sites should be more accessible than GC-matched background at **DNase signal FC >= 1.2, p < 0.05**"
+- "TF_B's motif contains TF_A's core binding sequence: literal substring match rate should exceed PWM match rate by **FC >= 1.5, p < 0.05**; TF_B signal at co-bound sites should predict TF_A signal at **Spearman |r| >= 0.2, p < 0.05**"
+- "TF_B and TF_A are tethered via protein-protein interaction: co-occupancy fraction from both sides should be **>= 10%**; AND TF_A signal at TF_B sites should drop when TF_B motif is absent (**FC <= 0.8 or Cohen's d <= -0.2, p < 0.05**)"
 
 Tool note: When referencing FIMO motif significance in your prediction, prefer p-value
 (e.g., "p < 1e-4") over q-value. For peak-level motif analysis, FIMO's q-value applies
@@ -376,12 +445,12 @@ Respond in JSON format:
                 "prediction_if_mechanism": "What the data would show if this mechanism operates",
                 "prediction_if_co_occupancy_only": "What the data would show if TF_B and TF_A simply co-occur at active sites with no causal relationship",
                 "distinguishable": "YES or NO — and why. If NO, redesign the prediction field below.",
-                "multi_facet_plan": "Start with 1: what is the single most decisive test? Then: is there a second independent, non-redundant component the first step cannot capture? Only if yes, add it. Repeat for a third (hard cap). Do not add steps to be thorough or to check convergence criteria."
+                "multi_facet_plan": "Apply the verification-plan rule from the Task section above: start from 1 decisive step; add a 2nd or 3rd only if genuinely independent and non-redundant. 3 is the hard cap."
             }},
             "name": "Hypothesis name",
             "group": "mechanism-slug",
             "rationale": "Biological reasoning",
-            "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3, or Spearman/Pearson r >= 0.2). For peak overlap thresholds, calibrate to the mechanism: cooperative binding >= 30%, protein tethering/indirect recruitment >= 10%, unbiased screen >= 15%. Do NOT invent aggressive thresholds (>2.0 fold, >30% overlap for non-cooperative mechanisms, r > 0.4) — these cause genuine but moderate biological signals to be labeled REJECTS.",
+            "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and thresholds. MUST include BOTH a significance cutoff AND an effect-size cutoff per the **Required thresholds** table in the Task section above.",
             "verification_plan": ["Step 1", "Step 2", ...],
             "priority": 1,
             "required_data": ["data_key_1", "data_key_2"]
@@ -519,7 +588,7 @@ Respond in JSON format:
         "name": "Hypothesis name",
         "group": "mechanism-slug",
         "rationale": "Biological reasoning",
-        "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and threshold. Use the pipeline's standard support thresholds: p < 0.05 AND fold change >= 1.2 (or Cohen's d >= 0.3, or r >= 0.2). For overlap: cooperative >= 30%, tethering >= 10%, unbiased screen >= 15%. Do NOT invent aggressive thresholds.",
+        "prediction": "Falsifiable prediction with metric, comparison groups, expected direction, and thresholds. MUST include BOTH a significance cutoff AND an effect-size cutoff per the pipeline's standard support thresholds (p < 0.05 AND fold change >= 1.2 or Cohen's d >= 0.2 or |r| >= 0.2; overlap: cooperative >= 30%, tethering >= 10%, unbiased screen >= 15%). Do NOT invent aggressive thresholds.",
         "verification_plan": ["Step 1", "Step 2", ...],
         "priority": 1,
         "required_data": ["data_key_1", "data_key_2"]

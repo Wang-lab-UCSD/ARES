@@ -27,7 +27,7 @@ fi
 mkdir -p logs_3
 
 CONFIG_FILE="${CONFIG_FILE:-config/config.yaml}"
-MANIFEST_FILE="${MANIFEST_FILE:-examples/arid4b_yy1_K562/manifest.yaml}"
+MANIFEST_FILE="${MANIFEST_FILE:-examples/sp1_nfyb_K562/manifest.yaml}"
 
 python -m src.main \
   --config "${CONFIG_FILE}" \

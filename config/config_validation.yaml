@@ -1,7 +1,7 @@
-# ARES — Automated Regulatory Solver Configuration — PRODUCTION
+# ARES — Automated Regulatory Solver Configuration — VALIDATION
 #
 # Same as config/config.yaml EXCEPT the pipeline section writes into
-# production-only directories (outputs_production/, logs_production/) so
+# production-only directories (outputs_validation/, logs_validation/) so
 # production-batch artifacts don't land in the outputs_3/ / logs_3/ tree
 # used for test and validation runs.
 #
@@ -48,9 +48,8 @@ execution:
   # max_static_rejections removed — v2 uses REPL loop, no static pre-gate
 
 pipeline:
-  # max_iterations: 10  # previous default; superseded 2026-04-26 by 15 to balance v2 prompt depth vs cost
-  max_iterations: 15  # Maximum hypothesis-verification loops
+  max_iterations: 20  # Reproducibility stress test — raised from 10 to give the hypothesis agent more room to land on the right sub-mechanism before hitting the iteration budget.
   max_consecutive_hypothesis_rejections: 6  # If reached and any SUPPORTS exist, synthesize and report; else stop
-  log_dir: "logs_production"       # PRODUCTION — separate from logs_3 test tree
-  output_dir: "outputs_production"  # PRODUCTION — separate from outputs_3 test tree
+  log_dir: "logs_validation"       # VALIDATION — separate from logs_3 test tree
+  output_dir: "outputs_validation"  # VALIDATION — separate from outputs_3 test tree
   save_intermediate: true  # Save state after each iteration

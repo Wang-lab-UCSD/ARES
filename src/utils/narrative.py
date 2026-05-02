@@ -13,8 +13,9 @@ from typing import Any
 class NarrativeLog:
     """Appends structured natural-language sections to narrative.md as the run proceeds."""
 
-    def __init__(self, output_dir: Path) -> None:
-        self.path = output_dir / "narrative.md"
+    def __init__(self, output_dir: Path, filename_prefix: str | None = None) -> None:
+        stem = f"{filename_prefix}_narrative.md" if filename_prefix else "narrative.md"
+        self.path = output_dir / stem
 
     # ------------------------------------------------------------------
     # Public write methods — called in order by the orchestrator

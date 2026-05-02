@@ -139,8 +139,14 @@ TF_B motif predicts TF_A binding affinity. Reject if it merely describes the dat
 or re-confirms co-occurrence without proposing a mechanism.
 
 **EXCEPTION 1**: If no hypotheses have been tested yet (first hypothesis) AND the hypothesis
-checks signal authenticity (TF_A expression + motif enrichment), APPROVE it — this is a
-required QC step before mechanism testing, not idle characterization.
+checks signal authenticity, APPROVE it — this is a required QC step before mechanism
+testing, not idle characterization. Signal-authenticity checks include any of:
+  - TF_A expression + motif enrichment (full check, when RNA-seq is in the manifest)
+  - Motif-only check (when RNA-seq is unavailable in the cell line — expression
+    cannot be tested, so motif enrichment alone is the artifact check)
+  - Expression-only check (when TF_A has no motif in JASPAR/HOCOMOCO/CIS-BP)
+A motif-only check at iter 1 is NOT a forbidden characterization; it is the reduced
+form of the artifact check when expression data is missing.
 
 **EXCEPTION 2**: If the new hypothesis tests functional relevance via GO enrichment, RNA-seq
 expression, or phyloP conservation, APPROVE it when EITHER condition holds:
@@ -218,6 +224,27 @@ only on motif enrichment, motif-positive > motif-negative signal, or motif-score
 does NOT distinguish direct binding from a broader sequence-context proxy. Require a
 localization-style narrowing test (motif centering / summit distance / central enrichment)
 before approving a direct-binding claim as sufficiently discriminative.
+
+For direct-PPI / cooperative-complex hypotheses that claim TF_A and TF_B physically
+interact (e.g., from STRING edge + high co-occupancy + matched-signal amplification),
+"discriminative" means ruling out ternary complex co-membership via a bridging scaffold.
+A STRING combined score aggregates multiple evidence types and a high score is compatible
+with BOTH direct binary contact AND complex co-membership via a shared scaffold. Require
+the verification plan to include EITHER:
+  (a) a shared-interactor query at STRING score >= 700 for both TFs AND a ChIP-seq
+      occupancy test at co-bound sites for **every** returned candidate whose ChIP-seq
+      is available — not just one. The plan may skip candidates that are obligate
+      subunits or close paralogs of TF_A or TF_B (e.g., skip NFYA when TF_B is NFYB;
+      skip SP2/SP3 when TF_A is SP1), because these are co-complex partners rather
+      than mechanistically independent scaffolds. Every non-skipped candidate must
+      appear in the plan with its own overlap test (>= 30% overlap identifies a
+      scaffold), OR
+  (b) an explicit justification that no plausible bridge factor exists (e.g., STRING
+      returned zero shared high-confidence partners, or all returned candidates are
+      obligate subunits/paralogs of TF_A or TF_B).
+If the plan queries STRING but tests only one non-trivial candidate bridge, prefer
+**approve_with_revision** and add the remaining non-skippable candidates. If the plan
+has neither query nor test, **approve_with_revision** to add the full bridge-factor sweep.
 
 EXCEPTION: First-iteration artifact checks and functional characterization hypotheses (GO, RNA-seq, phyloP) are exempt from this check.
 

@@ -47,6 +47,7 @@ class Orchestrator:
         manifest: DataManifest,
         output_dir: Path | None = None,
         manifest_path: Path | None = None,
+        pair_key: str | None = None,
     ):
         """Initialize the orchestrator.
 
@@ -55,10 +56,24 @@ class Orchestrator:
             manifest: Data manifest with finding and data paths
             output_dir: Directory for outputs (overrides config)
             manifest_path: Path to the manifest file (used to resolve relative execution_requirements_path)
+            pair_key: Optional "{cell_line}_{tf_a}_{tf_b}" identifier. When set, used
+                to build a descriptive filename prefix for narrative.md and
+                final_report.md (e.g. "MLX_REST_K562_narrative.md"). Falls back to
+                the unprefixed default names when absent.
         """
         self.config = config
         self.manifest = manifest
         self.output_dir = Path(output_dir or config.pipeline.output_dir)
+        self.pair_key = pair_key
+        # Build "{tf_a}_{tf_b}_{cell_line}" prefix from a pair_key of the form
+        # "{cell_line}_{tf_a}_{tf_b}". Graceful fallback to None if pair_key is
+        # absent or doesn't split into exactly 3 underscore-separated tokens.
+        self.file_prefix: str | None = None
+        if pair_key:
+            parts = pair_key.split("_")
+            if len(parts) >= 3:
+                cell_line, tf_a, tf_b = parts[0], parts[1], "_".join(parts[2:])
+                self.file_prefix = f"{tf_a}_{tf_b}_{cell_line}"
         self.logger = get_logger("orchestrator")
         self._allowed_packages = self._resolve_allowed_packages(manifest_path)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -433,10 +448,20 @@ class Orchestrator:
         })
 
         run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid() % 10000:04d}"
-        run_dir = self.output_dir / run_id
+        # If pair_key is provided, use a deterministic per-pair layout:
+        #   {output_dir}/{cell_line}/{tf_a}_{tf_b}_{cell_line}/
+        # Otherwise fall back to the legacy timestamp layout.
+        if self.file_prefix and self.pair_key:
+            cell_line = self.pair_key.split("_", 2)[0]
+            run_dir = self.output_dir / cell_line / self.file_prefix
+        else:
+            run_dir = self.output_dir / run_id
+        # Wipe any prior run's contents so this run starts with a clean dir.
+        if run_dir.exists():
+            shutil.rmtree(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        narrative = NarrativeLog(run_dir)
+        narrative = NarrativeLog(run_dir, filename_prefix=self.file_prefix)
         narrative.write_header(
             finding=self.state.finding,
             run_id=run_id,
@@ -621,7 +646,12 @@ class Orchestrator:
                             data_manifest=self.manifest.model_dump(),
                         )
                         if new_hypo:
-                            self.state.add_hypothesis(new_hypo)
+                            added = self.state.add_hypothesis(new_hypo, force_unique=True)
+                            if not added:
+                                self.logger.warning(
+                                    "Regenerated hypothesis dropped despite force_unique",
+                                    {"name": new_hypo.get("name", "N/A")},
+                                )
                         else:
                             # Regeneration returned None — fall back to refine_hypotheses()
                             self.logger.warning(
@@ -643,7 +673,7 @@ class Orchestrator:
                                     unused_biology_layers=unused_bl or None,
                                 )
                                 for hypo in fallback.get("hypotheses", []):
-                                    self.state.add_hypothesis(hypo)
+                                    self.state.add_hypothesis(hypo, force_unique=True)
                             except Exception as e:
                                 self.logger.error("Fallback hypothesis generation also failed", {"error": str(e)})
                         continue
@@ -708,7 +738,12 @@ class Orchestrator:
                         data_manifest=self.manifest.model_dump(),
                     )
                     if new_hypo:
-                        self.state.add_hypothesis(new_hypo)
+                        added = self.state.add_hypothesis(new_hypo, force_unique=True)
+                        if not added:
+                            self.logger.warning(
+                                "Regenerated hypothesis dropped despite force_unique",
+                                {"name": new_hypo.get("name", "N/A")},
+                            )
                     continue
                 else:
                     consecutive_data_rejections = 0
@@ -821,7 +856,20 @@ class Orchestrator:
                         run_dir / f"state_iter_{self.state.current_iteration}.json"
                     )
 
-            # If max iterations reached without convergence, set a default conclusion
+            # Determine the actual reason the loop exited so the conclusion and
+            # stop_reason reflect what happened (max iter vs hypothesis queue
+            # ran dry vs shutdown).
+            if self.state.current_iteration >= self.state.max_iterations:
+                exit_phrase = "Max iterations reached"
+                stop_reason = "Max iterations reached without convergence"
+            elif self._check_shutdown():
+                exit_phrase = "Shutdown requested"
+                stop_reason = "Shutdown requested before convergence"
+            else:
+                exit_phrase = "Hypothesis queue exhausted"
+                stop_reason = "No more hypotheses available before convergence"
+
+            # If the loop exited without convergence, set a default conclusion
             if not self.state.converged and not self.state.conclusion:
                 supported = [h for h in self.state.tested_hypotheses if h.get("result") == "SUPPORTS" and h.get("iteration", -1) != 0]
                 rejected = [h for h in self.state.tested_hypotheses if h.get("result") == "REJECTS" and h.get("iteration", -1) != 0]
@@ -829,12 +877,12 @@ class Orchestrator:
                     names = ", ".join(h.get("name", "unnamed") for h in supported)
                     rejected_names = ", ".join(h.get("name", "unnamed") for h in rejected)
                     self.state.conclusion = (
-                        f"Max iterations reached. Supported mechanism evidence found "
+                        f"{exit_phrase}. Supported mechanism evidence found "
                         f"({names}), but no mechanism achieved full convergence. "
                         f"Ruled-out mechanisms: {rejected_names}."
                     )
                 else:
-                    self.state.conclusion = "Max iterations reached without finding a supported hypothesis."
+                    self.state.conclusion = f"{exit_phrase} without finding a supported hypothesis."
 
             if (
                 not self.state.converged
@@ -842,7 +890,7 @@ class Orchestrator:
                 and self.state.run_status == "running"
             ):
                 self.state.mark_stopped(
-                    reason="Max iterations reached without convergence",
+                    reason=stop_reason,
                     confidence=self.state.confidence_level,
                     conclusion=self.state.conclusion or "Investigation incomplete",
                 )
@@ -1009,16 +1057,79 @@ class Orchestrator:
         # Tell the coding agent which hypothesis iteration we're on (for debug filenames)
         self.coding_agent.state_iter = self.state.current_iteration
 
-        result = await self.coding_agent.run_repl(
-            hypothesis=hypothesis,
-            executor=self.executor,
-            data_manifest=self.manifest.model_dump(),
-            run_dir=run_dir,
-            prior_evidence=self.state.evidence,
-            file_summaries=self.state.file_summaries or None,
-            allowed_packages=self._allowed_packages,
-            max_iterations=max_repl_iterations,
-        )
+        # Context-overflow retry loop. If MiniMax (or any provider) rejects the
+        # REPL call because the accumulated coding-agent history exceeds the
+        # model's context window, we wipe the conversation (run_repl builds a
+        # fresh messages list on each call) and try again. Hard cap: 3 total
+        # attempts per iteration. After that, give up on this hypothesis and
+        # return UNTESTABLE so the refinement agent picks a different mechanism.
+        MAX_CONTEXT_OVERFLOW_RETRIES = 2  # 3 total attempts
+        overflow_attempts = 0
+        result: dict[str, Any] | None = None
+        while True:
+            try:
+                result = await self.coding_agent.run_repl(
+                    hypothesis=hypothesis,
+                    executor=self.executor,
+                    data_manifest=self.manifest.model_dump(),
+                    run_dir=run_dir,
+                    prior_evidence=self.state.evidence,
+                    file_summaries=self.state.file_summaries or None,
+                    allowed_packages=self._allowed_packages,
+                    max_iterations=max_repl_iterations,
+                )
+                break
+            except TokenLimitExceeded as e:
+                overflow_attempts += 1
+                total_attempts = MAX_CONTEXT_OVERFLOW_RETRIES + 1
+                self.logger.warning(
+                    "Coding-agent REPL hit context window limit",
+                    {
+                        "attempt": overflow_attempts,
+                        "total_attempts": total_attempts,
+                        "input_tokens": e.estimate.input_tokens,
+                        "context_limit": e.context_limit,
+                        "hypothesis": hypothesis.get("name", "N/A"),
+                    },
+                )
+                if overflow_attempts > MAX_CONTEXT_OVERFLOW_RETRIES:
+                    self._display_message(
+                        f"Context overflow persisted across {total_attempts} attempts "
+                        f"— marking hypothesis UNTESTABLE and moving on.",
+                        "error",
+                    )
+                    result = {
+                        "support_level": "UNTESTABLE",
+                        "confidence": 0.0,
+                        "execution_success": False,
+                        "findings": [],
+                        "summary": (
+                            f"Coding-agent REPL exceeded model context window "
+                            f"({e.context_limit:,} tokens) on {total_attempts} "
+                            f"consecutive attempts. Hypothesis may require loading data "
+                            f"(Hi-C BEDPE, genome-wide scans, large dataframes) that "
+                            f"cannot fit in the coding model's context. Skipping to a "
+                            f"different mechanism."
+                        ),
+                        "reasoning": (
+                            f"context overflow {total_attempts}x: "
+                            f"{e.estimate.input_tokens:,} > {e.context_limit:,}"
+                        ),
+                        "issues": [
+                            f"MiniMax context window ({e.context_limit:,}) exceeded "
+                            f"after {total_attempts} REPL restarts"
+                        ],
+                        "_raw_output": "",
+                    }
+                    break
+                # Retry: re-inject data_files so the kernel's canonical globals
+                # are restored, then let run_repl rebuild a fresh messages list.
+                self._display_message(
+                    f"Context overflow (attempt {overflow_attempts}/{total_attempts}) "
+                    f"— retrying iteration with fresh REPL history",
+                    "warning",
+                )
+                await self._inject_data_files()
 
         # Save combined output
         raw_output = result.get("_raw_output", "")
@@ -1028,6 +1139,7 @@ class Orchestrator:
         self.logger.info("REPL verification complete", {
             "support_level": result.get("support_level"),
             "confidence": result.get("confidence"),
+            "context_overflow_retries": overflow_attempts,
         })
         return result
 
@@ -1360,7 +1472,8 @@ class Orchestrator:
         )
 
         # Save report
-        report_file = run_dir / "final_report.md"
+        report_stem = f"{self.file_prefix}_report.md" if self.file_prefix else "final_report.md"
+        report_file = run_dir / report_stem
         report_file.write_text(report)
 
         # Save final state

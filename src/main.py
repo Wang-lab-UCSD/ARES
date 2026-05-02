@@ -193,7 +193,7 @@ def _write_ledger_completion(
             pass
 
 
-async def run_pipeline_with_config(config: Config, manifest_path: Path, output_dir: Path | None = None) -> dict:
+async def run_pipeline_with_config(config: Config, manifest_path: Path, output_dir: Path | None = None, pair_key: str | None = None) -> dict:
     """Run the hypothesis generation pipeline with a pre-loaded config.
 
     Args:
@@ -222,7 +222,7 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         # Initialize and run orchestrator
         from src.orchestrator import Orchestrator
 
-        orchestrator = Orchestrator(config, manifest, output_dir, manifest_path=manifest_path)
+        orchestrator = Orchestrator(config, manifest, output_dir, manifest_path=manifest_path, pair_key=pair_key)
 
         # Register shutdown handler with orchestrator
         def shutdown_handler(signum, frame):
@@ -263,7 +263,7 @@ async def run_pipeline_with_config(config: Config, manifest_path: Path, output_d
         try:
             if getattr(orchestrator, "cost_tracker", None) is not None:
                 result["total_cost_usd"] = float(
-                    getattr(orchestrator.cost_tracker, "session_total_usd", 0.0)
+                    getattr(orchestrator.cost_tracker, "session_cost", 0.0)
                 )
         except Exception:
             pass
@@ -373,7 +373,7 @@ def main() -> int:
     write_ledger = args.pair_key is not None and args.ledger is not None
 
     try:
-        result = asyncio.run(run_pipeline_with_config(config, args.manifest, args.output))
+        result = asyncio.run(run_pipeline_with_config(config, args.manifest, args.output, pair_key=args.pair_key))
         if write_ledger:
             from src.production.ledger import STATUS_COMPLETED
             _write_ledger_completion(
