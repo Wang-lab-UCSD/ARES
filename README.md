@@ -13,8 +13,6 @@ The pipeline runs an iterative loop across four specialized agents:
 
 Convergence is modality-aware: observational-only data may converge on the best-supported mechanistic interpretation; perturbation/causal data additionally requires a but-for causal test.
 
-See [METHODS.md](METHODS.md) for a detailed description of the pipeline design.
-
 ## Requirements
 
 - Python 3.10+
@@ -92,7 +90,7 @@ pipeline:
 
 ### Data manifest
 
-Create a YAML manifest listing your data files. Use `config/example_data_manifest.yaml` as a template, or see the `examples/` directory for real-world examples (note: example manifests contain user-specific file paths that must be updated to your local data).
+Create a YAML manifest listing your data files. The `examples/` directory contains real manifests you can use as templates, e.g. `examples/atf6_rest_K562/data_manifest.yaml` (note: example manifests contain user-specific file paths that must be updated to your local data).
 
 ```yaml
 finding: "TF_B motif is the top predictor of TF_A binding signal in K562"
@@ -128,8 +126,6 @@ python -m src.main \
 Optional flags:
 - `--verbose` — detailed console output
 - `--output-dir PATH` — override the output directory
-
-On a Slurm cluster, see `run_pair_test.sbatch` for an example batch script.
 
 ## Outputs
 
@@ -178,7 +174,6 @@ src/
   utils/                Bioinformatics helpers, config, cost tracking
 config/
   config.yaml           Main pipeline configuration
-  example_data_manifest.yaml  Data manifest template
 examples/               Example data manifests for TF-pair analyses
 tests/                  Test suite
 ```

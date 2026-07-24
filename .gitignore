@@ -148,3 +148,5 @@ config/*
 CLAUDE.md
 METHODS.md
 analyze_pipeline_log.py
+doc/
+!config/requirements_execution.txt
