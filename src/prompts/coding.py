@@ -41,6 +41,7 @@ _CATEGORY_TO_BUNDLE: dict[str, str] = {
     # (count_overlapping_peaks, extract_bigwig_signals, intersect_peaks, ...).
     "chipseq": "always",
     "all_tf_chipseq": "always",
+    "additional_chipseq": "always",
     "genome": "always",
     # phyloP is a bigWig conservation track. It uses the same extract_bigwig_signals
     # helper as histone marks, so it doesn't need a separate bundle. Mapped to
@@ -1255,6 +1256,13 @@ If everything passes, emit the <solution>.
 <solution>
 analysis: <brief description of what you actually did — which files were used, what statistical tests were run, what comparisons were made. This helps the reviewer understand the actual analysis vs the planned verification.>
 support_level: SUPPORTS|REJECTS|INCONCLUSIVE|ERROR|UNTESTABLE
+# Use ERROR ONLY for technical/system failures: code crashed unrecoverably,
+#   kernel died, missing files at runtime, syntax errors you cannot fix.
+# Use UNTESTABLE when the hypothesis itself cannot be tested with available
+#   data (no valid comparator, statistical impossibility, motif absent from
+#   genome, etc.) — even if your code runs cleanly. Either way, the pipeline
+#   moves on to a different mechanism, but UNTESTABLE signals "redesign the
+#   hypothesis" while ERROR signals "fix the code".
 confidence: 0.0-1.0
 finding: <one concise sentence stating the key result>
 reasoning: <explanation of the evidence and why it supports/rejects the hypothesis>

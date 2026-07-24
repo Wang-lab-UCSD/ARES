@@ -12,14 +12,26 @@ from src.utils.logging import get_logger
 
 
 # Retry configuration
-# Linear backoff: delay[i] = RETRY_DELAY_BASE * (i + 1)
-# Total window: sum(5, 10, 15, ..., 50) = 275s (~4.5 min), tuned to ride out
-# Gemini flex-tier queueing delays and transient 5xx outages.
-MAX_RETRIES = 10
+# Capped exponential backoff: delay[i] = min(RETRY_DELAY_CAP, RETRY_DELAY_BASE * 2**i).
+# Sequence with base=5, cap=60: 5, 10, 20, 40, 60, 60, 60, ...
+# Backoff-sleep budget for MAX_RETRIES=20: ~17 min wall-clock.
+#
+# TOTAL_RETRY_BUDGET_SEC is the hard ceiling on the WHOLE operation (initial
+# call + all retry attempts + all backoff sleeps). Once exceeded, the
+# operation is cancelled and asyncio.TimeoutError propagates. Tuned to ride
+# out Gemini Flex-tier 503 storms (May 6 2026 incident: ~30-45 min sustained
+# 503 'high demand' window that exceeded the previous 4.5-min budget).
+# Real auth failures and other non-retryable errors still fail fast.
+MAX_RETRIES = 20
 RETRY_DELAY_BASE = 5.0
+RETRY_DELAY_CAP = 60.0
+TOTAL_RETRY_BUDGET_SEC = 3600.0  # 1 hour
 
-# HTTP statuses we consider transient and worth retrying
-RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+# HTTP statuses we consider transient and worth retrying.
+# 499 (CANCELLED) added May 7 2026: Gemini Flex tier returns this when its
+# server-side queue wait exceeds ~20 min. The cancellation is transient —
+# a fresh request usually gets a new queue slot and succeeds.
+RETRYABLE_STATUS_CODES = {408, 429, 499, 500, 502, 503, 504}
 
 
 class GeminiProvider(LLMProvider):
@@ -47,17 +59,31 @@ class GeminiProvider(LLMProvider):
         self.service_tier = kwargs.get("service_tier") or "flex"
         self.thinking_level = kwargs.get("thinking_level") or "MEDIUM"
 
+        # Per-request HTTP timeout. The google-genai SDK's default is ~20 min,
+        # which is shorter than Flex-tier queue waits can occasionally be at peak
+        # demand. When the SDK's own timeout fires, the request is silently
+        # blocked until then with no error to feed our retry logic. Set this
+        # generously (default 1 hour) so Flex requests have room to be served.
+        # On timeout, asyncio.TimeoutError is raised and the retry loop kicks in.
+        self.request_timeout_sec = float(kwargs.get("request_timeout_sec") or 3600)
+
     def _get_client(self):
         """Lazy initialization of the genai Client."""
         if self._client is None:
             try:
                 from google import genai
+                from google.genai import types
             except ImportError:
                 raise ImportError(
                     "google-genai package not installed. "
                     "Install with: pip install google-genai"
                 )
-            self._client = genai.Client(api_key=self.api_key)
+            # HttpOptions.timeout is in milliseconds.
+            timeout_ms = int(self.request_timeout_sec * 1000)
+            self._client = genai.Client(
+                api_key=self.api_key,
+                http_options=types.HttpOptions(timeout=timeout_ms),
+            )
         return self._client
 
     def _convert_messages(self, messages: list[Message]) -> tuple[str | None, list[dict]]:
@@ -111,7 +137,7 @@ class GeminiProvider(LLMProvider):
                     raise
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    delay = RETRY_DELAY_BASE * (attempt + 1)
+                    delay = min(RETRY_DELAY_CAP, RETRY_DELAY_BASE * (2 ** attempt))
                     self.logger.warning(
                         f"{operation_name} failed, retrying in {delay}s",
                         {"error": str(e), "attempt": attempt + 1, "max_retries": MAX_RETRIES},
@@ -213,13 +239,25 @@ class GeminiProvider(LLMProvider):
             )
 
             async def _make_request():
-                return await client.aio.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=config,
+                # Wrap with asyncio.wait_for: HttpOptions.timeout is not reliably
+                # honored on the async path in google-genai 1.72, so we enforce
+                # the timeout at the asyncio level. On expiry, asyncio.TimeoutError
+                # is raised — the retry loop handles it via _is_retryable().
+                return await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=self.model,
+                        contents=contents,
+                        config=config,
+                    ),
+                    timeout=self.request_timeout_sec,
                 )
 
-            response = await self._retry_with_backoff(_make_request, "Completion")
+            # Hard 1-hour cap on the whole retry loop (calls + sleeps).
+            # On expiry, asyncio.TimeoutError propagates and the pipeline gives up.
+            response = await asyncio.wait_for(
+                self._retry_with_backoff(_make_request, "Completion"),
+                timeout=TOTAL_RETRY_BUDGET_SEC,
+            )
 
             content = response.text or ""
 

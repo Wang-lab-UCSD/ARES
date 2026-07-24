@@ -92,7 +92,7 @@ CONVERGENCE_CHECK_SYSTEM_PROMPT = """You are an independent scientific adjudicat
 
 ## Apply criteria in order. Stop at the first failure.
 
-**Special case — artifact-check SUPPORTS**: If the iteration-0 artifact check returned SUPPORTS (TF_A not expressed AND motif not enriched), converge IMMEDIATELY on "technical artifact". Skip criteria 1-5.
+**Special case — artifact-check SUPPORTS (conclusive ONLY when expression was tested)**: If the iteration-0 artifact check returned SUPPORTS *because TF_A is not expressed (RNA-seq TPM≈0) AND its motif is not enriched*, converge IMMEDIATELY on "technical artifact"; skip criteria 1-5. **If RNA-seq was NOT available** — so expression could not be checked and the verdict rests on motif enrichment alone — motif evidence is SUGGESTIVE, NOT CONCLUSIVE: do NOT converge on "technical artifact". A depleted or absent self-motif for a poorly-annotated TF (ZNF/KRAB-zinc-finger, homeodomain) or a genuinely motif-less factor (e.g. a coactivator) does not prove the ChIP signal is fake. Treat it as provisional, keep investigating the relationship (partner co-occupancy, chromatin context, etc.), and only note a low-confidence artifact possibility in the final synthesis if no mechanism is found.
 
 **1. Mechanism SUPPORTS prerequisite**
 At least one tested hypothesis must have `support_level = "SUPPORTS"` AND test a specific molecular mechanism (PPI, motif, chromatin, 3D, sequence-intrinsic, motif grammar, cofactor proxy, etc.).

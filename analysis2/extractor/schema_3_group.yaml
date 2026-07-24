@@ -1,0 +1,151 @@
+# ============================================================================
+# 3-GROUP report-extraction taxonomy (SEQUENCE / PROTEIN / CONTEXT).
+# DRAFT re-framing of schema.yaml under the new dichotomy rule. To be refined.
+#
+# NEW DICHOTOMY RULE — ONE question: WHO READS THE PARTNER MOTIF?
+#   SEQUENCE = the TARGET reads the motif with its own DBD and that SUFFICES.
+#   PROTEIN  = the target REQUIRES a protein that reads/binds the motif — and that
+#              protein need NOT be the named partner (paralog / family member /
+#              recruited cofactor = the `actor`). Tethering (target reads no DNA) or
+#              cooperative (target reads a half but needs the partner).
+#   CONTEXT  = NOBODY reads the motif as a required site; it marks a chromatin state.
+#
+# KEY CHANGE vs schema.yaml: the whole MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT category
+# (a third factor / paralog reads the motif and the target needs it) was SEQUENCE in
+# the old binary scheme; here its recruit/cooperate leaves MOVE TO PROTEIN. Leaves
+# tagged `moved_from:` below. Two-call architecture unchanged: Call 1 (DeepSeek) sets
+# the dichotomy group; Call 2 (MiniMax) picks a leaf from ONLY that group's children.
+#
+# Each group has NEED_HUMAN_LABEL: pick it when the report supports the group but is
+# too vague / non-specific to assign a leaf, or the mechanism fits no leaf.
+# Leaf set consolidated from schema.yaml (similar mechanisms merged; merged-from noted).
+# ============================================================================
+
+convergence_blocker:
+  NO_SUPPORTS:                   "Every tested hypothesis was REJECTS / INCONCLUSIVE / UNTESTABLE."
+  ONLY_CHARACTERIZATION_SUPPORT: "All SUPPORTS hypotheses are functional / GO / phyloP / RNA-seq characterizations only — no molecular-mechanism SUPPORTS."
+  SUPPORTS_TOO_GENERIC:          "SUPPORTS is mere co-occurrence with a broad chromatin mark or peak class."
+  BUT_FOR_FAILED:                "SUPPORTS is specific but correlational; could hold under the null."
+  CROSS_LAYER_INCONSISTENT:      "SUPPORTS on one layer; other layers contradict."
+  BIOLOGY_LAYER_MISSING:         "rnaseq / phyloP available but never tested."
+  PPI_NOT_ATTEMPTED:             "STRING / PPI available but never queried."
+  HYPOTHESIS_EXHAUSTION:         "Hypothesis agent ran out of ideas before convergence."
+
+# ---- Tier 1 (DeepSeek): the dichotomy group ----
+dichotomy_class:
+  SEQUENCE:   "The TARGET reads the partner motif with its own DBD and that SUFFICES — it binds independently, needing no other motif-reading protein. The motif IS the target's binding site (its own motif, or a partner-like/family motif its DBD recognizes)."
+  PROTEIN:    "A PROTEIN that reads/binds the partner motif DETERMINES the target's binding (the TARGET itself does NOT read the motif as its site). USUALLY positive — the target REQUIRES that protein (named partner, a PARALOG, a different motif-reading TF, or a recruited cofactor = the `actor`); removing the motif evicts it and DROPS the target (tethering = target reads no DNA, or cooperative = target reads a half but needs the partner). ALSO the NEGATIVE case — a motif-reading protein EXCLUDES / displaces the target, so the motif NEGATIVELY predicts target binding (competitive exclusion). Either sign, a protein at the motif sets the target's fate."
+  CONTEXT:    "NOBODY reads the motif as a required binding site; it is a PROXY/MARKER for a chromatin state (accessibility, HOT, Polycomb, promoter/enhancer, GC, compartment) the target responds to — OR it merely correlates with where another TF/state is. Removing the motif would NOT drop the target. MERE co-occupancy (no requirement) is CONTEXT."
+  UNRESOLVED: "The report does not establish who reads the motif / whether the target needs another protein (leaves SEQUENCE-vs-PROTEIN genuinely open), or did not converge."
+  ARTIFACT:   "The partner motif does not actually predict target binding — an ML/technical artifact or score-uncorrelated feature."
+
+# ---- Tier 1 sub-flag (DeepSeek), only meaningful for PROTEIN ----
+protein_subtype:
+  cooperative: "Target reads its OWN half-site but REQUIRES the motif-reading partner on the other half (heterodimer / composite, e.g. ATF4-CEBPG, IRF4-SPIB via PU.1)."
+  tethering:   "Target reads NO DNA at the site; the motif-reading protein brings it (loci lacking the target's motif, e.g. CEBPB via ATF4, CBFB via RUNX3)."
+  null:        "Not PROTEIN."
+
+region_of_regulation:
+  PROMOTER_ACTIVE:             "Co-bound peaks at active promoters (TSS-proximal, H3K4me3+)."
+  ENHANCER_ACTIVE:             "Co-bound peaks at active enhancers (distal, H3K4me1+ H3K27ac+)."
+  ACTIVE_TRANSCRIPTION_STATES: "Active chromatin states, promoter vs enhancer not distinguished."
+  ENHANCER_POISED:             "Poised enhancers (H3K4me1+ H3K27me3+, low/no H3K27ac)."
+  BIVALENT_PROMOTER:           "Bivalent promoters (H3K4me3+ H3K27me3+)."
+  REPRESSIVE_HETEROCHROMATIN:  "H3K27me3 or H3K9me3 heterochromatic domains."
+  INSULATOR:                   "CTCF insulators / TAD boundaries."
+  MIXED:                       "No single region type dominates."
+  NOT_REPORTED:                "Report does not characterize peak regions."
+
+transcriptional_outcome:
+  ACTIVATING: "Associated with higher target expression / active marks."
+  REPRESSIVE: "Associated with lower target expression / repressive marks."
+  MIXED:      "Opposite directions at different gene subsets."
+  NO_EFFECT:  "Tested but no significant direction."
+  NOT_TESTED: "Not assessed."
+
+evolutionary_outcome:
+  MORE_CONSERVED: "Loci show elevated phyloP vs controls."
+  LESS_CONSERVED: "Loci show LOWER phyloP (often repeat-driven)."
+  NO_EFFECT:      "Tested, no significant difference."
+  NOT_TESTED:     "Not assessed."
+
+
+# ============================================================================
+# Tier 2 (MiniMax): leaf mechanism WITHIN the Call-1 dichotomy group.
+# Call 2 sees ONLY the chosen group's children (incl. NEED_HUMAN_LABEL).
+# ============================================================================
+mechanism_hierarchy:
+
+  # -------------------------------------------------------------------------
+  SEQUENCE:
+    definition: "The target's own DBD reads the partner motif (or a sequence it contains / a grammar it is part of) and binds independently — no other motif-reading protein required. A protein MAY passively co-bind the partner motif, but it is NOT required and does not functionally act on the target; the binding is still driven by the target's own sequence recognition / grammar."
+    children:
+      DIRECT_SEQUENCE_RECOGNITION:
+        definition: "The target's OWN DBD directly reads the partner motif (or a sub-sequence / nested 'Trojan-horse' motif it contains) — often because target & partner families share motif preference (KLF/SP on GC-boxes, ETS on GGAA, E-box readers on CANNTG). Positive motif→target correlation, GC-independent. DEFINING FEATURE: the TARGET itself reads the motif (also covers the case where the target reads the motif and competes for that same site)."
+        merged_from: [DIRECT_SEQUENCE_RECOGNITION, SHARED_MOTIF_NESTED]
+      MOTIF_GRAMMAR:
+        definition: "The target reads a multi-motif DNA GRAMMAR that includes the partner motif — either fused/overlapping/embedded into one composite element, or two separate motifs at a constrained spacing / rigid helical phase (ETS-GATA, EICE ETS-IRF). The target reads the composite/grammar itself."
+        merged_from: [COMPOSITE_MOTIF_GRAMMAR, STEREOSPECIFIC_PHASING]
+      NEED_HUMAN_LABEL_SEQUENCE:
+        definition: "Report supports SEQUENCE but is too vague / non-specific to assign a leaf, or the mechanism fits none. Flag for human review."
+
+  # -------------------------------------------------------------------------
+  PROTEIN:
+    definition: "A protein that reads/binds the partner motif DETERMINES the target's binding — the target either REQUIRES it (recruited: tethering / cooperative; actor = named partner, paralog, other motif-reading TF, or recruited cofactor) or is EXCLUDED by it (competitive exclusion). Sub-flag protein_subtype = cooperative | tethering (null for exclusion)."
+    children:
+      # --- exclusion: a motif-reading protein DISPLACES the target (negative) ---
+      COMPETITIVE_EXCLUSION:
+        definition: "A protein that reads the partner motif DISPLACES or BLOCKS the target from those sites. The target does NOT read this motif; it is out-competed, so the motif NEGATIVELY predicts (anti-correlates with) target binding."
+        merged_from: [COMPETITIVE_DNA_OCCUPANCY, COMPETITIVE_THIRD_TF_EXCLUSION]
+      # --- tethering: target reads NO DNA, brought by the motif-reading protein ---
+      TETHERING:
+        definition: "The target reads NO DNA of its own at these sites; a motif-reading protein brings/anchors it there by protein-protein interaction. This can be DIRECT (the motif-reading partner physically binds the target) or INDIRECT (a bridging cofactor, chromatin complex, or third motif-reading factor links the partner to the target). Assign when the report shows the target's own recognition sequence is ABSENT at the sites (motif-less, or no footprint at the target's motif), or that the target cannot bind without the partner — even if the target's signal is amplified at the co-bound sites. Removing the motif evicts the anchoring protein and the target drops with it."
+        protein_subtype: tethering
+        merged_from: [DIRECT_PPI_TETHERING, COFACTOR_BRIDGED_TETHERING, INDIRECT_TETHERING, COACTIVATOR_MARKED_ACTIVE_COMPLEX, COREPRESSOR_MARKED_COMPLEX, REMODELER_MARKED_COMPLEX]
+      # --- cooperative: reader on the motif AMPLIFIES the target (positive evidence required) ---
+      COOPERATIVE_COBINDING:
+        definition: "The target binds its OWN DNA at these sites (its own half-site, or an adjacent / composite motif) AND the protein reading the partner motif contributes to that binding — BOTH factors occupy DNA. Assign ONLY when the report shows the target reads its own recognition sequence here. Higher target signal at co-bound sites is NOT sufficient on its own — scaffold co-occupancy and tethering also amplify signal. Forms include heterodimerization or cooperative binding at adjacent or composite sites."
+        protein_subtype: cooperative
+        merged_from: [HETERODIMERIZATION, COOPERATIVE_ADJACENT, INDIRECT_COOPERATIVE_BINDING, MOTIF_PROXY_COOPERATIVE_BINDING, MOTIF_SURROGATE_HETERODIMERIZATION]
+      # --- co-occupancy: reader and target co-localize, but NO amplification/recruitment shown ---
+      CO_OCCUPANCY:
+        definition: "The protein reading the partner motif and the target occupy the same sites — the target's signal may even be higher there — but the report does NOT establish whether the target binds its OWN DNA (which would be COOPERATIVE_COBINDING) or reads no DNA and is recruited (which would be TETHERING). Use when co-occupancy or signal amplification is shown but the target's own DNA contact is not resolved."
+        merged_from: []
+      NEED_HUMAN_LABEL_PROTEIN:
+        definition: "Report supports PROTEIN but is too vague / non-specific to assign a leaf, or the mechanism fits none. Flag for human review."
+
+  # -------------------------------------------------------------------------
+  CONTEXT:
+    definition: "Nobody reads the partner motif as a required binding site; it marks a chromatin state / correlates with where another TF or state is. Removing the motif would not drop the target."
+    children:
+      CHROMATIN_ACCESSIBILITY_PROXY:
+        definition: "Motif marks accessible/open chromatin (DNase/ATAC); controlling for accessibility reduces the motif→target association."
+      CHROMATIN_STATE_CONTEXT:
+        definition: "Motif marks a histone-defined chromatin state or a regulatory-element class (active/poised/bivalent promoter or enhancer, H3K4me3/me1, H3K27me3, H3K9me3) where the target has different binding intensity; the state, not the motif, drives the association (region_of_regulation carries the specific element)."
+        merged_from: [CHROMATIN_STATE_GATING, PROMOTER_SHARED_DRIVER, POISED_ENHANCER, REGULATORY_ELEMENT_STATE_CONFOUNDING]
+      SEQUENCE_FEATURE_PROXY:
+        definition: "Motif captures a DNA-intrinsic feature other than a binding site — CpG density / CpG islands, GC content, k-mer composition, low-complexity / repeat sequence, or DNA shape."
+        merged_from: [CPG_DENSITY_SEQUENCE_PROXY, OTHER_SEQUENCE_FEATURE_PROXY]
+      HOT_REGION_COOCCUPANCY:
+        definition: "Locus is a hyper-occupied (HOT) TF region OR a shared master/lineage TF (AP-1/MYC/GATA/SPI1) independently drives both partner & target occupancy; co-binding is not pair-specific and the target's own binding logic stays intact (no recruitment of the target claimed); relationship weakens after HOT / shared-driver filtering."
+        merged_from: [INDIRECT_MASTER_TF]
+      3D_LOOP_CONTEXT:
+        definition: "Motif marks an architectural compartment (CTCF/Hi-C loop anchors, TAD boundaries) where the target binds; partner-protein cooperation rejected. Associative, not a causal partner→target loop."
+      SURROGATE_TF_COOCCUPANCY:
+        definition: "The partner motif is actually a BINDING SITE for a DIFFERENT TF — a partner-paralog, or an unrelated abundant factor whose own motif resembles it (e.g. SP1/SP2 on a GC-rich motif, FOXA1 on a FOX-like motif, an ETS paralog on an ETS motif) — that co-occupies the target's sites but does NOT recruit or stabilize the target. The motif predicts the target via that surrogate TF's co-binding, NOT via chromatin state/accessibility, a HOT region, or a DNA-intrinsic feature. DISTINGUISHED FROM PROTEIN/TETHERING & CO_OCCUPANCY: the report establishes NO recruitment of the target (the target binds for its own reasons, or both are independently recruited to permissive sites); the surrogate is a passive reader of the motif. Often the named partner is not expressed and the motif is a proxy for the surrogate's site."
+      NEED_HUMAN_LABEL_CONTEXT:
+        definition: "Report supports CONTEXT but is too vague / non-specific to assign a leaf, or the mechanism fits none. Flag for human review."
+
+  # -------------------------------------------------------------------------
+  ARTIFACT:
+    definition: "The partner motif is not a true driver of target binding."
+    children:
+      TECHNICAL_ARTIFACT:
+        definition: "Antibody cross-reactivity, peak-calling noise, mappability bias, OR a feature proxy the ML model latched onto with no biological basis."
+      PARTNER_MOTIF_UNSUPPORTED:
+        definition: "Motif rare/absent in target peaks (<5% coverage) OR its score doesn't correlate with target signal after matching; any real biology is attributed to a DIFFERENT TF/cofactor unrelated to the partner motif."
+
+
+# Special values, set by deterministic / fallback logic:
+# UNRESOLVED       — convergence_blocker in {NO_SUPPORTS, ONLY_CHARACTERIZATION_SUPPORT}, or who-reads-the-motif unresolved
+# NEED_HUMAN_LABEL — pickable per group (vague case) AND the fallback when Call 2 returns a leaf not in the chosen group

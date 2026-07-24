@@ -828,27 +828,55 @@ class Orchestrator:
                     self.state.evidence[-1]["summary"] = result["summary"]
                     self.state.evidence[-1]["findings"] = result["findings"]
 
+                # RNA-seq-unavailable guard for the iteration-0 artifact check: without
+                # expression data the artifact verdict rests on self-motif enrichment alone,
+                # which is SUGGESTIVE not CONCLUSIVE (weak/degenerate PWMs — ZNF/KRAB/
+                # homeodomain — and motif-less factors fail it spuriously). We cannot CONFIRM
+                # a technical artifact from motif alone, so cap a SUPPORTS at INCONCLUSIVE;
+                # the run then keeps investigating instead of declaring "technical artifact".
+                last_h = self.state.tested_hypotheses[-1]
+                _grp = (last_h.get("group", "") or "").lower()
+                _nm = (last_h.get("name", "") or "").lower()
+                is_artifact_check = last_h.get("iteration", -1) == 0 and ("artifact" in _grp or "artifact" in _nm)
+                has_rnaseq = "rnaseq" in (self.manifest.model_dump().get("data", {}) or {})
+                if is_artifact_check and not has_rnaseq and result.get("support_level") == "SUPPORTS":
+                    self.logger.info(
+                        "Artifact-check returned SUPPORTS without RNA-seq; clamping to "
+                        "INCONCLUSIVE (motif-only evidence cannot confirm a technical artifact)",
+                        {"hypothesis": last_h.get("name", "")},
+                    )
+                    note = (" [Auto-adjusted: RNA-seq unavailable, so this motif-only artifact "
+                            "check cannot confirm a technical artifact — capped at INCONCLUSIVE.]")
+                    result["support_level"] = "INCONCLUSIVE"
+                    result["summary"] = (result.get("summary", "") or "") + note
+                    last_h["result"] = "INCONCLUSIVE"
+                    last_h["evidence_summary"] = result["summary"]
+                    if self.state.evidence:
+                        self.state.evidence[-1]["support_level"] = "INCONCLUSIVE"
+                        self.state.evidence[-1]["summary"] = result["summary"]
+
                 # Write narrative with summary agent's authoritative result
                 narrative.write_result(result)
 
                 # Check for convergence or refinement
                 if not self._check_shutdown():
-                    # If all retries failed, stop the pipeline
-                    if result.get("support_level") == "ERROR":
-                        reasoning = result.get("reasoning", "Unknown error")
-                        stop_reason = f"max retries ({self.config.execution.max_retries}) exceeded"
-                        self.state.mark_stopped(
-                            reason=stop_reason,
-                            confidence=0.0,
-                            conclusion=f"Pipeline stopped: {reasoning}",
-                        )
+                    # ERROR/UNTESTABLE on a single hypothesis is not fatal —
+                    # the pipeline should propose a different mechanism in the
+                    # next iteration. Real system failures (kernel crashes,
+                    # network outages) raise Python exceptions and are caught
+                    # at a different layer. ERROR here means the LLM gave up
+                    # on this specific hypothesis after exhausting REPL turns;
+                    # UNTESTABLE means the hypothesis design is unworkable
+                    # with available data. Both should advance to refinement.
+                    if result.get("support_level") in ("ERROR", "UNTESTABLE"):
+                        reasoning = result.get("reasoning", "")
                         self._display_message(
-                            f"Stopping pipeline: {stop_reason}",
-                            "error"
+                            f"Hypothesis returned {result.get('support_level')}: "
+                            f"{reasoning[:200]} — moving to next mechanism",
+                            "warning"
                         )
-                    else:
-                        await self._check_and_refine(hypothesis, result)
-                        narrative.write_decision(self.state.tested_hypotheses[-1])
+                    await self._check_and_refine(hypothesis, result)
+                    narrative.write_decision(self.state.tested_hypotheses[-1])
 
                 # Save intermediate state after refinement so decision/reasoning are included
                 if self.config.pipeline.save_intermediate:
@@ -1298,6 +1326,25 @@ class Orchestrator:
             causal_capable_data=getattr(self.manifest, "causal_capable_data", False),
         )
 
+        # Artifact-check special case (per CONVERGENCE_CHECK_SYSTEM_PROMPT): if
+        # the iteration-0 artifact check returned SUPPORTS (TF_A not expressed
+        # AND motif not enriched), the signal is a confirmed technical artifact
+        # and the pipeline should converge IMMEDIATELY, skipping criteria 1-5.
+        # The biology-gate and "needs SUPPORTS at iter>0" overrides below would
+        # otherwise wrongly block this — exempt artifact-check convergence.
+        #
+        # CONCLUSIVE ONLY WHEN RNA-seq WAS AVAILABLE: without RNA-seq the iter-0
+        # check is motif-only, which is SUGGESTIVE not conclusive — weak/degenerate
+        # PWMs (ZNF/KRAB/homeodomain) and motif-less factors (coactivators) fail it
+        # spuriously. When RNA-seq is absent we do NOT treat an iter-0 SUPPORTS as a
+        # valid artifact convergence; it is left subject to the gates below so the
+        # run keeps investigating rather than short-circuiting to "technical artifact".
+        has_rnaseq = "rnaseq" in (available_biology_layers or [])
+        is_artifact_convergence = has_rnaseq and any(
+            h.get("iteration", -1) == 0 and h.get("result") == "SUPPORTS"
+            for h in self.state.tested_hypotheses
+        )
+
         needs_5b = any(layer in available_biology_layers for layer in ("rnaseq", "phyloP"))
         missing_criteria: list[str] = []
         if not biology_gate_status.get("string_attempted", False):
@@ -1305,7 +1352,7 @@ class Orchestrator:
         if needs_5b and not biology_gate_status.get("functional_5b_attempted", False):
             missing_criteria.append("5b (no non-QC functional characterization via rnaseq/phyloP/GO)")
 
-        if convergence.get("converged", False) and missing_criteria:
+        if convergence.get("converged", False) and missing_criteria and not is_artifact_convergence:
             self.logger.warning(
                 "Convergence check returned converged=true despite unsatisfied biology-layer criteria; overriding to converged=false",
                 {
@@ -1324,7 +1371,7 @@ class Orchestrator:
             for h in self.state.tested_hypotheses
         )
 
-        if convergence.get("converged", False) and not has_any_supports:
+        if convergence.get("converged", False) and not has_any_supports and not is_artifact_convergence:
             self.logger.warning(
                 "Convergence check returned converged=true but no hypothesis has "
                 "support_level=SUPPORTS — overriding to converged=false",
@@ -1403,7 +1450,10 @@ class Orchestrator:
             )
             self._display_message("Insufficient data to test this mechanism, moving on", "warning")
             for hypo in refinement.get("hypotheses", []):
-                self.state.add_hypothesis(hypo)
+                # force_unique: refinement may legitimately revisit a previously-
+                # consumed mechanism with new framing/data; let it through with
+                # a (v2) suffix instead of silent dedup.
+                self.state.add_hypothesis(hypo, force_unique=True)
         elif decision == "TECHNICAL_ERROR":
             technical_issues = refinement.get("technical_issues", [])
             self.logger.warning(
@@ -1443,7 +1493,14 @@ class Orchestrator:
                     self.state.hypotheses.append(hypo)
         elif decision in ("REFINE", "NEW_HYPOTHESIS"):
             for hypo in refinement.get("hypotheses", []):
-                self.state.add_hypothesis(hypo)
+                # force_unique: when the LLM circles back to a previously-
+                # consumed mechanism (e.g. a Polycomb hypothesis reviewer-rejected
+                # earlier, now reframed as a causal mechanism), the dedup-by-name
+                # would silently drop the legitimate retry — and once the queue
+                # only contains consumed IDs, get_next_hypothesis returns None
+                # and the loop exits prematurely. Allow these revisits via a
+                # (v2) suffix so the loop can keep advancing.
+                self.state.add_hypothesis(hypo, force_unique=True)
 
     async def _generate_final_output(self, run_dir: Path) -> dict[str, Any]:
         """Generate final output and report.

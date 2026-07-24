@@ -1,0 +1,776 @@
+# Report-extraction taxonomy.
+# Edit freely; deterministic.py and llm_classify.py read this file.
+
+convergence_blocker:
+  NO_SUPPORTS:                   "Every tested hypothesis was REJECTS / INCONCLUSIVE / UNTESTABLE."
+  ONLY_CHARACTERIZATION_SUPPORT: "All SUPPORTS hypotheses are functional / GO-enrichment / phyloP / RNA-seq characterizations only — no SUPPORTS for a molecular mechanism."
+  SUPPORTS_TOO_GENERIC:          "SUPPORTS is mere co-occurrence with a broad chromatin mark or peak class."
+  BUT_FOR_FAILED:                "SUPPORTS is specific but data is correlational; could plausibly hold under the null."
+  CROSS_LAYER_INCONSISTENT:      "SUPPORTS on one layer; other available layers contradict or fail to corroborate."
+  BIOLOGY_LAYER_MISSING:         "rnaseq / phyloP available but never tested (Criterion 5b fail)."
+  PPI_NOT_ATTEMPTED:             "STRING / PPI available but never queried (Criterion 5a fail)."
+  HYPOTHESIS_EXHAUSTION:         "Hypothesis agent ran out of ideas before convergence (stop_reason)."
+
+dichotomy_class:
+  # SEQUENCE (old): "Partner motif's predictive power is explained by sequence-intrinsic features (motif, GC, conservation, accessibility proxy)."
+  SEQUENCE:   "Partner motif's predictive power is explained by sequence-intrinsic features (motif, GC, conservation, accessibility proxy), OR the motif is a PROXY for a DIFFERENT protein than the named partner — an expressed paralog that shares the motif (e.g. GATA5 motif read by GATA1/2; FOXC2/FOXP3 by FOXA1/2; RUNX2 by RUNX1) or an unrelated third factor recruited at the site. If the named partner protein is absent/unexpressed and the report attributes the mechanism to another protein, it is SEQUENCE (see MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT), NOT PROTEIN."
+  # PROTEIN (old): "Partner motif's predictive power is explained by partner protein binding or recruitment (PPI, heterodimer, cofactor)."
+  PROTEIN:    "Partner motif's predictive power is explained by the NAMED PARTNER protein itself binding or recruiting the target (direct PPI, heterodimer, the partner tethering/co-binding). Use ONLY when the named partner is the actor — i.e. the partner is expressed/ChIP-bound at these sites. If a paralog or a different (3rd) protein is the actual binder/recruiter, that is SEQUENCE (third-factor recruitment), not PROTEIN."
+  UNRESOLVED: "Neither sequence nor protein mechanism was established; or pipeline did not converge."
+  ARTIFACT:   "Partner motif is not a real biological signal — it's an ML feature artifact or technical noise. No real mechanism exists to be sequence- or protein-driven."
+
+region_of_regulation:
+  PROMOTER_ACTIVE:             "Co-bound peaks concentrated at active promoters (TSS-proximal, H3K4me3+)."
+  ENHANCER_ACTIVE:             "Co-bound peaks at active enhancers (distal, H3K4me1+ H3K27ac+)."
+  ACTIVE_TRANSCRIPTION_STATES: "Co-bound peaks at active chromatin states without distinguishing promoter vs enhancer (covers ChromHMM TssA/TssFlnk/EnhA1/EnhA2 collectively)."
+  ENHANCER_POISED:             "Co-bound peaks at poised enhancers (H3K4me1+ H3K27me3+, low/no H3K27ac)."
+  BIVALENT_PROMOTER:           "Co-bound peaks at bivalent promoters (H3K4me3+ H3K27me3+)."
+  REPRESSIVE_HETEROCHROMATIN:  "Co-bound peaks in H3K27me3 or H3K9me3 heterochromatic domains."
+  INSULATOR:                   "Co-bound peaks at CTCF insulators / TAD boundaries."
+  MIXED:                       "No single region type dominates the supported mechanism."
+  NOT_REPORTED:                "Report does not characterize peak regions in terms of regulatory element type."
+
+transcriptional_outcome:
+  ACTIVATING: "Supported mechanism associated with higher target expression or active marks (H3K27ac, H3K4me3)."
+  REPRESSIVE: "Supported mechanism associated with lower target expression or repressive marks (H3K27me3, H3K9me3, HDAC binding)."
+  MIXED:      "Supported mechanism shows opposite directions at different target gene subsets."
+  NO_EFFECT:  "Transcription / chromatin marks WERE tested but no significant direction was found. Includes the case where an activation or repression hypothesis was REJECTED because the test returned null."
+  NOT_TESTED: "Transcription / chromatin marks were not assessed in any hypothesis of the run."
+
+evolutionary_outcome:
+  MORE_CONSERVED: "Supported mechanism's loci show elevated phyloP conservation versus matched controls."
+  LESS_CONSERVED: "Supported mechanism's loci show LOWER phyloP conservation versus matched controls (rare; usually for repeat-element-driven sites)."
+  NO_EFFECT:      "phyloP WAS tested but no significant difference from controls was found."
+  NOT_TESTED:     "phyloP / conservation was not assessed in any hypothesis of the run."
+
+
+# ===========================================================================
+# Hierarchical final-mechanism taxonomy.
+# Two-call LLM architecture:
+#   Call 1 sees only the category-level definitions below (compact).
+#   Call 2 sees ONLY the chosen category's children with full descriptions.
+#
+# UNRESOLVED_OR_REVIEW is NOT exposed in Call 1; UNRESOLVED is set
+# deterministically from convergence_blocker, and NEED_HUMAN_LABEL is set
+# when Call 2 returns an invalid subtype.
+# ===========================================================================
+
+mechanism_hierarchy:
+
+  DIRECT_DNA_RECOGNITION:
+    definition: >
+      The target TF engages DNA directly at the partner-motif sequence — either
+      because the partner motif itself encodes the recognition sequence the target
+      reads (as the exact motif or a contained sub-sequence), or because target
+      and partner are both direct DNA binders whose binding sites overlap and
+      who therefore compete for occupancy. No protein-protein interaction or
+      chromatin-context proxy is invoked.
+    use_when: >
+      Evidence shows the target's DNA recognition (either positive recognition or
+      competitive occupancy at overlapping DNA) is sufficient to explain the
+      motif-target association.
+    do_not_use_when: >
+      The partner motif is a proxy for chromatin context, accessibility, or
+      another sequence feature; or protein-mediated mechanisms are at play.
+    children:
+      DIRECT_SEQUENCE_RECOGNITION:
+        definition: >
+          Target TF directly binds DNA at the partner motif — the partner motif
+          IS the recognition sequence the target reads (not nested, not contained).
+          The target reads the motif via its own DNA-binding domain, often because
+          the target's family / motif preference overlaps with the partner motif
+          (e.g., KLF/SP/YY1 family members reading GC-rich motifs, ETS family
+          members reading GGAA cores).
+        use_when:
+          - "Partner motif score POSITIVELY correlates with target ChIP signal intensity (rho or r > 0, p-significant)."
+          - "Motif is evolutionarily conserved at target binding sites (phyloP enrichment supported)."
+          - "Sequence-Intrinsic Proxy hypothesis is explicitly SUPPORTED in the report."
+          - "Effect persists after controlling for GC content, accessibility, or other confounders."
+          - "The target and partner belong to TF families with overlapping motif preferences (KLF/SP family for GC-rich motifs, E-box readers for CANNTG, ETS family for GGAA, etc.)."
+        do_not_use_when:
+          - "Partner motif CONTAINS the target's own motif as a sub-sequence (use SHARED_MOTIF_NESTED)."
+          - "Motif score does NOT correlate with target signal (use OTHER_SEQUENCE_FEATURE_PROXY if some other DNA feature is the driver, or ARTIFACT / PARTNER_MOTIF_UNSUPPORTED if the motif's predictive power was rejected outright)."
+          - "Partner motif marks a chromatin / accessibility / promoter context rather than serving as the recognition sequence (use the appropriate CONTEXTUAL_PROXY subtype)."
+          - "A NAMED third TF actually reads the partner motif and recruits the target (use MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT / MOTIF_PROXY_COOPERATIVE_BINDING)."
+        key_evidence:
+          - "Motif score → target signal positive correlation (rho/r > 0)."
+          - "GC-independence: correlation survives GC-content control."
+          - "Conservation: phyloP-supported evolutionary constraint at motif-positive target sites."
+          - "Motifs need NOT be centered at peak summits — a motif 50-150 bp from summit is still compatible with direct recognition (most peaks span 200-500 bp)."
+        example: "KLF13 binding signal positively correlates with YY1 motif score (rho=0.24), is GC-independent, and YY1 motifs at KLF13 sites are evolutionarily conserved — KLF13 directly reads the GC-rich YY1 motif via its own KLF/SP-family DNA-binding domain."
+      SHARED_MOTIF_NESTED:
+        definition: "Partner motif contains the target TF's recognition sequence as a sub-sequence (motif-in-motif / Trojan horse). The embedded sub-sequence IS what the target reads — direct DNA recognition of a contained motif."
+        key_evidence:
+          - "Target motif instances physically nested inside partner motif calls."
+          - "Motif similarity alone is insufficient; actual containment is shown."
+        example: "Partner PWM functions as a Trojan-horse motif containing the true target binding sequence."
+      COMPETITIVE_DNA_OCCUPANCY:
+        definition: >
+          Partner and target are both direct DNA binders whose binding sites
+          overlap; partner occupancy displaces target (or vice versa) at the
+          shared sequence. The negative coupling is via competitive DNA binding,
+          not via protein-protein antagonism or chromatin remodeling.
+        key_evidence:
+          - "Target and partner motifs overlap or share the same DNA sequence."
+          - "Partner occupancy is anti-correlated with target occupancy at those sites."
+          - "Both TFs are documented direct DNA binders at the contested sequence."
+        do_not_use_when:
+          - "The antagonism is mediated by a chromatin modifier or cofactor, not by direct competition for the same DNA element."
+
+  CONTEXTUAL_PROXY:
+    definition: >
+      The partner motif predicts target binding because the motif coincides with
+      some CONTEXT — either sequence-intrinsic (CpG density, motif-family similarity,
+      k-mer composition) or chromatin-defined (DNase / ATAC accessibility, histone
+      marks, promoter / enhancer annotation) — that the target actually responds to.
+      The motif itself is informative only as a positional marker; the partner
+      protein is not the mediator.
+    use_when: >
+      The strongest evidence is mediation by a sequence-intrinsic feature (CpG
+      density, motif family, k-mer composition) OR a chromatin / epigenomic
+      feature (DNase / ATAC, ChromHMM state, histone marks, promoter / enhancer
+      annotation) — and the motif marks that context as a positional / sequence
+      feature, WITHOUT demonstrated named-partner-protein occupancy at the sites.
+    do_not_use_when: >
+      The accessible / open-chromatin (or active-state) sites carry demonstrated
+      NAMED-PARTNER-protein occupancy (the partner itself, its complex, or a paralog
+      stand-in) — the accessibility is partner-associated, not a bare sequence
+      property (use PROTEIN_ASSOCIATED_CHROMATIN_PRIMING).
+      OR the chromatin state / context is ESTABLISHED or MAINTAINED by the PRESENT
+      partner protein binding its own motif at these sites — e.g., a sequence-specific
+      repressor (REST on RE1, etc.) that recruits HDAC / CoREST / Polycomb and lays down
+      the repressive state it is being credited with "marking." That is partner-driven,
+      not a bare sequence-marked context: use COFACTOR_ASSOCIATED_CO_OCCUPANCY (named
+      corepressor/coactivator) or PROTEIN_ASSOCIATED_CHROMATIN_PRIMING. CONTEXTUAL_PROXY
+      is only for a state the present partner protein did NOT create.
+      OR evidence supports direct sequence recognition (use DIRECT_DNA_RECOGNITION),
+      motif nesting (use DIRECT_DNA_RECOGNITION), protein-protein tethering
+      (use PROTEIN_TETHERING), third-TF motif-marker recruitment
+      (use MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT), or composite / phased motif grammar
+      (use MOTIF_GRAMMAR).
+    priority_rule: >
+      If a named MASTER / LINEAGE TF (AP-1, MYC, GATA, SPI1, etc.) independently
+      drives both target and partner occupancy at the same sites, use INDIRECT_MASTER_TF.
+      If the locus is a hyper-occupied TF region (many unrelated TFs co-bind), use
+      HOT_REGION_COOCCUPANCY.
+      If CpG density is directly tested and supported, use CPG_DENSITY_SEQUENCE_PROXY.
+      If DNase/ATAC mediation is directly tested and supported, use CHROMATIN_ACCESSIBILITY_PROXY.
+      If a specific histone mark or ChromHMM state defines the gating, use CHROMATIN_STATE_GATING.
+      If active promoter / TSS annotation is the dominant evidence without CpG or
+      accessibility mediation, use PROMOTER_SHARED_DRIVER.
+      If poised / bivalent enhancer marks dominate, use POISED_ENHANCER.
+      If regulatory-element-class (promoter vs enhancer) confounding dominates, use
+      REGULATORY_ELEMENT_STATE_CONFOUNDING.
+      If the motif marks a 3D architectural context (CTCF / Hi-C loop anchors,
+      TAD-boundary hubs) where the target binds, and partner-protein cooperation is
+      absent / rejected, use 3D_LOOP_CONTEXT.
+      Otherwise (other DNA-intrinsic features), use OTHER_SEQUENCE_FEATURE_PROXY.
+    children:
+      CPG_DENSITY_SEQUENCE_PROXY:
+        definition: "Partner motif captures CpG density, CpG islands, or CpG-rich promoter sequence context. Target binding is driven by CpG-rich DNA rather than direct partner-protein involvement."
+        key_evidence:
+          - "Partner motif score correlates with CpG O/E ratio."
+          - "Effect persists after controlling for raw GC content."
+          - "Target peaks enriched at CpG islands."
+        example: "Partner motif predicts target binding because it marks CpG-dense promoter context."
+      CHROMATIN_ACCESSIBILITY_PROXY:
+        definition: "Partner motif marks accessible / open chromatin regions; predictive power comes from accessibility (DNase / ATAC), not from sequence-specific recognition."
+        key_evidence:
+          - "Partner motif score correlates with DNase/ATAC signal."
+          - "Controlling for accessibility reduces or abolishes the motif-target association."
+        example: "Partner motif predicts target binding because it marks accessible regions where the target binds opportunistically."
+      CHROMATIN_STATE_GATING:
+        definition: "Partner motif marks a chromatin state defined by histone marks (H3K4me3, H3K4me1, H3K27me3, H3K9me3, etc.) that gates target binding."
+        key_evidence:
+          - "Motif-positive target peaks enriched for specific histone marks."
+          - "Chromatin state explains the association better than direct motif recognition."
+      PROMOTER_SHARED_DRIVER:
+        definition: "Partner motif predicts target binding because both features are enriched at active promoters of a shared gene set. Promoter context, not the partner motif itself, drives the association."
+        key_evidence:
+          - "Peaks enriched near TSSs / active promoter ChromHMM states."
+          - "Better explained by promoter context than by PPI, motif grammar, or accessibility alone."
+      POISED_ENHANCER:
+        definition: "Partner motif marks poised or bivalent enhancer regions (H3K4me1+ H3K27me3+, low/no H3K27ac)."
+      OTHER_SEQUENCE_FEATURE_PROXY:
+        definition: "Partner motif captures another DNA-intrinsic feature (k-mer composition, motif family similarity, low-complexity sequence, repeat-derived sequence, DNA-shape-associated features) when no more specific sequence-proxy subtype applies."
+      REGULATORY_ELEMENT_STATE_CONFOUNDING:
+        definition: >
+          Partner motif predicts target binding because it marks a regulatory
+          element class (promoter vs enhancer, etc.) where the target has
+          systematically different binding intensity. The motif itself is not
+          the mediator; the association is driven by differential target
+          occupancy across regulatory-element states.
+        use_when:
+          - "The global motif-target association is explained by promoter/enhancer or other regulatory-element-class imbalance."
+          - "Association weakens, disappears, or reverses after stratifying by those states."
+        do_not_use_when:
+          - "The motif marks a specific histone-defined state independent of regulatory element class (use CHROMATIN_STATE_GATING)."
+          - "Motif and target are both enriched at the same active promoters of a shared gene set (use PROMOTER_SHARED_DRIVER)."
+          - "Accessibility directly mediates the association (use CHROMATIN_ACCESSIBILITY_PROXY)."
+        key_evidence:
+          - "Target signal differs strongly across regulatory element classes (promoter vs enhancer)."
+          - "Partner motif is enriched in one regulatory element class and depleted in another."
+          - "Global motif-target association disappears, weakens, or changes direction after stratifying by regulatory element class."
+          - "No strong evidence for direct DNA recognition, protein tethering, or motif grammar."
+        example: "Partner motif negatively predicts target signal because the target binds strongly at promoters where the partner motif is depleted, while partner-motif-marked enhancer sites show weaker target signal."
+      HOT_REGION_COOCCUPANCY:
+        definition: "Target and partner co-bind because the locus is a hyper-occupied (HOT) TF region. Not pair-specific."
+        key_evidence:
+          - "Many unrelated TFs occupy the same sites."
+          - "Pair relationship weakens after HOT-region filtering."
+      INDIRECT_MASTER_TF:
+        definition: "A shared master / lineage TF (AP-1, MYC, GATA, SPI1, etc.) independently drives both partner and target occupancy at the same sites. No tethering proposed."
+        key_evidence:
+          - "Both bind independently downstream of the master regulator."
+          - "Target's own motif/binding logic remains intact."
+          - "No direct recruitment of target by the third TF is claimed."
+      3D_LOOP_CONTEXT:
+        definition: >
+          Partner motif marks a subset of target sites that co-localize with 3D
+          architectural context — CTCF-bound loop anchors, Hi-C loop / TAD-boundary
+          hubs — where the target binds. The motif is a positional marker for the
+          architectural compartment, not a protein-tethering signal: partner-protein
+          cooperation is absent / rejected, and any loop role is associative rather
+          than a causal partner-bound-region-to-target loop.
+        use_when:
+          - "Motif-positive target peaks are specifically enriched at CTCF / Hi-C loop anchors or architectural hubs."
+          - "Partner-protein cooperation (PPI / co-binding) is rejected; CTCF / loop-anchor co-occupancy is the supported signal."
+        key_evidence:
+          - "CTCF co-occupancy at loop anchors specifically enriched for motif-positive target peaks (and not at non-anchor peaks)."
+          - "Functional / target-gene divergence consistent with an architectural subset of sites."
+        do_not_use_when:
+          - "A causal loop brings a distal PARTNER-bound region into the target's vicinity (use PROTEIN_TETHERING / 3D_LOOP_TETHERING)."
+        example: "FOXD3-motif ZNF384 peaks are specifically enriched for CTCF co-occupancy at Hi-C loop anchors (FC=1.67) but not at non-anchor peaks; FOX cooperative binding is rejected — the motif marks an architectural-hub subset of ZNF384 sites."
+
+  PROTEIN_ASSOCIATED_CHROMATIN_PRIMING:
+    definition: >
+      Partner motif predicts target binding because the sites carry detectable
+      NAMED-PARTNER-protein occupancy AND permissive / accessible chromatin. The
+      occupancy must be the named partner's — counting the partner itself, a named
+      COMPLEX that contains it, or a PARALOG / family member used as a ChIP stand-in
+      for it (apply the NAMED-PARTNER CHECK). Covers the full causality spectrum:
+      from rare cases with proven causal opening (perturbation / time-course →
+      PIONEER_OPENING) down to associative cases where the partner is merely present
+      at accessible sites without a causal claim. In most reports the framing is
+      associative ("associated with", "consistent with") rather than causal
+      ("drives", "opens").
+    use_when: >
+      Motif-positive target peaks show elevated NAMED-PARTNER ChIP-seq signal
+      (called peaks OR below formal peak-calling threshold), AND those sites are
+      more accessible / show stronger target signal.
+    do_not_use_when: >
+      The named partner protein is NOT demonstrably at the sites. Two common cases,
+      both SEQUENCE-side: (a) the occupancy is by a GENUINELY DIFFERENT third TF
+      (not the partner, its complex, or a paralog stand-in) — e.g., partner=PHOX2B
+      (absent) but ARID3A occupies the accessible AT-rich sites — use
+      MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT; (b) ONLY accessibility / open-chromatin
+      marks the sites and no named-partner occupancy is demonstrated — use
+      CONTEXTUAL_PROXY (CHROMATIN_ACCESSIBILITY_PROXY).
+      OR direct recruitment / dependency of target on partner protein is
+      supported (use PROTEIN_TETHERING).
+      OR spacing / orientation grammar is the main evidence (use MOTIF_GRAMMAR).
+      OR a named cofactor complex is enriched (use COFACTOR_ASSOCIATED_CO_OCCUPANCY).
+    priority_rule: >
+      If the report provides CAUSAL evidence (perturbation / knockdown / degron /
+      time-course) showing partner actively opens chromatin for target, use PIONEER_OPENING.
+      If the central question is whether the partner is even at the sites
+      (sub-threshold ChIP signal, no called partner peaks), use SUBTHRESHOLD_PARTNER_OCCUPANCY.
+      If partner-positive sites are more accessible (DNase / ATAC) and target signal
+      is elevated there, but no causal evidence is given, use
+      OCCUPANCY_ASSOCIATED_ACCESSIBLE_CHROMATIN.
+    children:
+      PIONEER_OPENING:
+        definition: >
+          Partner protein CAUSALLY opens chromatin (DNase / ATAC) enabling target
+          access — partner is the pioneer factor. Requires explicit causal evidence
+          (perturbation / knockdown / degron / time-course), not just correlation.
+        key_evidence:
+          - "Knockdown / degradation / knockout of partner reduces accessibility AND target binding."
+          - "Time-course shows partner binding precedes accessibility and target binding."
+          - "Report explicitly uses 'pioneer factor', 'opens chromatin', 'drives accessibility' with causal data."
+        do_not_use_when:
+          - "Evidence is purely observational / correlative (use OCCUPANCY_ASSOCIATED_ACCESSIBLE_CHROMATIN)."
+          - "Partner ChIP signal is sub-threshold (use SUBTHRESHOLD_PARTNER_OCCUPANCY)."
+      SUBTHRESHOLD_PARTNER_OCCUPANCY:
+        definition: >
+          Motif-positive target peaks show WEAK but detectable partner ChIP-seq signal
+          DESPITE lacking called partner peaks. The central finding is the partner's
+          presence at sub-threshold levels. REQUIRES that the partner protein has no
+          (or very few) called peaks at the target sites — if the partner is robustly
+          co-bound with proper peak calls, use a stronger category instead.
+        use_when:
+          - "Partner ChIP signal at motif-positive target peaks is elevated vs background."
+          - "Partner does NOT have called peaks (or very few) at those sites — signal is genuinely sub-threshold."
+          - "Effect persists after matching for accessibility or GC content."
+        do_not_use_when:
+          - "Partner has robust called ChIP peaks co-occurring with target (use PROTEIN_TETHERING or PROTEIN_COOPERATIVE_BINDING)."
+          - "Partner motif marks a named complex's binding sites (use COFACTOR_ASSOCIATED_CO_OCCUPANCY)."
+          - "A different named TF (not the partner) mediates target binding (use MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT)."
+        example: "Partner-motif-positive target peaks show elevated partner-protein ChIP signal that is below standard peak-calling threshold (no called partner peaks); effect persists after DNase / GC matching."
+      OCCUPANCY_ASSOCIATED_ACCESSIBLE_CHROMATIN:
+        definition: "Partner-occupied (or partner-signal-positive) sites are more accessible (DNase / ATAC) and show stronger target binding, but active chromatin opening is not proven. Report uses associative language."
+        key_evidence:
+          - "Partner ChIP-seq signal correlates with DNase / ATAC at target sites."
+          - "Partner-overlapping target peaks have higher target signal (in accessibility-matched subsets)."
+          - "Report explicitly avoids causal claims (e.g., 'associated with', 'consistent with', 'best-supported interpretation does not establish causality')."
+        example: "Target peaks overlapping partner-positive regions show higher target signal in DNase-matched subsets; partner motif correlates with partner ChIP and DNase signals; causality not established."
+
+  PROTEIN_TETHERING:
+    definition: >
+      The target TF is RECRUITED or STABILIZED at chromatin by protein-level association
+      with the DNA-bound PARTNER PROTEIN (or a partner-bound cofactor / complex) — i.e.,
+      the target itself does not need to read its own DNA motif at these sites, and the
+      partner PROTEIN is physically present at the recruitment locus. Target's own DNA
+      motif is typically ABSENT, DEPLETED, or INSUFFICIENT.
+    use_when: >
+      Target binding depends on the partner PROTEIN (or a partner-bound cofactor)
+      being present and anchoring the target to chromatin. Partner ChIP-seq (or
+      direct PPI evidence) at the recruitment locus is required.
+    do_not_use_when: >
+      The two TFs jointly bind the same DNA element as a heterodimer (use PROTEIN_COOPERATIVE_BINDING).
+      OR co-occupancy + PPI exists but both TFs bind their OWN motifs independently
+      (use PROTEIN_COOPERATIVE_BINDING or CONTEXTUAL_PROXY). OR association is explained by
+      sequence/chromatin context. OR the partner PROTEIN is absent and a THIRD TF
+      anchors target at partner-motif sites (use MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT).
+      PPI evidence ALONE is not enough — the target must depend on partner-protein
+      occupancy for chromatin access.
+    children:
+      DIRECT_PPI_TETHERING:
+        definition: >
+          Partner protein directly tethers the target via a DIRECT protein-protein
+          interaction between the two TFs themselves at the partner's own
+          independent binding site. The target is recruited to DNA-bound partner protein
+          without forming a heterodimeric DNA-recognition complex.
+        required_boundary: >
+          REQUIRES STRING-validated (or equivalent published) DIRECT physical
+          PPI between the target and the partner protein. Shared interactors,
+          residual unexplained co-binding, or "potential" indirect tethering
+          DO NOT qualify — use COFACTOR_SCAFFOLD instead.
+          Also: NO shared half-site, NO paired half-site, NO E-box, NO AP-1/CRE-like
+          heterodimer element, and NO composite DNA element requiring both DNA-binding domains.
+        key_evidence:
+          - "STRING (or equivalent) reports a DIRECT high-confidence interaction edge between target and partner — not just shared interactors."
+          - "Partner motif/ChIP enriched at target peaks."
+          - "Target's own motif may be absent or insufficient."
+          - "The partner motif is an independent anchoring site, not a shared heterodimeric DNA element."
+        do_not_use_when:
+          - "STRING shows NO direct interaction between target and partner, only shared partners (use COFACTOR_SCAFFOLD)."
+          - "Report uses hedged language like 'potential indirect tethering' or 'PPI network' without a named direct edge (use COFACTOR_SCAFFOLD)."
+          - "The REPORT itself describes the mechanism as joint DNA recognition at a shared/paired half-site, E-box heterodimer, AP-1/CRE-like element, or other composite DNA element."
+          - "The target and partner jointly recognize one composite DNA element per the report's evidence."
+          - "A third NAMED cofactor bridges partner and target with directional evidence (use COFACTOR_TETHERING)."
+      COFACTOR_TETHERING:
+        definition: "Directional three-part recruitment: partner protein recruits a NAMED intermediary cofactor that then recruits/stabilizes the target. Partner → cofactor → target."
+        key_evidence:
+          - "Partner, cofactor, and target all identified."
+          - "Direction partner → cofactor → target supported by evidence."
+      COFACTOR_SCAFFOLD:
+        definition: >
+          Partner and target are linked via shared protein partners / scaffolding
+          but NOT a direct PPI between target and partner. Includes the common
+          case where STRING shows shared high-confidence interactors but no
+          direct edge between target and partner, and the report concludes
+          "potential indirect tethering" or "PPI network co-occupancy".
+          Directionality is not established.
+        use_when:
+          - "STRING shows NO direct target-partner edge, but multiple shared interactors."
+          - "Report language is hedged: 'potential indirect tethering', 'co-occupancy network', 'shared scaffold'."
+          - "Co-binding persists after controlling for known bridge factors, but no single named cofactor is implicated as the recruiter."
+        key_evidence:
+          - "Partner and target co-occur with shared cofactors / interactors."
+          - "Evidence does not prove who recruits whom."
+          - "No direct STRING / published PPI between target and partner themselves."
+        do_not_use_when:
+          - "There IS a direct STRING / published PPI edge between target and partner (use DIRECT_PPI_TETHERING)."
+          - "A single NAMED cofactor mediates partner → cofactor → target with directional evidence (use COFACTOR_TETHERING)."
+      3D_LOOP_TETHERING:
+        definition: "Hi-C loop anchors bring distal partner-bound region into target's vicinity."
+
+  COFACTOR_ASSOCIATED_CO_OCCUPANCY:
+    definition: >
+      Partner motif predicts target binding because motif-positive (or
+      target-partner co-bound) sites are enriched for a SPECIFIC NAMED chromatin
+      regulator or regulatory complex (coactivator / corepressor / remodeler).
+      The cofactor enrichment is strong and named, but the report does NOT
+      establish that this cofactor causally recruits the target — the
+      association is correlative.
+    use_when: >
+      The strongest positive evidence is co-occupancy with a specific named
+      chromatin-regulatory complex (e.g., EP300/CBP, MED1, BRD4, SMARCA4/BAF,
+      RCOR1/KDM1A/CoREST, HDAC1, SIN3A/B, CHD4/NuRD, TRIM28, Polycomb / EZH2 /
+      SUZ12). The report describes the relationship in associative terms
+      ("co-occupy", "enriched for", "associated with") rather than causal terms.
+      The cofactor co-occupancy must be an ESTABLISHED, SUPPORTED finding the run
+      relied on — not one the report flags as inconclusive or non-specific.
+    do_not_use_when: >
+      The named cofactor's link to the co-bound sites is NOT established —
+      e.g., the cofactor signal does not specifically track the co-bound sites, the
+      correlation is weaker / absent there, or the corepressor / coactivator
+      hypothesis came back INCONCLUSIVE or REJECTED. A bare enrichment number is not
+      enough if the run could not tie the cofactor to the mechanism. If that leaves
+      a non-converged run with no clean category, use NEED_HUMAN_LABEL rather than
+      forcing this one.
+      OR direct recruitment / dependency of target on partner protein is supported
+      (use PROTEIN_TETHERING).
+      OR evidence is only "shared STRING interactors" without a named functional
+      complex (use COFACTOR_SCAFFOLD).
+      OR main evidence is TF-TF co-binding or heterodimerization (use PROTEIN_COOPERATIVE_BINDING).
+      OR partner motif only marks accessibility / CpG / promoter / enhancer / chromatin
+      state without a specific cofactor (use CONTEXTUAL_PROXY).
+      OR perturbation shows the cofactor actively changes accessibility or chromatin
+      state (use PROTEIN_ASSOCIATED_CHROMATIN_PRIMING / PIONEER_OPENING).
+      OR partner ChIP is weak / subthreshold with permissive chromatin and no named
+      complex (use PROTEIN_ASSOCIATED_CHROMATIN_PRIMING).
+    priority_rule: >
+      If the enriched complex is repressive (RCOR1, KDM1A, CoREST, HDAC1/2, SIN3A/B,
+      CHD4/NuRD, TRIM28, Polycomb / EZH2 / SUZ12), use COREPRESSOR_MARKED_COMPLEX.
+      If the enriched complex is activating / coactivator (EP300, CBP, MED1, BRD4),
+      use COACTIVATOR_MARKED_ACTIVE_COMPLEX.
+      If the enriched complex is a chromatin remodeler (SMARCA4/BAF, ISWI components)
+      without causal remodeling evidence, use REMODELER_MARKED_COMPLEX.
+    children:
+      COACTIVATOR_MARKED_ACTIVE_COMPLEX:
+        definition: "Motif-positive or co-bound sites are enriched for activating cofactors such as EP300, CBP, MED1, BRD4, or related enhancer/promoter coactivator machinery."
+        key_evidence:
+          - "Named coactivator enriched at motif-positive target peaks."
+          - "Often associated with H3K27ac or active-enhancer signature."
+        example: "Partner-motif-positive target peaks enriched for coactivators (EP300, MED1, etc.) vs motif-matched controls; no causal evidence of coactivator recruitment by partner."
+      COREPRESSOR_MARKED_COMPLEX:
+        definition: "Motif-positive or co-bound sites are enriched for repressive cofactors such as RCOR1, KDM1A, HDAC1/2, SIN3A/B, CHD4/NuRD, TRIM28, or Polycomb-related machinery."
+        key_evidence:
+          - "Named corepressor complex (CoREST, SIN3, NuRD, Polycomb, TRIM28) enriched at motif-positive target peaks."
+          - "Often associated with reduced H3K27ac or elevated H3K27me3/H3K9me3."
+        example: "Partner-motif-positive target peaks enriched for a corepressor complex (e.g., CoREST RCOR1/KDM1A/HDAC1, SIN3, NuRD) and show reduced H3K27ac; causality not established."
+      REMODELER_MARKED_COMPLEX:
+        definition: "Motif-positive or co-bound sites are enriched for chromatin remodeling machinery such as SMARCA4/BAF or ISWI components, without proving that remodeling is causally required."
+        key_evidence:
+          - "Named remodeler (SMARCA4/BRG1, ARID1A/B, BAF subunits) enriched at target sites."
+          - "No perturbation / time-course evidence that remodeling causes target binding."
+
+  MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT:
+    definition: >
+      The partner MOTIF (not the partner protein) marks loci whose target binding
+      is governed by a THIRD factor — either a third TF / complex, or the target's
+      OWN family / heterodimer partner whose composite binding site the partner
+      motif surrogates. The named partner PROTEIN itself is typically absent or weak
+      at these sites; the motif is a sequence / positional marker for the third
+      factor's binding determinant, which is why the relationship is sequence-driven
+      rather than partner-protein-driven. The third factor can act in three ways:
+      (a) RECRUIT / stabilize / anchor the target via PPI to a site the third TF reads
+          — the TARGET does NOT contact DNA itself (INDIRECT_TETHERING,
+          MOTIF_PROXY_COOPERATIVE_BINDING);
+      (b) SURROGATE for an altered / extended site the target reads AS A HETERODIMER
+          with its own family partner — the target DOES contact DNA, as a dimer
+          (MOTIF_SURROGATE_HETERODIMERIZATION);
+      (c) competitively EXCLUDE the target (partner motif NEGATIVELY predicts target
+          binding) — COMPETITIVE_EXCLUSION.
+    use_when: >
+      The partner motif's predictive power is explained by a THIRD factor (a third
+      TF / complex, or the target's own dimer partner) whose binding the motif marks
+      or surrogates — whether it recruits, co-binds as a dimer-surrogate, or excludes
+      the target. The named partner protein itself is not the mediator.
+    do_not_use_when: >
+      The named PARTNER PROTEIN is itself present and tethering the target —
+      directly, OR by recruiting a COFACTOR (partner -> cofactor -> target, e.g.
+      REST -> CoREST/HDAC), OR by establishing the chromatin state at its own bound
+      sites (use PROTEIN_TETHERING / COFACTOR_TETHERING / COFACTOR_ASSOCIATED_CO_OCCUPANCY
+      / PROTEIN_ASSOCIATED_CHROMATIN_PRIMING) or co-binding it as a
+      heterodimer / cooperative pair at their OWN motifs (use PROTEIN_COOPERATIVE_BINDING;
+      note this is the NAMED partner, not a target paralog — a target paralog dimer with
+      the partner protein absent is MOTIF_SURROGATE_HETERODIMERIZATION).
+      In particular, when the partner motif IS the partner's own recognition sequence
+      and the partner is expressed (a sequence-specific factor reading its own site,
+      e.g. REST on RE1), the partner is PRESENT — its recruitment of a cofactor or its
+      "marking" of a chromatin state is PROTEIN-driven, NOT third-factor motif-marking.
+      OR the target reads the partner motif directly as its own recognition sequence
+      with no third factor invoked (use DIRECT_DNA_RECOGNITION). OR the motif merely
+      marks broad chromatin / accessibility / promoter context or a HOT region without
+      a specific third factor (use CONTEXTUAL_PROXY / HOT_REGION_COOCCUPANCY).
+      OR the "third factor" is CTCF or an architectural / insulator factor and the
+      supported finding is co-localization at Hi-C loop anchors / TAD boundaries
+      (an architectural compartment, NOT a PPI-recruitment claim) — use
+      CONTEXTUAL_PROXY / 3D_LOOP_CONTEXT.
+      OR a shared master / lineage TF drives both independently (use INDIRECT_MASTER_TF).
+    priority_rule: >
+      If a THIRD TF competitively EXCLUDES the target at the partner-motif sites
+      (partner motif score NEGATIVELY predicts target binding; mutual exclusivity /
+      anti-correlation with a named third TF that reads the motif), use COMPETITIVE_EXCLUSION.
+      Else, if the partner motif is a SURROGATE for the target's OWN heterodimer /
+      family-complex binding site (target reads DNA as a dimer with a family partner;
+      named partner protein absent / unexpressed), use MOTIF_SURROGATE_HETERODIMERIZATION.
+      Else, for POSITIVE recruitment by a distinct third TF:
+      MOTIF_PROXY_COOPERATIVE_BINDING is the DEFAULT when there is ANY explicit
+      motif degeneracy / PWM similarity / sequence-proxy evidence, e.g. the report
+      says "partner motif is a sequence proxy for X", "partner PWM is degenerate
+      with Y's motif", "third TF directly recognizes the partner motif", "the
+      partner motif acts as a proxy for E-box factors", or names a TF whose
+      motif resembles the partner motif. The third TF need not be definitively
+      proven to bind via PWM similarity — explicit motif-proxy language in the
+      report is sufficient.
+      Use INDIRECT_TETHERING ONLY when a third TF is named as the recruiter via
+      ChIP-seq enrichment / PPI / regulatory connection AND there is NO motif-proxy
+      evidence (the third TF binds the locus via its own independent motif, not
+      via the partner motif).
+    children:
+      INDIRECT_TETHERING:
+        definition: >
+          Partner motif marks loci where a NAMED third TF or complex recruits /
+          stabilizes / anchors the target via the third TF's own independent
+          binding, NOT via PWM similarity to the partner motif. The third TF
+          binds its own motif (which happens to co-localize with partner-motif
+          sites) and tethers the target there.
+        use_when:
+          - "A named third TF anchors target at partner-motif sites via the third TF's OWN motif (no PWM-similarity claim)."
+          - "Third TF ChIP enriched at partner-motif sites; controlling for third TF attenuates the motif-target correlation."
+          - "Report uses 'tethering', 'recruitment', 'anchoring', 'co-occupancy with [third TF]', WITHOUT any 'sequence proxy' / 'PWM similarity' / 'directly recognizes the partner motif' language."
+        do_not_use_when:
+          - "Report describes the partner motif as a 'sequence proxy' / 'PWM proxy' / 'motif proxy' for the third TF (use MOTIF_PROXY_COOPERATIVE_BINDING)."
+          - "Report says the third TF 'directly recognizes' / 'reads' / 'binds' the partner motif (use MOTIF_PROXY_COOPERATIVE_BINDING)."
+          - "Partner motif belongs to a family whose members read overlapping PWMs and a named family member is the actual binder (use MOTIF_PROXY_COOPERATIVE_BINDING)."
+          - "Third TF merely marks the same active promoters or HOT regions (use INDIRECT_MASTER_TF / HOT_REGION_COOCCUPANCY)."
+          - "Target binds independently with its own motif intact AND no third TF mediates."
+          - "Partner PROTEIN is itself directly recruiting the target via PPI (use DIRECT_PPI_TETHERING)."
+        example: "Partner-motif-positive target peaks are enriched for a NAMED third TF's ChIP signal, the third TF binds via its own independent motif (not the partner motif), and controlling for that third TF's occupancy attenuates the partner-motif → target-binding correlation."
+      MOTIF_PROXY_COOPERATIVE_BINDING:
+        definition: >
+          Partner motif is a PWM proxy / sequence proxy for a different TF, and
+          that third TF cooperatively supports target binding. The partner motif
+          marks sites that actually belong to (or are read by) the PWM-similar
+          third TF, which is the real anchor for target binding.
+        use_when:
+          - "Report explicitly states the partner motif is a 'sequence proxy', 'PWM proxy', or 'motif proxy' for a named third TF."
+          - "Report says the third TF 'directly recognizes', 'reads', or 'binds' the partner motif."
+          - "Report notes motif degeneracy / PWM similarity between the partner motif and the third TF's motif."
+          - "Partner motif belongs to a TF family where multiple members read overlapping PWMs (e.g., KLF/SP, E-box factors, GATA family, ETS family) and a specific family member is named as the actual binder."
+        key_evidence:
+          - "Explicit motif-proxy / PWM-similarity language in the report."
+          - "Third TF ChIP-seq overlaps target peaks at partner-motif sites."
+          - "Third TF occupancy is associated with stronger target binding."
+        example: "Partner motif (e.g., a KLF/SP-family PWM, or a generic E-box) acts as a sequence proxy for a specific third TF (e.g., SP1 or MAX), and that third TF cooperatively supports target binding."
+      MOTIF_SURROGATE_HETERODIMERIZATION:
+        definition: >
+          The partner motif is a SURROGATE / PWM proxy for the altered or extended
+          binding sequence that the TARGET reads as a HETERODIMER with its OWN family
+          partner(s) — NOT with the named partner protein, which is typically absent
+          or unexpressed. The motif's predictive power comes from being a sequence
+          stand-in for the heterodimer's recognition site. UNLIKE the recruitment
+          subtypes, the target DOES contact DNA here — but as part of a family dimer
+          whose composite site the partner motif captures, so it stays sequence-driven
+          (and distinct from a PROTEIN_COOPERATIVE_BINDING heterodimer of the NAMED pair).
+        use_when:
+          - "Named partner protein is absent / unexpressed, yet its motif predicts target binding."
+          - "Report calls the partner motif a 'surrogate', says it 'captures the heterodimer's preference', or a 'proxy for an altered/extended site' the target's family dimer reads."
+          - "The target's own family dimer partner(s) (paralogs / obligate dimer partner) co-occupy a large fraction of motif-positive target peaks."
+        key_evidence:
+          - "Named dimer partner(s) of the target (e.g., USF1 for USF2; MEF2A/MEF2B for MEF2C) co-occupy most motif-positive target peaks."
+          - "High-confidence PPI / known dimerization between target and its family partner(s)."
+          - "Partner motif resembles the canonical site the target's family reads (E-box, MEF2 site, etc.)."
+        do_not_use_when:
+          - "The NAMED partner protein (not a target paralog) is the heterodimer partner and is present (use PROTEIN_COOPERATIVE_BINDING / HETERODIMERIZATION)."
+          - "The target reads the motif alone with no dimer requirement (use DIRECT_DNA_RECOGNITION / DIRECT_SEQUENCE_RECOGNITION)."
+        example: "ARNT2 motif is a canonical E-box surrogate for the USF1/USF2 heterodimer: USF2 (target) binds the E-box as a dimer with USF1, and the ARNT2 PWM marks those sites even though ARNT2 protein is not the binder. Likewise PHOX2B motif surrogates the MEF2C/MEF2A/MEF2B heterodimer site."
+      COMPETITIVE_EXCLUSION:
+        definition: >
+          The partner motif is read by a NAMED third TF whose occupancy competitively
+          EXCLUDES / displaces the target, so the partner motif score NEGATIVELY
+          predicts target binding. The third TF (not the partner protein) occupies the
+          motif and the target is depleted / mutually exclusive there.
+        use_when:
+          - "Partner motif score NEGATIVELY predicts target ChIP signal."
+          - "A named third TF is enriched for the partner motif and shows mutual exclusivity / anti-correlation with the target at those sites."
+          - "Target signal is depleted at third-TF-occupied, motif-positive sites vs matched controls."
+        key_evidence:
+          - "Mutual exclusivity (little / no peak overlap) between target and the third TF."
+          - "Third TF enriched for the partner motif as its real reader (e.g., IRF4 on an ISRE-like STAT1::STAT2 motif; MYC/MAX at ZFX-motif sites)."
+          - "Target signal significantly lower at motif-positive / third-TF-positive sites."
+        do_not_use_when:
+          - "The exclusion is by the PARTNER protein itself directly competing for the SAME DNA element (use DIRECT_DNA_RECOGNITION / COMPETITIVE_DNA_OCCUPANCY)."
+          - "The partner motif POSITIVELY predicts target binding (use the recruitment / surrogate subtypes)."
+        example: "STAT1::STAT2 motif is an ISRE read by IRF4; IRF4 and ZNF274 are mutually exclusive, so the motif negatively predicts ZNF274 — the third TF excludes the target. Similarly, ZFX-motif sites are occupied by MYC/MAX, which is associated with displaced/reduced ATF2."
+
+  PROTEIN_COOPERATIVE_BINDING:
+    definition: >
+      The TARGET and the NAMED PARTNER are both DNA-binding TFs whose joint binding
+      depends on PROTEIN-PROTEIN cooperation between THE TWO OF THEM
+      (heterodimerization or cooperative PPI at adjacent independent motifs). Each
+      TF contacts DNA at its own motif, but stable occupancy requires the other
+      protein. KEY DIAGNOSTIC: the cooperating / dimerizing partner IS the named
+      partner TF itself, and that partner protein is PRESENT (expressed, ChIP- or
+      PPI-detectable) at the sites. If the dimer partner is some OTHER factor and
+      the named partner protein is absent, this is NOT the right category.
+      Distinct from MOTIF_GRAMMAR (where the partner-motif sequence itself is
+      part of an extended grammar the target reads).
+    required_boundary: >
+      REQUIRES demonstrated ChIP-seq CO-OCCUPANCY of BOTH the target AND the named
+      partner protein at the shared sites (both proteins physically there). Protein
+      cooperation CANNOT be inferred from motif evidence alone — motif co-occurrence,
+      a composite element, or constrained spacing WITHOUT ChIP-seq showing both
+      proteins occupy is MOTIF_GRAMMAR (sequence), not this category.
+    use_when: >
+      The report describes THE TARGET AND THE NAMED PARTNER as heterodimer / dimer
+      partners AND shows BOTH proteins' ChIP-seq occupancy at the shared sites (or
+      strong direct PPI plus both-protein co-binding). Target depends on the NAMED
+      PARTNER PROTEIN being present (demonstrated by ChIP, not just by its motif)
+      AND target contacts DNA at the site.
+    do_not_use_when: >
+      The evidence is only MOTIF-LEVEL — both motifs present, a composite element,
+      or constrained / phased spacing — WITHOUT ChIP-seq demonstrating that BOTH
+      proteins occupy the shared sites. Protein cooperation is not established by
+      motif grammar alone; use MOTIF_GRAMMAR.
+      The NAMED PARTNER protein is ABSENT / unexpressed / rejected as a binder and
+      the actual dimer (or cooperative) partner is a DIFFERENT factor — e.g., a
+      target paralog or family member (USF1 for USF2, MEF2A/B for MEF2C) — whose
+      binding site the partner MOTIF merely surrogates. That is sequence-driven:
+      use MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT (MOTIF_SURROGATE_HETERODIMERIZATION).
+      OR the TARGET does NOT read DNA at the site — it is recruited via PPI to a
+      site read by a different TF (use MOTIF_MARKED_THIRD_FACTOR_RECRUITMENT or
+      PROTEIN_TETHERING). OR target's own motif is absent/depleted at the shared
+      sites and target binding depends on the partner protein anchoring it
+      (use PROTEIN_TETHERING).
+      OR the partner motif is part of an extended / phased combined DNA element
+      that target reads (use MOTIF_GRAMMAR).
+      OR association is explained by chromatin context, CpG density, accessibility,
+      or shared regulatory hub without joint DNA recognition.
+      OR the target alone directly reads the partner motif sequence without
+      partner-protein involvement (use DIRECT_DNA_RECOGNITION).
+    children:
+      HETERODIMERIZATION:
+        definition: >
+          Target and partner TFs physically dimerize on DNA as a DNA-binding dimer,
+          usually through compatible DNA-binding domains.
+        use_when: >
+          The report's supported mechanism describes the two TFs as forming a
+          heterodimer / dimer / cooperative DNA-binding complex (bZIP, bHLH, nuclear-receptor,
+          AP-1, C/EBP-ATF, E-box partners, etc.). Picking this value does NOT require the
+          report to explicitly name a shared half-site — TF-family heterodimer language
+          (e.g., "bZIP heterodimer", "ATF/CEBP heterodimer") is sufficient.
+        key_evidence:
+          - "Known or strong direct PPI between the two TFs."
+          - "Both TFs are known heterodimer partners or compatible DNA-binding-domain partners."
+          - "Report uses 'heterodimer', 'heterodimerization', 'dimer at DNA', or names a heterodimer family."
+        do_not_use_when:
+          - "Partner has its own independent binding site and target is RECRUITED by PPI without joint DNA dimerization (use DIRECT_PPI_TETHERING)."
+          - "A third cofactor bridges the two TFs (use COFACTOR_TETHERING / COFACTOR_SCAFFOLD)."
+          - "Co-occupancy is explained by shared chromatin context rather than dimer formation (use CONTEXTUAL_PROXY)."
+      COOPERATIVE_ADJACENT:
+        definition: "Adjacent INDEPENDENT motifs enable cooperative binding via PPI between the two DNA-bound TFs, without direct dimerization AND without constrained spacing. Use only when there is no helical/stereospecific spacing requirement and no extended composite element."
+
+  MOTIF_GRAMMAR:
+    definition: >
+      The partner motif is part of a local DNA sequence grammar — either an
+      extended composite element or a stereospecifically phased motif pair — that
+      explains target binding. Predictive power comes from the DNA arrangement
+      itself, not from a loose protein scaffold or broad chromatin context. The
+      partner protein need not be invoked unless directly supported.
+    use_when: >
+      Evidence describes the target's binding site as part of a combined / fused
+      / extended sequence element that includes the partner motif, OR shows that
+      target binding requires a constrained spacing / phasing relative to the
+      partner motif. This is the correct category when the evidence is MOTIF-LEVEL
+      (composite element / spacing) and ChIP-seq occupancy of BOTH proteins is NOT
+      demonstrated — protein cooperation must not be assumed from motif grammar alone.
+    do_not_use_when: >
+      ChIP-seq demonstrates that BOTH the target AND the named partner protein occupy
+      the shared sites and cooperate there (heterodimer / cooperative binding) — then
+      it is PROTEIN_COOPERATIVE_BINDING, not motif grammar. OR target
+      binds its own motif independently with no extended-grammar requirement
+      (use DIRECT_DNA_RECOGNITION). OR partner motif merely marks shared
+      context without grammar (use CONTEXTUAL_PROXY).
+    priority_rule: >
+      The distinction is binary, based on whether the two motifs touch:
+      If the target and partner motifs OVERLAP / FUSE / are EMBEDDED into one
+      combined recognition element that the target reads as a single binding site,
+      use COMPOSITE_MOTIF_GRAMMAR.
+      If the two motifs are SEPARATE (non-overlapping) but their spacing is
+      distance-constrained — either a preferred distance window (e.g., a named
+      composite element class like ETS-GATA) or a rigid helical-turn-preserving /
+      stereospecific phase (e.g., EICE ETS-IRF) — use STEREOSPECIFIC_PHASING.
+    children:
+      COMPOSITE_MOTIF_GRAMMAR:
+        definition: "Target and partner motifs OVERLAP, FUSE, or are EMBEDDED into one combined / extended recognition element that the target reads as a single binding site (motif-in-motif or fused composite)."
+        example: "Target and partner motifs fuse / overlap into a single composite sequence element that the target reads as one binding site."
+      # COMPOSITE_MOTIF_SPACING:  # 2026-05: merged into STEREOSPECIFIC_PHASING. The
+      #   # MOTIF_GRAMMAR distinction is now binary — fused/overlapping ->
+      #   # COMPOSITE_MOTIF_GRAMMAR; separate-but-distance-constrained (preferred
+      #   # window OR rigid phase) -> STEREOSPECIFIC_PHASING. Kept commented for record.
+      #   definition: >
+      #     Two DISTINCT motifs (target's own and partner's) co-occur at a constrained
+      #     but non-stereospecific spacing — a named composite element class or a
+      #     preferred distance window, but without the rigid helical-phase requirement
+      #     of STEREOSPECIFIC_PHASING.
+      #   key_evidence:
+      #     - "Report names a composite element class (e.g., ETS-GATA, GATA-E-box)."
+      #     - "Specific distance window enriched between target and partner motifs."
+      #     - "No claim of helical-turn-preserving / stereospecific phasing."
+      #   example: "Target and partner motifs co-occur at a named composite element class (e.g., ETS-GATA, GATA-E-box) with a preferred but non-stereospecific spacing window."
+      STEREOSPECIFIC_PHASING:
+        definition: >
+          Two SEPARATE (non-overlapping) motifs — the target's own and the partner's —
+          co-occur at a distance-constrained spacing. Covers BOTH a preferred distance
+          window (e.g., a named composite element class such as ETS-GATA, GATA-E-box)
+          AND a rigid helical-turn-preserving / stereospecific phase (e.g., EICE ETS-IRF).
+          The constraint is on the spacing BETWEEN two distinct motifs, not on fusing
+          them into one element.
+        key_evidence:
+          - "Two distinct, non-overlapping motifs with a significantly constrained inter-motif distance (preferred window or fixed helical phase)."
+          - "Report names a composite element class and/or reports a specific enriched distance / phasing ('stereospecific', 'rigid spacing', 'constrained spacing', 'phasing', or a significantly enriched distance bin / Z-score)."
+        example: "MAFK and ZNF354A motifs are separate but their spacing is significantly constrained (median ~74 bp, Z=-10.3); or ETS-IRF at strict EICE helical phasing."
+
+  ARTIFACT:
+    definition: >
+      The motif-target relationship called out by the upstream ML / SHAP screen
+      is not a true biological mechanism — the partner motif's predictive
+      power fails when tested rigorously, either because it's a generic ML
+      feature proxy, a technical artifact, or because the motif's score is
+      simply not mechanistically supported (rare in target peaks, or score
+      doesn't correlate with binding).
+    use_when: >
+      The PARTNER MOTIF specifically is unsupported as the driver of target
+      binding. This holds EVEN IF the run uncovers real biology elsewhere
+      (e.g., a different TF cooperating, a different cofactor complex, a de
+      novo motif) — what matters for ARTIFACT is whether the NAMED partner
+      motif's predictive power survived testing. If the report concludes the
+      partner motif is rare / absent / score-uncorrelated / "failed to
+      validate the premise" / "GATA motif scores did not correlate" /
+      similar, classify as ARTIFACT regardless of incidental findings.
+    do_not_use_when: >
+      The partner motif's predictive power IS supported (positively
+      correlated with target binding, or it marks sites of a real cofactor /
+      third-TF mechanism). Incidental findings about other TFs are NOT
+      enough to avoid ARTIFACT — only the partner-motif-itself-supports
+      criterion matters.
+    children:
+      MODEL_ARTIFACT:
+        definition: "Partner motif is a feature proxy the ML model latched onto with no biological basis."
+      TECHNICAL_ARTIFACT:
+        definition: "Antibody cross-reactivity, peak-calling noise, mappability bias, etc."
+      PARTNER_MOTIF_UNSUPPORTED:
+        definition: >
+          The partner motif identified by the upstream ML / SHAP screen as a
+          top predictor of target binding is NOT mechanistically supported by
+          the data. Two patterns qualify:
+          (a) the motif is rare or physically absent from target peaks
+              (typically <5% coverage under conventional motif scanning), or
+          (b) the motif is present in target peaks but its SCORE does not
+              correlate with target binding intensity when properly tested
+              (e.g., score correlations near zero, no difference between
+              motif-high vs motif-low subsets after matching for confounders).
+          In both cases the SHAP screen attributed predictive power to a
+          feature that isn't the real driver. The run may still surface real
+          biology at co-bound hubs involving DIFFERENT TFs or cofactors, but
+          that biology is independent of the named partner motif.
+        use_when:
+          - "Partner motif coverage in target peaks is <5% (physical absence)."
+          - "OR partner motif score shows no correlation with target binding at properly-matched sites."
+          - "OR motif-high vs motif-low subsets show no difference in target signal."
+          - "AND the supported biology (if any) is attributed to a different TF / cofactor unrelated to the partner motif."
+        key_evidence:
+          - "Mediation hypotheses for the partner motif (chromatin, methylation, 3D, etc.) uniformly REJECT."
+          - "Report explicitly uses language like 'motif rarity', 'motif absence', 'motif unsupported', 'premise failed to validate', 'GATA motif scores did not correlate', 'no difference between motif-high and motif-low'."
+          - "Supported mechanism (if any) names a different TF / cofactor as the real driver."
+        example: "Partner motif found in <2% of target peaks and mediation REJECTS everywhere; OR partner motif present in peaks but its score has near-zero correlation with target signal — instead, a third TF (e.g., TAL1) cooperativity is what actually predicts target binding."
+
+
+# Special values, never picked by Call 1; set by deterministic / fallback logic:
+# UNRESOLVED       — set when convergence_blocker in {NO_SUPPORTS, ONLY_CHARACTERIZATION_SUPPORT}
+# NEED_HUMAN_LABEL — set when Call 2 returns a value not in the chosen category's children

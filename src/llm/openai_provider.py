@@ -10,6 +10,7 @@ from openai import (
     AsyncOpenAI,
     APIConnectionError,
     APITimeoutError,
+    AuthenticationError,
     InternalServerError,
     RateLimitError,
 )
@@ -19,11 +20,19 @@ from src.utils.logging import get_logger
 
 
 # Retry configuration
-# Linear backoff: delay[i] = RETRY_DELAY_BASE * (i + 1)
-# Total window: sum(5, 10, 15, ..., 50) = 275s (~4.5 min), tuned to ride out
-# MiniMax/Z.AI multi-minute 5xx windows seen in the Apr 13 runs (529 overloaded_error).
-MAX_RETRIES = 10
+# Capped exponential backoff: delay[i] = min(RETRY_DELAY_CAP, RETRY_DELAY_BASE * 2**i).
+# Sequence with base=5, cap=60: 5, 10, 20, 40, 60, 60, 60, ...
+# Backoff-sleep budget for MAX_RETRIES=20: ~17 min wall-clock.
+#
+# TOTAL_RETRY_BUDGET_SEC is the hard ceiling on the WHOLE operation (initial
+# call + all retry attempts + all backoff sleeps). Once exceeded, the
+# operation is cancelled and asyncio.TimeoutError propagates. Tuned to ride
+# out MiniMax/Z.AI multi-minute 5xx windows (Apr 13 runs: 529 overloaded_error;
+# May 6 runs: extended (2049) 401 bursts during high load).
+MAX_RETRIES = 20
 RETRY_DELAY_BASE = 5.0
+RETRY_DELAY_CAP = 60.0
+TOTAL_RETRY_BUDGET_SEC = 3600.0  # 1 hour
 
 
 class OpenAIProvider(LLMProvider):
@@ -58,6 +67,22 @@ class OpenAIProvider(LLMProvider):
         self._max_tokens_param = "max_tokens" if base_url is not None else "max_completion_tokens"
         self.default_reasoning_effort: str | None = kwargs.get("reasoning_effort")
 
+    @staticmethod
+    def _is_minimax_load_401(exc: BaseException) -> bool:
+        """Detect MiniMax's load-induced 401 (vs a real auth failure).
+
+        Under high load, MiniMax sometimes returns HTTP 401 with body
+        ``{"error": {"type": "authorized_error", "message": "invalid api key (2049)"}}``
+        for requests that are NOT actually unauthorized — the same key works
+        seconds before and after. Treating this as retryable lets the pair
+        survive transient bursts. A real auth failure (wrong key) will hit
+        the same 401 across all retries and ultimately raise — bounded loss.
+        """
+        if not isinstance(exc, AuthenticationError):
+            return False
+        msg = str(exc).lower()
+        return "(2049)" in msg or "authorized_error" in msg
+
     async def _retry_with_backoff(self, operation, operation_name: str):
         """Execute an operation with exponential backoff retry on transient errors.
 
@@ -75,10 +100,12 @@ class OpenAIProvider(LLMProvider):
         for attempt in range(MAX_RETRIES + 1):
             try:
                 return await operation()
-            except self.RETRYABLE_ERRORS as e:
+            except BaseException as e:  # noqa: BLE001 — re-raised below if not retryable
+                if not (isinstance(e, self.RETRYABLE_ERRORS) or self._is_minimax_load_401(e)):
+                    raise
                 last_error = e
                 if attempt < MAX_RETRIES:
-                    delay = RETRY_DELAY_BASE * (attempt + 1)
+                    delay = min(RETRY_DELAY_CAP, RETRY_DELAY_BASE * (2 ** attempt))
                     self.logger.warning(
                         f"{operation_name} failed, retrying in {delay}s",
                         {"error": str(e), "attempt": attempt + 1, "max_retries": MAX_RETRIES}
@@ -134,7 +161,11 @@ class OpenAIProvider(LLMProvider):
             return await self.client.chat.completions.create(**request_params)
 
         try:
-            response = await self._retry_with_backoff(_make_request, "Completion")
+            # Hard 1-hour cap on the whole retry loop (calls + sleeps).
+            response = await asyncio.wait_for(
+                self._retry_with_backoff(_make_request, "Completion"),
+                timeout=TOTAL_RETRY_BUDGET_SEC,
+            )
 
             # Debug: log full response structure for GPT-5.2 compatibility
             message = response.choices[0].message
@@ -220,7 +251,11 @@ class OpenAIProvider(LLMProvider):
             return await self.client.chat.completions.create(**request_params)
 
         try:
-            response = await self._retry_with_backoff(_make_request, "JSON completion")
+            # Hard 1-hour cap on the whole retry loop (calls + sleeps).
+            response = await asyncio.wait_for(
+                self._retry_with_backoff(_make_request, "JSON completion"),
+                timeout=TOTAL_RETRY_BUDGET_SEC,
+            )
 
             # Record actual usage for cost tracking
             if response.usage:
