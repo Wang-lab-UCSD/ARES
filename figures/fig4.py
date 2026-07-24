@@ -245,43 +245,91 @@ def reader_tracks_target():
 
     x = median Spearman r of matched random TFs with the target at those loci; y = the ARES reader.
     A point above the diagonal means the reader tracks the target better than an arbitrary expressed
-    TF does at the same places. Filled = beats all nulls; open = beats their median only.
+    TF does at the same places. Marker area is the reader's ChIP-peak overlap with the target
+    (10/50/90% reference sizes in the key); colour is the per-point significance class.
+
+    The paired Wilcoxon across the 42 dependencies is the evidence. The per-point q (a t-approx to
+    Spearman r, BH-corrected) only classifies the markers; loci within a dependency are not
+    independent, so that q is optimistic and is not the test.
     """
     d = pd.read_csv(data('fig4', 'reader_corr_namesake_unbound_hidden.csv'))
     pres = pd.read_csv(data('fig4', 'reader_presence_merged.csv'))
     d = d.merge(pres[['cell', 'target', 'namesake', 'frac_reader_bound']],
                 on=['cell', 'target', 'namesake'], how='left')
+    fb = d.frac_reader_bound.fillna(d.frac_reader_bound.median()).values
     x, y = d.r_null_median.values, d.r_reader.values
     above = int((y > x).sum())
     p = stats.wilcoxon(y, x, alternative='greater').pvalue
-    strict = d.beats_all.values if 'beats_all' in d.columns else np.zeros(len(d), bool)
+    q = d.q_reader.values if 'q_reader' in d else np.ones(len(d))
+    sig_pos, sig_neg = (q < 0.05) & (y > 0), (q < 0.05) & (y < 0)
+    ns = ~sig_pos & ~sig_neg
+    cR, cNeg = desat('#e67e22'), CC['SEQUENCE']
 
-    RDc = desat('#e67e22')
-    fig, ax = plt.subplots(figsize=(3.3, 3.3))
-    lim = [-0.75, 1.0]
-    ax.plot(lim, lim, color='0.6', lw=0.9, ls=(0, (5, 3)), zorder=2)
-    ax.axhline(0, color='0.9', lw=0.6, zorder=0)
-    ax.axvline(0, color='0.9', lw=0.6, zorder=0)
-    ax.scatter(x[strict], y[strict], s=20, color=RDc, edgecolor=dk(RDc), linewidth=0.4,
-               alpha=0.85, zorder=4)
-    ax.scatter(x[~strict], y[~strict], s=18, color='white', edgecolor=dk(RDc), linewidth=0.7,
-               alpha=0.9, zorder=5)
-    ax.annotate(f'$n$ = {len(d)} hidden-reader\ndependencies\n\n'
-                f'{above}/{len(d)} above diagonal\n\n'
-                f'$P$ = {_pf(p)}',
-                (0.035, 0.975), xycoords='axes fraction', ha='left', va='top', fontsize=6.0,
-                color=dk(RDc), linespacing=1.4)
-    ax.set_xlim(lim)
-    ax.set_ylim(lim)
+    def _sz(f):
+        return 7 + 40 * np.asarray(f)
+
+    fig, ax = plt.subplots(figsize=(3.15, 3.15))
+    fig.subplots_adjust(bottom=0.22)
+    lo, hi = -0.42, 0.98
+    ax.plot([lo, hi], [lo, hi], color=AXG, lw=0.8, ls=(0, (3.5, 2.5)), zorder=1)
+    ax.axhline(0, color=AXG, lw=0.45, alpha=0.45, zorder=0)
+    ax.axvline(0, color=AXG, lw=0.45, alpha=0.45, zorder=0)
+    ax.scatter(x[sig_pos], y[sig_pos], s=_sz(fb[sig_pos]), facecolor=cR, edgecolor=dk(cR),
+               lw=0.5, zorder=4)
+    ax.scatter(x[ns], y[ns], s=_sz(fb[ns]), facecolor='white', edgecolor='0.58', lw=0.85, zorder=3)
+    ax.scatter(x[sig_neg], y[sig_neg], s=_sz(fb[sig_neg]), facecolor=cNeg, edgecolor=dk(cNeg),
+               lw=0.5, zorder=5)
+
+    # three named points: the hero (carried through other panels) and the two inversions the text
+    # must account for. Partner is written as a motif, M_{TF}.
+    hq = d[(d.cell == 'HepG2') & (d.target == 'KDM6A') & (d.namesake == 'HNF4G')]
+    if len(hq):
+        hr = hq.iloc[0]
+        ax.scatter([hr.r_null_median], [hr.r_reader], s=_sz(hr.frac_reader_bound) + 46,
+                   facecolor='none', edgecolor=dk(cR, 0.5), lw=0.9, zorder=6)
+        ax.annotate(r'KDM6A $\leftarrow$ $M_{\mathrm{HNF4G}}$', (hr.r_null_median, hr.r_reader),
+                    xytext=(0.505, 0.875), textcoords='data', fontsize=5.8, ha='left',
+                    color=dk(cR, 0.5), va='center',
+                    arrowprops=dict(arrowstyle='-', lw=0.45, color=dk(cR, 0.5),
+                                    shrinkA=0, shrinkB=4))
+    for r in d[sig_neg].itertuples():
+        ax.annotate(rf'{r.target} $\leftarrow$ $M_{{\mathrm{{{r.namesake}}}}}$',
+                    (r.r_null_median, r.r_reader), xytext=(7, -1), textcoords='offset points',
+                    fontsize=5.6, color=dk(cNeg), ha='left', va='center')
+
+    ax.text(0.03, 0.975, f'{above}/{len(d)} above the diagonal\n$P$ = {_pf(p)}',
+            transform=ax.transAxes, ha='left', va='top', fontsize=6.2, color=INK, linespacing=1.5)
+
+    for i, (fc, ec, lab) in enumerate([
+            (cR, dk(cR), f'correlated ({int(sig_pos.sum())})'),
+            ('white', '0.58', f'not significant ({int(ns.sum())})'),
+            (cNeg, dk(cNeg), f'anti-correlated ({int(sig_neg.sum())})')]):
+        yy = 0.215 - i * 0.070
+        ax.scatter([0.615], [yy], s=20, facecolor=fc, edgecolor=ec,
+                   lw=0.5 if fc != 'white' else 0.85, transform=ax.transAxes, zorder=6,
+                   clip_on=False)
+        ax.text(0.660, yy, lab, transform=ax.transAxes, fontsize=5.9, color=INK,
+                ha='left', va='center')
+
+    for i, f in enumerate([0.1, 0.5, 0.9]):
+        fig.add_artist(plt.Line2D([0.500 + i * 0.105], [0.062], marker='o', ls='',
+                                  ms=np.sqrt(_sz(f)), mfc='0.82', mec='0.5', mew=0.5,
+                                  transform=fig.transFigure))
+        fig.text(0.500 + i * 0.105, 0.022, f'{f:.0%}', fontsize=5.2, color=AXG,
+                 ha='center', va='center')
+    fig.text(0.462, 0.062, 'Reader ChIP peak overlap (%)', fontsize=5.5, color=AXG,
+             ha='right', va='center')
+
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
     ax.set_aspect('equal')
-    ax.set_xlabel('Matched random TF –\ntarget correlation ($r$)', fontsize=7, color='black',
-                  linespacing=1.35)
-    ax.set_ylabel('ARES reader – target correlation ($r$)', fontsize=7, color='black')
+    ax.set_xlabel('Random-TF null (median Spearman $r$)', fontsize=7, color='black')
+    ax.set_ylabel('ARES-assigned reader (Spearman $r$ with target)', fontsize=7, color='black')
     spines(ax)
     ax.tick_params(colors='black', labelsize=6.2, width=0.7, length=2.6)
-    fig.tight_layout()
     save(fig, 'fig4_reader_tracks_target', SUB)
-    print(f'  reader tracks target: {above}/{len(d)} above diagonal, P={p:.1e}')
+    print(f'  reader tracks target: {above}/{len(d)} above diagonal, P={p:.1e}, '
+          f'sig+ {int(sig_pos.sum())} ns {int(ns.sum())} sig- {int(sig_neg.sum())}')
 
 
 def gata1_dose():
