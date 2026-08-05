@@ -1,4 +1,4 @@
-# ARES — Automated Regulatory Solver Configuration
+# ARES — Automated Regulatory Explanation System Configuration
 
 llm:
   # Model for generating and refining hypotheses

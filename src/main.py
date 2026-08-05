@@ -1,4 +1,4 @@
-"""Main entry point for ARES (Automated Regulatory Solver)."""
+"""Main entry point for ARES (Automated Regulatory Explanation System)."""
 
 from __future__ import annotations
 
@@ -334,7 +334,7 @@ def main() -> int:
             logger.error("Failed to load config", {"error": str(e)})
             return 1
 
-    logger.info("Starting ARES (Automated Regulatory Solver)")
+    logger.info("Starting ARES (Automated Regulatory Explanation System)")
 
     # Apply CLI overrides for cost tracking
     if args.no_cost_limit:

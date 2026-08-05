@@ -1,4 +1,4 @@
-# ARES — Automated Regulatory Solver
+# ARES — Automated Regulatory Explanation System
 
 A multi-agent LLM pipeline for automated mechanistic hypothesis generation and verification in bioinformatics. Given a machine-learning-derived finding (e.g., *"TF_B motif is the top predictor of TF_A binding signal"*) and a structured multi-omics data manifest, the pipeline proposes candidate mechanisms, generates and executes verification code, evaluates results, and refines hypotheses until convergence.
 

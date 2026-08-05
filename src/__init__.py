@@ -1,4 +1,4 @@
-"""ARES — Automated Regulatory Solver.
+"""ARES — Automated Regulatory Explanation System.
 
 Multi-agent pipeline for automated hypothesis generation and verification.
 """
