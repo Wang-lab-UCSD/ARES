@@ -15,6 +15,8 @@ namesake is absent, and the one whose perturbation moves the target.
   scramble_binding         AlphaGenome: scrambling the motif removes the reader, not control TFs
   scramble_cage            AlphaGenome: transcription then follows the reader's valence
   reader_odds              logistic odds ratios: outcome is reader-specific, region is not
+  target_reader_concordance  Perturb-seq: of the factors on the same peaks, only the named reader's
+                           knockdown reproduces the target's own
 
 Run as:  python fig4.py
 """
@@ -507,7 +509,7 @@ def reader_odds():
     markers are significant by the permutation test; the dashed null line is OR = 1.
     """
     R = json.load(open(data('fig4', 'reader_function_results.json')))
-    G = pd.read_csv(data('fig4', 'fig3c_qap_fullgrid.csv'))
+    G = pd.read_csv(data('fig4', 'reader_odds_grid.csv'))
     SEQc, READERc, CELLc = '#3f6fa3', '#b5564a', '#8f8f8f'
 
     ann = [('same_reader', 'Reader', READERc),
@@ -562,8 +564,74 @@ def reader_odds():
         for foc, lab, _ in ann))
 
 
+def target_reader_concordance():
+    """Among the factors that occupy a target's partner-motif+ peaks, the one ARES names as the
+    reader is the one whose knockdown best mirrors the target's own.
+
+    Genes at the target's motif+ peaks are kept if the TARGET's knockdown moves them, and scored by
+    the fraction the READER's knockdown moves the same way. The controls are the 10 factors whose
+    occupancy of those same peaks is closest to the reader's, so they bind the same loci to the same
+    extent and cannot lose merely by being absent. Direction agreement over independently perturbed
+    genes puts an unrelated factor at 50%, which is where the control cloud in fact sits.
+
+    Both axes are percentages of target-moved genes, so the summary is a difference in percentage
+    points. It is the median of the WITHIN-dependency differences, which is not the difference of
+    the two medians; the paired form is the one the test uses. Point area is the number of
+    target-moved genes.
+    """
+    D = pd.read_csv(data('fig4', 'target_reader_concordance.csv'))
+    for c in ('conc_Mp', 'ctrl_med'):
+        D[c] = D[c] * 100                          # fraction -> % of target-moved genes
+    D['excess'] = D.conc_Mp - D.ctrl_med           # percentage points
+    m = D.excess.median()
+    p = stats.wilcoxon(D.conc_Mp, D.ctrl_med, alternative='greater').pvalue
+
+    fig, ax = plt.subplots(figsize=(3.6, 3.5))
+    spines(ax)
+    lim = (min(D.ctrl_med.min(), D.conc_Mp.min()) - 3,
+           max(D.ctrl_med.max(), D.conc_Mp.max()) + 3)
+    ax.plot(lim, lim, color=AXG, lw=.8, ls=(0, (3, 2)), zorder=1)
+    sz = lambda n: 5 + 62 * np.sqrt(np.asarray(n) / D.n_affected_Mp.max())
+    for cat, col, lab in [('partner', CC['SEQUENCE'], 'reader = motif namesake'),
+                          ('hidden', desat('#e67e22'), 'hidden reader')]:
+        q = D[D.cat == cat]
+        ax.scatter(q.ctrl_med, q.conc_Mp, s=sz(q.n_affected_Mp), facecolor=col,
+                   edgecolor='white', linewidths=.35, alpha=.78, zorder=3,
+                   label=f'{lab}  ($n$ = {len(q)})')
+    ax.set_xlim(*lim)
+    ax.set_ylim(*lim)
+    ax.set_aspect('equal')
+    tk = np.arange(30, 90, 10.)                    # bare numbers; the unit lives in the axis label
+    tk = tk[(tk >= lim[0]) & (tk <= lim[1])]
+    ax.set_xticks(tk)
+    ax.set_yticks(tk)
+    ax.set_xlabel('10 TFs matched on occupancy of the same peaks\n'
+                  '(median % of those genes moved the same way)',
+                  fontsize=6.8, color=INK, linespacing=1.4)
+    ax.set_ylabel('ARES-inferred reader\n(% of target-moved genes moved the same way)',
+                  fontsize=6.8, color=INK, linespacing=1.4)
+    ax.text(.035, .975,
+            f'{int((D.excess > 0).sum())}/{len(D)} above the diagonal\n'
+            f'median $\\Delta$ = {m:+.1f} pp\n$P$ = {_pf(p)}',
+            transform=ax.transAxes, ha='left', va='top', fontsize=6.3, color=INK, linespacing=1.6)
+    # both legends sit in the empty lower-right wedge: an identity-line panel must share x and y
+    # limits, so the region to the right of the data is dead space rather than something to crop
+    lg1 = ax.legend(loc='lower right', bbox_to_anchor=(1.03, -.01), fontsize=6.0,
+                    handletextpad=.4, borderpad=.3, labelspacing=.35, markerscale=.8)
+    ax.add_artist(lg1)
+    h = [Line2D([], [], ls='', marker='o', mfc='0.62', mec='white', mew=.35, alpha=.78,
+                ms=np.sqrt(sz(n)), label=f'{n}') for n in (10, 60, 300)]
+    lg = ax.legend(handles=h, loc='center right', bbox_to_anchor=(1.02, .42), fontsize=6.0,
+                   title='target-moved\ngenes', title_fontsize=6.0, handletextpad=.6,
+                   borderpad=.3, labelspacing=.8)
+    lg._legend_box.align = 'left'
+    fig.tight_layout()
+    save(fig, 'fig4_target_reader_concordance', SUB)
+
+
 PANELS = [namesake_expression, reader_assignments, reader_vs_namesake_tpm, centering,
-          reader_tracks_target, gata1_dose, scramble_binding, scramble_cage, reader_odds]
+          reader_tracks_target, gata1_dose, scramble_binding, scramble_cage, reader_odds,
+          target_reader_concordance]
 
 
 def main():
