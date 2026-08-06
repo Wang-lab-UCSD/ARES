@@ -137,3 +137,25 @@ def atlas():
     a = pd.read_csv(data('ares_atlas.tsv'), sep='\t')
     return a.rename(columns={'target': 'tf_a', 'partner': 'tf_b', 'dichotomy': 'consensus',
                              'reader_category': 'reader_cat'})
+
+
+def with_route(df, cell='cell', target='target', partner='partner', out='consensus',
+               mechanism=False):
+    """Attach the cooperation route from the atlas, keyed on (cell, target, partner).
+
+    Route and mechanism are read from the atlas here and nowhere else. A per-analysis table that
+    also carried its own copy of a label would be a second definition of it, free to disagree with
+    the first, so any such column is dropped before the atlas value is attached.
+
+    Set mechanism=True to attach the mechanism leaf as well.
+    """
+    import pandas as pd
+    a = pd.read_csv(data('ares_atlas.tsv'), sep='\t')
+    key = ['cell', 'target', 'partner']
+    d = df.drop(columns=[c for c in ('consensus', 'dichotomy', 'dichotomy_class', 'mechanism')
+                         if c in df.columns and c != out], errors='ignore').copy()
+    k = list(zip(d[cell], d[target], d[partner]))
+    d[out] = [a.set_index(key).dichotomy.to_dict().get(x) for x in k]
+    if mechanism:
+        d['mechanism'] = [a.set_index(key).mechanism.to_dict().get(x) for x in k]
+    return d

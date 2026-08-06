@@ -16,7 +16,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import chi2, norm
 
-from _common import CC, INK, data, save, spines
+from _common import with_route, CC, INK, data, save, spines
 
 SUB = 'fig5'
 ORDER = ['SEQUENCE', 'PROTEIN', 'CONTEXT']
@@ -62,7 +62,7 @@ def onmotif_frequency():
     Bars are the raw proportions with Wilson 95% intervals; the span reports the adjusted ordinal
     trend across the three routes, with the unadjusted Cochran-Armitage trend beneath it.
     """
-    cov = pd.read_csv(data('fig5', 'bqtl_pair_coverage.csv'))
+    cov = with_route(pd.read_csv(data('fig5', 'bqtl_pair_coverage.csv')))
     wmap = pd.read_csv(data('fig5', 'bqtl_motif_width.csv')).groupby('partner').width.first().to_dict()
     d = cov[(cov.target_has_adastra) & (cov.partner_has_motif) & (cov.n_asb_snps >= 1)
             & (cov.consensus.isin(ORDER))].copy()
@@ -130,7 +130,7 @@ def motif_effect():
     lowers the motif score (moving right) is associated with weaker binding on the same allele, so
     the trend runs from upper-left to lower-right.
     """
-    S = pd.read_csv(data('fig5', 'bqtl_snp_coords.csv'))
+    S = with_route(pd.read_csv(data('fig5', 'bqtl_snp_coords.csv')))
     S['bind'] = np.where(S.fdr_ref < S.fdr_alt, S.es_ref, -S.es_alt)
     BINS = [-12, -2, -0.5, 0.5, 2, 8, 40]
     TL = ['≤ −2', '−2 to\n−0.5', '−0.5 to\n0.5', '0.5 to\n2', '2 to\n8', '> 8']

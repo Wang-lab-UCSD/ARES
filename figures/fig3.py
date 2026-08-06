@@ -20,7 +20,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from scipy import stats
 
-from _common import CC, INK, MODES, data, pbody, save, spines
+from _common import with_route, CC, INK, MODES, data, pbody, save, spines
 
 SUB = 'fig3'
 ORDER = ['SEQUENCE', 'CONTEXT', 'PROTEIN']
@@ -132,8 +132,7 @@ def phylop():
     phyloP is measured at the partner-motif positions inside the target's peaks. It is an entirely
     external measurement: nothing about conservation enters the ARES call.
     """
-    c = pd.read_csv(data('fig3', 'conservation_by_mechanism_final.csv'))
-    c['consensus'] = c.dichotomy if 'dichotomy' in c.columns else c['consensus']
+    c = with_route(pd.read_csv(data('fig3', 'conservation_by_mechanism_final.csv')))
     groups = {m: c[c.consensus == m].phylop_partner.dropna().values for m in ORDER}
 
     fig, ax = plt.subplots(figsize=(4.6, 3.0))
@@ -153,7 +152,7 @@ def ag_target_binding():
     pooled panel could be carried by whichever cell line contributes most pairs. One-sided
     Mann-Whitney tests Protein above each other route within each facet.
     """
-    g = pd.read_csv(data('fig3', 'ag_effect_by_mechanism_allcells.csv'))
+    g = with_route(pd.read_csv(data('fig3', 'ag_effect_by_mechanism_allcells.csv')))
     SH = {'SEQUENCE': 'Seq', 'PROTEIN': 'Prot', 'CONTEXT': 'Ctx'}
     facets = ['HepG2', 'K562', 'All cells']
     rng = np.random.default_rng(0)
@@ -213,7 +212,9 @@ def capselex():
     Context as single rows. Bars are Wilson 95% intervals, which stay inside [0, 1] at these small
     denominators where a normal approximation would not.
     """
-    iv = pd.read_csv(data('fig3', 'invitro_inscope_pairs_annotated.tsv'), sep='\t')
+    iv = with_route(pd.read_csv(data('fig3', 'invitro_inscope_pairs_annotated.tsv'), sep='\t'),
+                    cell='cell_line', target='target_tf', partner='partner_tf', out='dichotomy',
+                    mechanism=True)
     iv['co'] = iv.coop.astype(str).str.lower().isin(['true', '1', 'yes'])
 
     def shade(base, f):

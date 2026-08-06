@@ -62,8 +62,8 @@ def _read_table_like(
       ``parse_bedtools_wa_wb(subprocess.run(..., capture_output=True).stdout)``.
       Without this branch, pandas treats the long multi-line string as a
       file path and raises ``OSError: [Errno 36] File name too long`` with
-      the **entire input embedded in the error message**, which previously
-      blew out the coding-agent conversation history (ARID4B/YY1 Apr 13 run).
+      the **entire input embedded in the error message**, which would push
+      the whole payload into the coding agent's conversation history.
     - ``str`` without a newline: treated as a filesystem path (existing
       behaviour, preserved for backward compatibility with all callers).
     """
@@ -207,10 +207,10 @@ def parse_fimo_tsv(
     required = {"motif_id", "sequence_name", "start", "stop", "p-value"}
     missing = required - set(df.columns)
     if missing:
-        # Malformed / unrecognised header — treat as no hits rather than
-        # crashing the caller. We've seen this happen in real runs when the
-        # file contains only metadata comment lines that slip through the
-        # filter above (e.g. FIMO version with novel comment formatting).
+        # Malformed / unrecognised header - treat as no hits rather than
+        # raising, which is what a file of metadata comment lines with no
+        # data rows looks like when a FIMO build uses a comment format the
+        # filter above does not recognise.
         return _empty_fimo_df()
 
     if len(df) == 0:

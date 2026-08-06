@@ -94,10 +94,12 @@ def partner_dependence_by_route():
 def cross_cell_reproducibility():
     """Cell-cell route agreement against a label-shuffled null.
 
-    Every pair resolved in at least two cell types contributes all of its cell-cell comparisons.
-    The null permutes the route labels across the same set of observations, which preserves the
+    Dependencies are grouped by shared target TF and partner motif; groups seen in more than one
+    cell type contribute every within-group cell-cell comparison. The null permutes the route
+    labels across the same observations while holding group membership fixed, which preserves the
     route marginals; without that control a protein-heavy atlas would look reproducible by
-    construction.
+    construction. The reported P is the add-one estimator over 10^6 permutations, so it is bounded
+    below by 1 / (10^6 + 1) and no parametric tail approximation is used.
     """
     r = atlas()
     r = r[r.consensus.isin(MODES)].copy()
@@ -107,21 +109,29 @@ def cross_cell_reproducibility():
     grp = list(sub.groupby('pair').indices.values())
     modes = sub.consensus.values
 
-    def conc(arr):
-        agree = total = 0
-        for idx in grp:
-            for x, y in itertools.combinations(arr[idx], 2):
-                total += 1
-                agree += (x == y)
-        return agree / total
+    # every within-group cell-cell comparison, as index pairs into the observations
+    codes = pd.Series(modes).map({m: i for i, m in enumerate(MODES)}).values.astype(np.int8)
+    I = np.array([x for g in grp for x, _ in itertools.combinations(g, 2)])
+    J = np.array([y for g in grp for _, y in itertools.combinations(g, 2)])
+    obs = float((codes[I] == codes[J]).mean())
 
-    obs = conc(modes)
+    # Route labels are permuted across the 219 observations while the assignment of observations
+    # to groups is held fixed, so the null preserves the route marginals and the group structure
+    # and only destroys the correspondence between them. The P value is the add-one estimator
+    # (b + 1) / (m + 1) over m permutations, which is bounded below by 1 / (m + 1); no parametric
+    # approximation to the tail is used.
+    NPERM, BATCH = 10 ** 6, 20_000
     rng = np.random.default_rng(0)
-    null = np.array([conc(rng.permutation(modes)) for _ in range(500)])
+    n = len(codes)
+    null = np.empty(NPERM)
+    for start in range(0, NPERM, BATCH):
+        b = min(BATCH, NPERM - start)
+        lab = codes[np.argsort(rng.random((b, n)), axis=1)]
+        null[start:start + b] = (lab[:, I] == lab[:, J]).mean(axis=1)
+    ge = int((null >= obs).sum())
     z = (obs - null.mean()) / null.std()
-    p = float(stats.norm.sf(z))
-    npair = len(grp)
-    ncell = sum(1 for idx in grp for _ in itertools.combinations(idx, 2))
+    p = (ge + 1) / (NPERM + 1)
+    npair, ncell = len(grp), len(I)
 
     fig, ax = plt.subplots(figsize=(3.35, 2.05))
     ax.hist(null * 100, bins=22, color='#d3d7dc', edgecolor='white', lw=0.3, zorder=2)
@@ -132,15 +142,17 @@ def cross_cell_reproducibility():
             fontsize=7, color=INK, fontweight='bold', linespacing=1.05)
     ax.text(null.mean() * 100 + 1.4, ytop * 0.92, f'chance {null.mean() * 100:.0f}%',
             ha='left', va='top', fontsize=6.4, color='0.45')
-    ax.text(obs * 100 - 1.6, ytop * 0.08, f'$P$ = {pbody(p)}', ha='right', va='bottom',
+    ptxt = (f'$P$ < {pbody(1 / (NPERM + 1))}' if ge == 0 else f'$P$ = {pbody(p)}')
+    ax.text(obs * 100 - 1.6, ytop * 0.08, ptxt, ha='right', va='bottom',
             fontsize=6.2, color=INK)
     ax.set_xlabel('Cell–cell route agreement (%)', fontsize=6.8, color=INK)
     ax.set_ylabel('shuffles', fontsize=6.8, color=INK)
     spines(ax)
     fig.tight_layout()
     save(fig, 'fig2_cross_cell_reproducibility', SUB)
-    print(f'  cross-cell: obs={obs:.3f} null={null.mean():.3f} z={z:.1f} '
-          f'(pairs={npair}, cell-pairs={ncell})')
+    print(f'  cross-cell: obs={100 * obs:.1f}% null={100 * null.mean():.1f}% z={z:.1f} '
+          f'(groups={npair}, observations={n}, comparisons={ncell}); '
+          f'{ge}/{NPERM} permutations >= observed, add-one P={p:.3g}')
 
 
 def recurrent_pairs():

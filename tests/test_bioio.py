@@ -170,12 +170,11 @@ def test_read_table_like_returns_defensive_dataframe_copy():
 def test_read_table_like_multiline_string_is_parsed_as_content():
     """Regression test for the Apr 13 ARID4B/YY1 crash.
 
-    Previously, passing ``subprocess.run(...).stdout`` (a multi-line string)
-    into any bioio helper caused pandas to treat the entire string as a
-    filesystem path and raise ``OSError: [Errno 36] File name too long``
-    with the **full input embedded in the error message**, which blew out
-    the coding-agent conversation history and killed the run with a
-    MiniMax ``context window exceeds limit`` error on the next turn.
+    Passing ``subprocess.run(...).stdout`` (a multi-line string) into a bioio
+    helper must not make pandas treat the whole string as a filesystem path
+    and raise ``OSError: [Errno 36] File name too long`` with the **full input
+    embedded in the error message** - that payload would land in the coding
+    agent's conversation history and exhaust its context window.
     """
     stdout = "chr1\t10\t20\tpeakA\nchr2\t30\t40\tpeakB\nchr3\t50\t60\tpeakC\n"
 
@@ -236,9 +235,8 @@ def test_parse_bedtools_wa_wb_accepts_subprocess_stdout_string():
 
 
 def test_parse_bedtools_wa_wb_large_stdout_does_not_crash():
-    """Worst-case regression: a 30k-row stdout string should parse, not
-    explode into an OSError embedding the entire input in the error
-    message (which is what killed the Apr 13 run).
+    """Worst case: a 30k-row stdout string should parse, not explode into an
+    OSError embedding the entire input in the error message.
     """
     row = "chr1\t100\t200\tpeakA\t1000\t.\tchr1\t150\t180\t9_EnhA1\n"
     stdout = row * 30_000

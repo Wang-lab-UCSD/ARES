@@ -36,8 +36,13 @@ SUB = 'fig4'
 
 def _pf(p):
     """Scientific mantissa x 10^e for small P. Keeps one decimal on the mantissa unless it rounds
-    cleanly to an integer, so 8.68e-33 shows as 8.7, not 9."""
-    if p >= 1e-3:
+    cleanly to an integer, so 8.68e-33 shows as 8.7, not 9.
+
+    The switch to scientific notation is at 0.01 rather than 0.001, because three decimal places
+    leave only one significant figure just below 0.01: a permutation P of 0.0044 would print as
+    0.004, which reads as 4e-3 and no longer matches the value in the source table.
+    """
+    if p >= 1e-2:
         return f'{p:.3f}'
     e = int(np.floor(np.log10(p)))
     m = p / 10 ** e

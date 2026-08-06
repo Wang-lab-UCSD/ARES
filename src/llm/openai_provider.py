@@ -27,8 +27,7 @@ from src.utils.logging import get_logger
 # TOTAL_RETRY_BUDGET_SEC is the hard ceiling on the WHOLE operation (initial
 # call + all retry attempts + all backoff sleeps). Once exceeded, the
 # operation is cancelled and asyncio.TimeoutError propagates. Tuned to ride
-# out MiniMax/Z.AI multi-minute 5xx windows (Apr 13 runs: 529 overloaded_error;
-# May 6 runs: extended (2049) 401 bursts during high load).
+# out the multi-minute 5xx and 401 windows some providers show under load.
 MAX_RETRIES = 20
 RETRY_DELAY_BASE = 5.0
 RETRY_DELAY_CAP = 60.0
