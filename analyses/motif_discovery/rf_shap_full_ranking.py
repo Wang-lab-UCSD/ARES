@@ -22,6 +22,8 @@ from motif_scan import parse_meme_file, motif_id_to_tf_name
 import os
 import argparse
 import time
+import re
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -35,16 +37,30 @@ FULL_DIR    = '/new-stg/home/hanbei/HanX/result/rf_shap_full_rank'
 MAX_FULL    = 1000
 
 
+def _norm(name):
+    """Factor name reduced to letters and digits, so a lookup does not turn on punctuation.
+
+    Target names reach this module as ENCODE ChIP directory names and motif names as JASPAR
+    symbols, and the two disagree on punctuation for at least one factor: the directory is
+    NKX3_1_human while JASPAR calls the motif NKX3-1. Matched literally, such a target never
+    recognises its own motif, so neither the self motif nor its paralogs are excluded from the
+    partner-motif candidates. Composite separators are kept; only punctuation inside a name goes.
+    """
+    return re.sub(r'[^a-z0-9]', '', str(name).lower())
+
+
 def make_get_families(tf_to_family):
+    fam_norm = {_norm(k): v for k, v in tf_to_family.items()}
+
     def get_families(name):
         name = str(name).lower()
         fams = set()
-        direct = tf_to_family.get(name, '')
+        direct = tf_to_family.get(name, '') or fam_norm.get(_norm(name), '')
         if direct:
             fams |= {f.strip() for f in direct.split(',')}
         if '::' in name:
             for comp in name.split('::'):
-                s = tf_to_family.get(comp.strip(), '')
+                s = tf_to_family.get(comp.strip(), '') or fam_norm.get(_norm(comp), '')
                 if s:
                     fams |= {f.strip() for f in s.split(',')}
         return fams
@@ -55,7 +71,7 @@ def categorize(motif_tf, target_tf, get_families):
     """self / paralog / other — mirrors the skip logic in rf_shap_regulator.find_regulator."""
     target_lower = target_tf.lower()
     comps = {c.strip() for c in str(motif_tf).split('::')}
-    if target_lower in comps:
+    if target_lower in comps or _norm(target_tf) in {_norm(c) for c in comps}:
         return 'self'
     target_fams = get_families(target_lower)
     motif_fams = get_families(motif_tf)

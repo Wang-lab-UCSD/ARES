@@ -289,13 +289,17 @@ def reader_tracks_target():
 
     # three named points: the hero (carried through other panels) and the two inversions the text
     # must account for. Partner is written as a motif, M_{TF}.
-    hq = d[(d.cell == 'HepG2') & (d.target == 'KDM6A') & (d.namesake == 'HNF4G')]
+    #
+    # The hero here is NFYA rather than KDM6A. Both sit high on the y axis, but KDM6A sits at a
+    # random-TF null of 0.28, so its reader has to clear a floor at which an arbitrary factor
+    # already tracks the target; NFYA's null is at zero, so the whole of its 0.58 is reader-specific.
+    hq = d[(d.cell == 'HepG2') & (d.target == 'NFYA') & (d.namesake == 'KLF15')]
     if len(hq):
         hr = hq.iloc[0]
         ax.scatter([hr.r_null_median], [hr.r_reader], s=_sz(hr.frac_reader_bound) + 46,
                    facecolor='none', edgecolor=dk(cR, 0.5), lw=0.9, zorder=6)
-        ax.annotate(r'KDM6A $\leftarrow$ $M_{\mathrm{HNF4G}}$', (hr.r_null_median, hr.r_reader),
-                    xytext=(0.505, 0.875), textcoords='data', fontsize=5.8, ha='left',
+        ax.annotate(r'NFYA $\leftarrow$ $M_{\mathrm{KLF15}}$', (hr.r_null_median, hr.r_reader),
+                    xytext=(-0.345, 0.360), textcoords='data', fontsize=5.8, ha='left',
                     color=dk(cR, 0.5), va='center',
                     arrowprops=dict(arrowstyle='-', lw=0.45, color=dk(cR, 0.5),
                                     shrinkA=0, shrinkB=4))
