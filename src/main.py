@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.main --config config/config.yaml --manifest examples/atf6_rest/data_manifest.yaml
+  python -m src.main --config config/config.yaml --manifest examples/sp1_nfya_K562/data_manifest_demo.yaml
   python -m src.main -c config.yaml -m data.yaml --verbose
         """,
     )

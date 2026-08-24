@@ -4,6 +4,7 @@ import pytest
 
 from src.agents.coding_agent import (
     CodingAgent,
+    _strip_dsml_tokens,
     _strip_end_turn_tokens,
     _strip_invoke_tags,
     _strip_orphan_execute_closes,
@@ -381,7 +382,52 @@ class TestStripOrphanExecuteCloses:
 
 
 # -----------------------------------------------------------------------------
-# _strip_runaway_tokens: integration — all three patterns combined
+# _strip_dsml_tokens
+# -----------------------------------------------------------------------------
+
+
+class TestStripDsmlTokens:
+    """DeepSeek-V4-Flash leaks its internal `<\uFF5C\uFF5CDSML\uFF5C\uFF5C>` delimiter into
+    visible output, usually immediately before its own `<execute>` or `</execute>` tag. Landing
+    inside the block, it breaks the block's Python with a SyntaxError.
+    """
+
+    def test_no_token_unchanged(self):
+        content = "<execute>\nprint(1)\n</execute>"
+        cleaned, n = _strip_dsml_tokens(content)
+        assert n == 0
+        assert cleaned == content
+
+    def test_before_closing_execute_tag(self):
+        """The observed failure shape: the token lands inside the block, right before
+        </execute>, breaking the Python it wraps with a SyntaxError."""
+        content = "<execute>\nprint(1)\n</\uFF5C\uFF5CDSML\uFF5C\uFF5C>\n</execute>"
+        cleaned, n = _strip_dsml_tokens(content)
+        assert n == 1
+        assert cleaned == "<execute>\nprint(1)\n</execute>"
+
+    def test_before_opening_execute_tag(self):
+        content = "thinking\n<\uFF5C\uFF5CDSML\uFF5C\uFF5C>\n<execute>\nprint(1)\n</execute>"
+        cleaned, n = _strip_dsml_tokens(content)
+        assert n == 1
+        assert cleaned == "thinking\n<execute>\nprint(1)\n</execute>"
+
+    def test_two_copies_both_removed(self):
+        """Observed shape: the token doubled, one after the other, rather than a long run."""
+        content = "<execute>\nprint(1)\n</\uFF5C\uFF5CDSML\uFF5C\uFF5C>\n</\uFF5C\uFF5CDSML\uFF5C\uFF5C>\n</execute>"
+        cleaned, n = _strip_dsml_tokens(content)
+        assert n == 2
+        assert "DSML" not in cleaned
+        assert cleaned == "<execute>\nprint(1)\n</execute>"
+
+    def test_case_insensitive(self):
+        content = "<execute>\nprint(1)\n</\uFF5C\uFF5Cdsml\uFF5C\uFF5C>\n</execute>"
+        cleaned, n = _strip_dsml_tokens(content)
+        assert n == 1
+
+
+# -----------------------------------------------------------------------------
+# _strip_runaway_tokens: integration — all four patterns combined
 # -----------------------------------------------------------------------------
 
 
@@ -397,7 +443,7 @@ class TestStripRunawayTokens:
         )
         cleaned, counts = _strip_runaway_tokens(content)
         assert cleaned == content
-        assert counts == {"invoke": 0, "end_turn": 0, "orphan_close": 0}
+        assert counts == {"invoke": 0, "end_turn": 0, "orphan_close": 0, "dsml": 0}
 
     def test_reports_per_pattern_counts(self):
         """Counts are reported separately per pattern."""

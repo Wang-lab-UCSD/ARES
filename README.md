@@ -18,7 +18,10 @@ Convergence is modality-aware: observational-only data may converge on the best-
 - Python 3.10+
 - Conda (recommended for bioinformatics tools)
 - Bioinformatics tools: `bedtools`, `samtools`, `meme`/`fimo` (installed via conda)
-- At least one LLM API key (OpenAI, Anthropic, or Google Gemini)
+- At least one LLM API key (OpenAI, Anthropic, Google Gemini or DeepSeek) — point all four
+  agents at one provider and you're set. The shipped `config/config.yaml` instead splits them
+  across three providers, because the four agents don't need the same model; see **Pipeline
+  config** below for which needs what and why.
 
 ## Installation
 
@@ -52,45 +55,38 @@ source load_api_keys.sh
 
 ### Pipeline config
 
-Edit `config/config.yaml` to select LLM providers and models for each agent:
+`config/config.yaml` selects the LLM provider and model for each of the four agents, plus
+execution and iteration limits. It is not a template — it is the configuration the **Demo** below
+was verified against, and every choice in it is explained inline: why each model was picked, and
+where a provider has a `max_tokens` quirk (several reasoning models bill their thinking tokens
+against that budget, so a cap meant to bound visible output can silently starve the reasoning
+instead — the comments say which providers this affects).
 
-```yaml
-llm:
-  hypothesis_model:
-    provider: "openai"      # openai | anthropic | gemini
-    model: "gpt-5.2"        # or "glm-5" via Z.AI, "deepseek-chat", etc.
-    api_key_env: "OPENAI_API_KEY"
-    # Do NOT set max_tokens for reasoning models (gpt-5.2, glm-5)
+The four agents differ in what they need from a model:
 
-  coding_model:
-    provider: "openai"
-    model: "gpt-5.2"
-    api_key_env: "OPENAI_API_KEY"
+- **Hypothesis** and **summary** make judgment calls under uncertainty — inventing a causal
+  mechanism, and deciding whether the evidence actually supports it — and get the more
+  reasoning-capable model of the four.
+- **Review** checks generated code against a fixed set of known failure modes. That's closer to
+  applying a rubric than to open-ended reasoning, so it doesn't need a frontier model.
+- **Coding** writes and debugs the verification scripts inside the REPL retry loop. What matters
+  there is reliably producing runnable, correct code, not reasoning depth, so cost matters more
+  than capability ceiling here.
 
-  review_model:
-    provider: "openai"
-    model: "gpt-5.2"
-    api_key_env: "OPENAI_API_KEY"
-    reasoning_effort: "low"
-
-  summary_model:
-    provider: "gemini"
-    model: "gemini-3-flash-preview"
-    api_key_env: "GOOGLE_API_KEY"
-    max_tokens: 8192  # Gemini Flash requires explicit limit; 8192 recommended
-
-execution:
-  timeout_seconds: 900
-  max_retries: 5
-
-pipeline:
-  max_iterations: 8
-  max_consecutive_hypothesis_rejections: 6
-```
+This project's official configuration — the one used to build the atlas of 1,552 dependencies
+reported in the paper — is Gemini 3.1 Pro for hypothesis and summary, MiniMax-M2.7 for coding,
+and GPT-5.4-mini for review, and is preserved in `config/config.yaml`'s comments. But the pipeline
+is not tied to these: point any agent at any model from any provider under **Supported LLM
+providers** below by editing its block's `provider`, `model` and `api_key_env` — a single model
+for all four is a fine place to start if you'd rather not think about the four roles above at
+all.
 
 ### Data manifest
 
-Create a YAML manifest listing your data files. The `examples/` directory contains real manifests you can use as templates, e.g. `examples/atf6_rest_K562/data_manifest.yaml` (note: example manifests contain user-specific file paths that must be updated to your local data).
+Create a YAML manifest listing your data files. `examples/sp1_nfya_K562/data_manifest_demo.yaml` is a
+complete one, with relative paths, and runs from a fresh clone (see **Demo** below).
+`examples/atf6_rest_K562/` records a second investigation with the absolute paths of the machine it
+ran on, for provenance rather than for re-running.
 
 ```yaml
 finding: "TF_B motif is the top predictor of TF_A binding signal in K562"
@@ -112,6 +108,49 @@ tools:
   - fimo
 ```
 
+## Demo
+
+`examples/sp1_nfya_K562/` is the SP1/NFYA investigation reported in the paper — why the NFYA motif
+is the strongest non-homologous predictor of SP1 binding intensity in K562 — and is the quickest way
+to watch the pipeline run end to end.
+
+```bash
+bash examples/sp1_nfya_K562/download_demo_data.sh
+```
+
+The script fetches the ENCODE files by accession, plus the genome, GENCODE annotation, phyloP track,
+Roadmap ChromHMM segmentation and STRING network, into `examples/sp1_nfya_K562/data/`. That is about
+26 GB, most of it phyloP, the genome and the two WGBS tracks. Files already present are skipped, so
+an interrupted download is resumed by re-running, and anything that fails is listed by name at the
+end rather than left as a silent gap.
+
+Two things differ from the run in the paper, both to keep the download tractable. The motif
+collection is not downloaded — it ships in `motifs/`. And the whole-cell-line TF pool is fetched as
+narrowPeak only: its 526 peak files come to 0.37 GB against 700 GB for the matching signal tracks,
+and the pool is read for peak overlap rather than for signal, so co-occupancy tests behave as they
+did in the paper.
+
+Then:
+
+```bash
+conda activate pipeline
+source load_api_keys.sh
+
+python -m src.main \
+  --config config/config.yaml \
+  --manifest examples/sp1_nfya_K562/data_manifest_demo.yaml
+```
+
+A verification run with this exact configuration converged in five iterations and 31 minutes,
+for $0.46 in API cost: it rejected a technical-artifact explanation, found evidence for a direct
+SP1-NFYA protein interaction and co-occupancy, and converged on that co-occupancy being associated
+with higher SP1 binding signal and stronger evolutionary conservation at the shared sites. Most of
+the time is spent executing generated code rather than waiting on the models. This is one run of a
+non-deterministic pipeline, not a guarantee — expect the exact iteration count, wall-clock time and
+conclusion to vary between runs, and budget more headroom than 31 minutes and $0.46 in case a given
+run needs more iterations to converge, or does not converge within `pipeline.max_iterations`. Lower
+that value in `config/config.yaml` if you only want to watch one hypothesis go round the loop.
+
 ## Running the pipeline
 
 ```bash
@@ -120,39 +159,60 @@ source load_api_keys.sh
 
 python -m src.main \
   --config config/config.yaml \
-  --manifest examples/atf6_rest_K562/data_manifest.yaml
+  --manifest path/to/your_manifest.yaml
 ```
 
 Optional flags:
-- `--verbose` — detailed console output
-- `--output-dir PATH` — override the output directory
+- `-v, --verbose` — detailed console output
+- `-o, --output PATH` — override the output directory
+- `--dry-run` — validate the config and manifest without calling any model or spending money
+- `--session-limit USD` — stop the run once total API cost crosses this (default 50.0; the demo
+  run above cost $0.46, so this is a loose ceiling against a run that goes unexpectedly long
+  rather than a tight budget)
+
+Run `python -m src.main --help` for the full list, including cost-tracking and production-ledger
+flags not needed for a single investigation.
 
 ## Outputs
 
 Each run writes a timestamped directory under `outputs/` containing:
 
 - `final_report.md` — executive summary, findings table, confidence, and recommended follow-ups
-- `iteration_*/` — generated scripts, execution logs, and serialized state for each hypothesis tested
-- `debug_code/` — raw code blocks from the REPL loop
+- `narrative.md` — the investigation as it unfolded: each hypothesis, its verification plan and its
+  result, in the order they were tested
+- `state_iter_N.json`, `state_final.json` — serialized pipeline state after iteration N and at the
+  end, including every tested hypothesis and its support level
+- `output_iter_N.txt` — the raw stdout/stderr of iteration N's executed code, tracebacks included
+- `file_inspection.py` — the code that ran during file familiarization, before any hypothesis
+- `debug_code/` — every raw REPL turn (`iterN_replM_llm.txt`) and the Python actually executed
+  from it (`iterN_replM_blockK.py`), including turns that failed or were reprompted
 
 ## Supported LLM providers
 
 | Provider | Models | Config `provider` value |
 |----------|--------|------------------------|
-| OpenAI | gpt-5.2, gpt-5, gpt-5-mini, ... | `"openai"` |
+| OpenAI | gpt-5.2, gpt-5, gpt-5-mini, gpt-5.4-mini, ... | `"openai"` |
 | Anthropic | claude-sonnet-4, claude-opus-4 | `"anthropic"` |
-| Google | gemini-3-flash-preview, gemini-2.5-pro/flash | `"gemini"` |
+| Google | gemini-3.6-flash, gemini-3.1-pro-preview, gemini-2.5-pro/flash | `"gemini"` |
 | Z.AI (GLM-5) | glm-5 | `"openai"` + `base_url` |
-| DeepSeek | deepseek-chat | `"openai"` + `base_url` |
+| DeepSeek | deepseek-v4-flash, deepseek-chat | `"openai"` + `base_url` |
 
 Third-party OpenAI-compatible endpoints can be used with the `openai` provider by setting `base_url`:
 ```yaml
 coding_model:
   provider: "openai"
-  model: "glm-5"
-  api_key_env: "Z_AI_API_KEY"
-  base_url: "https://api.z.ai/api/paas/v4/"
+  model: "deepseek-v4-flash"
+  api_key_env: "DEEPSEEK_API_KEY"
+  base_url: "https://api.deepseek.com"
 ```
+
+`max_tokens` behaves differently across providers and models, and getting it wrong fails
+silently rather than erroring — check `config/config.yaml`'s comments before adding a new model.
+Two opposite failure modes have been hit in testing: reasoning models that bill thinking tokens
+against `max_tokens` (deepseek-v4-flash among others) can have their visible output crowded out
+to nothing by a cap sized for the answer alone, so for those, leave it unset; MiniMax-M2.7 goes
+the other way and needs an explicit cap, because with none its ~64,000-token default lets one
+stuck call consume the whole context window within a few turns.
 
 ## Testing
 
@@ -174,7 +234,10 @@ src/
   utils/                Bioinformatics helpers, config, cost tracking
 config/
   config.yaml           Main pipeline configuration
-examples/               Example data manifests for TF-pair analyses
+motifs/                 Combined JASPAR / HOCOMOCO / CIS-BP collection read by every motif scan
+examples/
+  sp1_nfya_K562/        Worked demo: manifest, and a script that downloads its data
+  atf6_rest_K562/       A second investigation, kept for provenance
 tests/                  Test suite
 ```
 

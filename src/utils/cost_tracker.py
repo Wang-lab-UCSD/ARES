@@ -61,12 +61,24 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # Standard tier would be ~2x these values; if you set service_tier: "standard"
     # in config.yaml, update the prices below or the tracker will undercount.
     "gemini-3.1-pro-preview": ModelPricing(1.0, 6.0, "gemini", "gemini-3.1-pro-preview", context_limit=200000, cached_input_price=0.10),
+    # Gemini 3.6 / 3.7 Flash — FLEX tier, matching the provider default: $0.375/M input,
+    # $1.875/M output (thinking tokens bill at the output rate), $0.0375/M cached input.
+    # Standard tier is exactly 2x. These are promotional rates that Google lists as holding
+    # through 31 December 2026 and doubling on 1 January 2027, so they need revisiting then.
+    "gemini-3.6-flash": ModelPricing(0.375, 1.875, "gemini", "gemini-3.6-flash", context_limit=1048576, cached_input_price=0.0375),
+    "gemini-3.7-flash": ModelPricing(0.375, 1.875, "gemini", "gemini-3.7-flash", context_limit=1048576, cached_input_price=0.0375),
     # MiniMax
     "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=204800),
     # GLM-5 (Z.AI) — $1/1M input, $3.2/1M output; limited-time free tier available
     "glm-5": ModelPricing(1.0, 3.2, "openai", "glm-5", context_limit=200000),
     # DeepSeek V3.2 — $0.28/1M input (cache miss), $0.028/1M (cache hit), $0.42/1M output
     "deepseek-chat": ModelPricing(0.28, 0.42, "deepseek", "deepseek-chat", context_limit=128000, cached_input_price=0.028),
+    # DeepSeek V4 (model versions DeepSeek-V4-Flash-0731 and DeepSeek-V4-Pro-0813). DeepSeek bills
+    # by time of day: peak is 01:00-04:00 and 06:00-10:00 UTC on weekdays, and off-peak is exactly
+    # half. The peak rate is recorded here so the pre-call limit gate is never optimistic; a run
+    # made entirely off-peak costs half of what the tracker reports.
+    "deepseek-v4-flash": ModelPricing(0.44, 1.32, "deepseek", "deepseek-v4-flash", context_limit=1000000, cached_input_price=0.014),
+    "deepseek-v4-pro": ModelPricing(1.32, 3.96, "deepseek", "deepseek-v4-pro", context_limit=1000000, cached_input_price=0.044),
 }
 
 

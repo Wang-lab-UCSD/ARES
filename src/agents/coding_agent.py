@@ -61,6 +61,15 @@ _EXECUTE_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 
+# DeepSeek-V4-Flash internal delimiter, leaking into visible output immediately before its
+# `<execute>` or `</execute>` tag (fullwidth vertical bar U+FF5C, doubled on each side of the
+# literal "DSML"). Landing inside the block it breaks the block's Python with a SyntaxError;
+# landing outside it is inert but still noise. Seen in 11 of the demo run's first ~60 REPL turns.
+_DSML_TOKEN_RE = re.compile(
+    r"</?\uFF5C\uFF5CDSML\uFF5C\uFF5C>\s*",
+    re.IGNORECASE,
+)
+
 
 def _strip_invoke_tags(content: str) -> tuple[str, int]:
     """Remove `<invoke>...</invoke>` blocks from an LLM response.
@@ -153,22 +162,43 @@ def _strip_orphan_execute_closes(content: str) -> tuple[str, int]:
     return cleaned, len(orphan_ranges)
 
 
+def _strip_dsml_tokens(content: str) -> tuple[str, int]:
+    """Remove DeepSeek's leaked `<\uFF5C\uFF5CDSML\uFF5C\uFF5C>` delimiter from a response.
+
+    Unlike the MiniMax patterns above this one does not run away -- one or two copies per
+    response, not thousands -- so it needs no balance tracking, just removal.
+    """
+    if not content or "dsml" not in content.lower():
+        return content, 0
+    n_removed = 0
+
+    def _sub(_m: re.Match) -> str:
+        nonlocal n_removed
+        n_removed += 1
+        return ""
+
+    cleaned = _DSML_TOKEN_RE.sub(_sub, content)
+    return cleaned, n_removed
+
+
 def _strip_runaway_tokens(content: str) -> tuple[str, dict[str, int]]:
-    """Apply all three runaway-pattern strippers to a response.
+    """Apply all four runaway-pattern strippers to a response.
 
     Returns (cleaned_content, counts) where counts is a dict with keys
-    `invoke`, `end_turn`, and `orphan_close` giving the number of each
-    pattern removed. Applied in sequence; later strippers see content
+    `invoke`, `end_turn`, `orphan_close`, and `dsml` giving the number of
+    each pattern removed. Applied in sequence; later strippers see content
     with earlier patterns already removed, which is safe because the
     three patterns don't overlap.
     """
     c1, n_invoke = _strip_invoke_tags(content)
     c2, n_end_turn = _strip_end_turn_tokens(c1)
     c3, n_orphan = _strip_orphan_execute_closes(c2)
-    return c3, {
+    c4, n_dsml = _strip_dsml_tokens(c3)
+    return c4, {
         "invoke": n_invoke,
         "end_turn": n_end_turn,
         "orphan_close": n_orphan,
+        "dsml": n_dsml,
     }
 
 
@@ -302,6 +332,7 @@ class CodingAgent:
                         "invoke_tags_removed": strip_counts["invoke"],
                         "end_turn_tokens_removed": strip_counts["end_turn"],
                         "orphan_close_tags_removed": strip_counts["orphan_close"],
+                        "dsml_tokens_removed": strip_counts["dsml"],
                         "cleaned_length": len(content),
                     },
                 )

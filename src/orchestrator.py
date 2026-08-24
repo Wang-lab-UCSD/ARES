@@ -75,6 +75,8 @@ class Orchestrator:
                 cell_line, tf_a, tf_b = parts[0], parts[1], "_".join(parts[2:])
                 self.file_prefix = f"{tf_a}_{tf_b}_{cell_line}"
         self.logger = get_logger("orchestrator")
+        # Manifest paths may be relative to the manifest; the kernel runs from elsewhere.
+        self._manifest_dir = Path(manifest_path).parent if manifest_path else Path.cwd()
         self._allowed_packages = self._resolve_allowed_packages(manifest_path)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._shutdown_requested = False
@@ -182,7 +184,13 @@ class Orchestrator:
             if not s_stripped:
                 continue
 
-            is_probably_path = s_stripped.startswith("/") or s_stripped.startswith(".") or s_stripped.startswith("..")
+            # A bare relative path such as data/peaks.bed is as much a path as ./data/peaks.bed;
+            # requiring a leading slash or dot let manifest-relative entries skip the check
+            # entirely, so preflight passed while none of the files were reachable.
+            is_probably_path = (
+                s_stripped.startswith(("/", ".", ".."))
+                or ("/" in s_stripped and " " not in s_stripped)
+            )
             if not is_probably_path:
                 continue
 
@@ -990,15 +998,31 @@ class Orchestrator:
         one level with the leaf key name taking precedence over category.key notation.
         """
         data = (self.manifest.model_dump().get("data") or {})
+
+        def resolved(value: str) -> str:
+            """Absolute path for a manifest entry that names a file, else the value unchanged.
+
+            Manifest paths may be written relative to the manifest, which is what lets an example
+            ship with its data alongside it. The kernel runs from wherever the pipeline was
+            launched, so a relative path injected verbatim resolves against the wrong directory
+            and every file appears to be missing. Entries that are prose rather than paths -- the
+            format notes and role descriptions that sit beside each file -- are left alone.
+            """
+            if os.path.isabs(value):
+                return value
+            candidate = self._manifest_dir / value
+            return str(candidate.resolve()) if candidate.exists() else value
+
         flat: dict[str, str] = {}
         for category, items in data.items():
             if isinstance(items, dict):
                 for name, path in items.items():
                     if isinstance(path, str):
+                        path = resolved(path)
                         flat[name] = path
                         flat[f"{category}.{name}"] = path  # also expose category.name form
             elif isinstance(items, str):
-                flat[category] = items
+                flat[category] = resolved(items)
 
         # Serialize as a Python literal and execute in the kernel
         import json as _json

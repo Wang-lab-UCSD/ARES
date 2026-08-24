@@ -1,28 +1,78 @@
 # ARES — Automated Regulatory Explanation System Configuration
+#
+# The four agents do not need the same model. Hypothesis and summary agents make judgment calls
+# under uncertainty -- inventing a causal mechanism, weighing evidence and deciding whether it
+# actually supports the hypothesis -- and benefit from a reasoning-capable model. Review checks
+# generated code against a fixed set of known failure modes; that is closer to applying a rubric
+# than to open-ended reasoning, so a smaller/cheaper model does the job. Coding writes and debugs
+# the verification scripts; what it needs is reliability at producing runnable, correct code
+# under the REPL retry loop, not the deepest reasoning available, so cost matters more here than
+# capability ceiling. All four agents can point at one provider and one model -- see the
+# Requirements section of the top-level README for how -- but splitting them this way costs
+# noticeably less for the same or better output, which is why the config below does it.
+#
+# This project's own reference setup is Gemini 3.1 Pro (hypothesis, summary), MiniMax-M2.7
+# (coding) and GPT-5.4-mini (review). Two of those three are commented out below in favour of a
+# substitute for a practical reason stated at that block, not because the substitute is judged
+# better -- swap either back in, or point any agent at a different model or provider entirely;
+# nothing here is prescriptive.
 
 llm:
   # Model for generating and refining hypotheses
   hypothesis_model:
     provider: "gemini"
-    model: "gemini-3.1-pro-preview"
+    model: "gemini-3.6-flash"
     api_key_env: "GOOGLE_API_KEY"
     # Gemini-only cost knobs. Defaults if omitted: service_tier="flex", thinking_level="MEDIUM".
     # service_tier: "flex"       # flex | standard | priority  — flex is ~50% cheaper, lower priority
     # thinking_level: "MEDIUM"   # MINIMAL | LOW | MEDIUM | HIGH  — thinking tokens bill at output rate
 
+  # This project's official hypothesis model, commented out here only because its flex queue
+  # 503'd often enough during testing to add several minutes of retry delay per call (8 retries
+  # logged across the first two iterations of one demo run). 3.6 Flash is priced the same and
+  # did not show this; it is not a claim that 3.6 Flash reasons better than 3.1 Pro.
+  # hypothesis_model:
+  #   provider: "gemini"
+  #   model: "gemini-3.1-pro-preview"
+  #   api_key_env: "GOOGLE_API_KEY"
+
 
 
   coding_model:
     provider: "openai"
-    model: "MiniMax-M2.7"
-    api_key_env: "MINIMAX_API_KEY"
-    base_url: "https://api.minimax.io/v1"
-    subscription: true
-    max_tokens: 24000  # Cap per-call output. MiniMax default is ~64,000 and a
-                       # stuck call at 64K per step blows the 204,800 context
-                       # window within 2-3 turns (seen in the Apr 14 ELK3 crash).
-                       # 24K covers 100% of legitimate calls observed across
-                       # 11,254 historical MiniMax calls (max legit = 23,001).
+    model: "deepseek-v4-flash"          # model version DeepSeek-V4-Flash-0731
+    api_key_env: "DEEPSEEK_API_KEY"
+    base_url: "https://api.deepseek.com"
+    # No max_tokens, and the earlier "DeepSeek needs max_tokens: 8192" note does not carry over
+    # from deepseek-chat. V4-Flash has thinking on by default and bills it against the same
+    # budget: uncapped, one code-generation call returned finish_reason=stop with 16,808 output
+    # tokens of which 12,535 were reasoning; capped at 24,000 the same prompt returned
+    # finish_reason=length with all 24,000 spent on reasoning and no code at all.
+
+  # This project's official coding model, commented out here only because the MiniMax
+  # subscription this account uses had lapsed and MiniMax's own site was down to renew it at
+  # the time this config was tested -- not a claim that MiniMax-M2.7 codes worse than what's
+  # active above. Subscription active, this is a fine default; needs max_tokens capped, unlike
+  # the reasoning models elsewhere in this file, because it goes the other way: with none, its
+  # ~64,000-token default lets one stuck call consume the whole context window within a few
+  # turns (seen in the Apr 14 ELK3 crash). 24K covers 100% of legitimate calls observed across
+  # 11,254 historical MiniMax calls (max legit = 23,001).
+  # coding_model:
+  #   provider: "openai"
+  #   model: "MiniMax-M2.7"
+  #   api_key_env: "MINIMAX_API_KEY"
+  #   base_url: "https://api.minimax.io/v1"
+  #   subscription: true
+  #   max_tokens: 24000
+
+  # Tested working alternative coding model, kept for reference.
+  # coding_model:
+  #   provider: "gemini"
+  #   model: "gemini-3.6-flash"
+  #   api_key_env: "GOOGLE_API_KEY"
+  #   # 3.6 rather than 3.7: identically priced, but 3.7's flex queue returns 503 under load often
+  #   # enough to stall a run (0 of 3 probe calls on flex, 3 of 3 on standard; 3.6 answered 3 of 3
+  #   # on both). service_tier defaults to flex, where $0.375 / $1.875 per M tokens applies.
 
 
   # Model for hypothesis review
@@ -35,10 +85,19 @@ llm:
   # Model for summarizing results
   summary_model:
     provider: "gemini"
-    model: "gemini-3.1-pro-preview"
+    model: "gemini-3.6-flash"
     api_key_env: "GOOGLE_API_KEY"
     # service_tier: "flex"       # flex | standard | priority  (default: flex)
     # thinking_level: "MEDIUM"   # MINIMAL | LOW | MEDIUM | HIGH  (default: MEDIUM)
+
+  # This project's official summary model, commented out for the same reason as
+  # hypothesis_model above: the same flex-queue 503s showed up here too (this run's iteration-1
+  # evaluation retried 3 times, ~4 minutes, before succeeding), not because 3.6 Flash judges
+  # evidence better than 3.1 Pro.
+  # summary_model:
+  #   provider: "gemini"
+  #   model: "gemini-3.1-pro-preview"
+  #   api_key_env: "GOOGLE_API_KEY"
 
 execution:
   type: "jupyter"
@@ -47,8 +106,8 @@ execution:
   # max_static_rejections removed — v2 uses REPL loop, no static pre-gate
 
 pipeline:
-  max_iterations: 10  # Maximum hypothesis-verification loops
+  max_iterations: 15  # Maximum hypothesis-verification loops
   max_consecutive_hypothesis_rejections: 6  # If reached and any SUPPORTS exist, synthesize and report; else stop
-  log_dir: "logs_3"
-  output_dir: "outputs_3"
+  log_dir: "logs"
+  output_dir: "outputs"
   save_intermediate: true  # Save state after each iteration
