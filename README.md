@@ -85,8 +85,6 @@ all.
 
 Create a YAML manifest listing your data files. `examples/sp1_nfya_K562/data_manifest_demo.yaml` is a
 complete one, with relative paths, and runs from a fresh clone (see **Demo** below).
-`examples/atf6_rest_K562/` records a second investigation with the absolute paths of the machine it
-ran on, for provenance rather than for re-running.
 
 ```yaml
 finding: "TF_B motif is the top predictor of TF_A binding signal in K562"
@@ -237,7 +235,6 @@ config/
 motifs/                 Combined JASPAR / HOCOMOCO / CIS-BP collection read by every motif scan
 examples/
   sp1_nfya_K562/        Worked demo: manifest, and a script that downloads its data
-  atf6_rest_K562/       A second investigation, kept for provenance
 tests/                  Test suite
 ```
 
