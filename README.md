@@ -13,6 +13,20 @@ The pipeline runs an iterative loop across four specialized agents:
 
 Convergence is modality-aware: observational-only data may converge on the best-supported mechanistic interpretation; perturbation/causal data additionally requires a but-for causal test.
 
+## Three ways to use this repository
+
+1. **[Run ARES on the demo](#demo)** — watch the four agents investigate a real TF-motif
+   finding end to end, against data the repository downloads for you. The fastest way to see
+   the pipeline work.
+2. **[Run ARES on your own data](#run-ares-on-your-own-data)** — same pipeline, your own
+   finding and manifest. Needs the same setup as the demo.
+3. **[Reproduce the paper's figures](#reproduce-the-papers-figures)** — regenerate Figures
+   1–5 from the processed data archived on Zenodo. Independent of the other two: no LLM API
+   key, no bioinformatics tools, just Python.
+
+The first two share the **Requirements** through **Configuration** sections below; the third
+has its own, much shorter list, given at the start of its own section.
+
 ## Requirements
 
 - Python 3.10+
@@ -149,7 +163,9 @@ conclusion to vary between runs, and budget more headroom than 31 minutes and $0
 run needs more iterations to converge, or does not converge within `pipeline.max_iterations`. Lower
 that value in `config/config.yaml` if you only want to watch one hypothesis go round the loop.
 
-## Running the pipeline
+## Run ARES on your own data
+
+Write a manifest for your own finding (see **Data manifest** above), then:
 
 ```bash
 conda activate pipeline
@@ -170,6 +186,37 @@ Optional flags:
 
 Run `python -m src.main --help` for the full list, including cost-tracking and production-ledger
 flags not needed for a single investigation.
+
+## Reproduce the paper's figures
+
+Figures 1–5 read from a processed-data archive that's too large for GitHub and is released
+separately on Zenodo: **[10.5281/zenodo.21806027](https://doi.org/10.5281/zenodo.21806027)**.
+This step is independent of the demo and of running your own investigation — it needs only
+Python and the packages already installed in **Installation** above (`numpy`, `pandas`, `scipy`,
+`matplotlib`); no LLM API key and no `bedtools`/`fimo` are required, because it only plots
+already-processed tables rather than re-running any analysis.
+
+```bash
+# Download the archive from the DOI above and unpack it at the repository root. It already
+# contains a data/ folder at its top level, so this creates ARES/data/ directly.
+unzip ares_data_v1.zip
+
+# Each figure writes one PDF per panel to figures/output/<name>/
+cd figures
+python fig1.py
+python fig2.py
+python fig3.py
+python fig4.py
+python fig5.py
+```
+
+Unpacking somewhere other than the repository root works too — set the environment variable
+`ARES_DATA` to wherever `data/` ended up before running the scripts.
+
+Each script prints the key numbers as it runs. Re-deriving these processed tables from raw
+sequencing data — rather than reproducing the figures from them — is a separate, much larger
+undertaking covered by the `analyses/` directory and the manuscript Methods, and is not needed
+just to reproduce the figures.
 
 ## Outputs
 
@@ -236,6 +283,8 @@ motifs/                 Combined JASPAR / HOCOMOCO / CIS-BP collection read by e
 examples/
   sp1_nfya_K562/        Worked demo: manifest, and a script that downloads its data
 tests/                  Test suite
+figures/                Scripts that reproduce Figures 1-5 from the Zenodo data archive
+data/                   Not in this repository -- the unpacked Zenodo archive goes here
 ```
 
 ## License
