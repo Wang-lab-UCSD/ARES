@@ -24,11 +24,15 @@ Convergence is modality-aware: observational-only data may converge on the best-
    1–5 from the processed data archived on Zenodo. Independent of the other two: no LLM API
    key, no bioinformatics tools, just Python.
 
-The first two share the **Requirements** through **Configuration** sections below; the third
-has its own, much shorter list, given at the start of its own section.
+The first two share the **ARES Setup** and **Configuration** sections below; the third has
+its own, much shorter list, given at the start of its own section.
 
-## Requirements
+## ARES Setup
 
+The base environment for running the pipeline — needed for the **Demo** and for **Run ARES on
+your own data**, not for **Reproduce the paper's figures**, which has its own short list.
+
+**Requirements:**
 - Python 3.10+
 - Conda (recommended for bioinformatics tools)
 - Bioinformatics tools: `bedtools`, `samtools`, `meme`/`fimo` (installed via conda)
@@ -37,27 +41,24 @@ has its own, much shorter list, given at the start of its own section.
   across three providers, because the four agents don't need the same model; see **Pipeline
   config** below for which needs what and why.
 
-## Installation
+**1. Create the conda environment and install the bioinformatics tools:**
 
 ```bash
-# 1. Create conda environment
 conda create -n pipeline python=3.11 -y
 conda activate pipeline
-
-# 2. Install bioinformatics tools
 conda install -c bioconda -c conda-forge meme bedtools samtools -y
+```
 
-# 3. Install Python dependencies
+**2. Install the Python dependencies:**
+
+```bash
 pip install -r requirements.txt
 # If pybedtools build fails, install it from conda first:
 # conda install -c bioconda pybedtools -y && pip install -r requirements.txt
 ```
 
-## Configuration
-
-### API keys
-
-Copy `load_api_keys.sh.example` to `load_api_keys.sh` and fill in your keys:
+**3. Set up API keys.** Copy `load_api_keys.sh.example` to `load_api_keys.sh` and fill in your
+keys:
 
 ```bash
 cp load_api_keys.sh.example load_api_keys.sh
@@ -66,6 +67,8 @@ source load_api_keys.sh
 ```
 
 `load_api_keys.sh` is listed in `.gitignore` — never commit real keys.
+
+## Configuration
 
 ### Pipeline config
 
@@ -192,7 +195,7 @@ flags not needed for a single investigation.
 Figures 1–5 read from a processed-data archive that's too large for GitHub and is released
 separately on Zenodo: **[10.5281/zenodo.21806027](https://doi.org/10.5281/zenodo.21806027)**.
 This step is independent of the demo and of running your own investigation — it needs only
-Python and the packages already installed in **Installation** above (`numpy`, `pandas`, `scipy`,
+Python and the packages already installed in **ARES Setup** above (`numpy`, `pandas`, `scipy`,
 `matplotlib`); no LLM API key and no `bedtools`/`fimo` are required, because it only plots
 already-processed tables rather than re-running any analysis.
 
