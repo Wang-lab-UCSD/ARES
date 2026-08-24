@@ -4,6 +4,12 @@ A multi-agent LLM pipeline for automated mechanistic hypothesis generation and v
 
 ## Overview
 
+![ARES workflow: a biological finding and a data manifest go through a Hypothesis agent, a Review
+agent that approves, revises or rejects the hypothesis, a Coding agent that executes the
+verification via an iterative REPL against a shared toolbox, and a Summary agent that scores the
+evidence and checks convergence, feeding back into the next iteration until an ARES output report
+is produced.](assets/ARES_workflow.png)
+
 The pipeline runs an iterative loop across four specialized agents:
 
 1. **Hypothesis agent** — proposes testable mechanistic hypotheses grounded in the finding and prior results
