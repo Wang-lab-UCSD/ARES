@@ -1,0 +1,190 @@
+# SP1/NFYA demo manifest (K562)
+#
+# The investigation reported in the paper, with the two-file base/pair split flattened into one
+# document and every path made relative to this file, so the demo runs from a fresh clone. The
+# pipeline resolves manifest paths against the manifest's own directory, so nothing needs editing.
+#
+#   bash download_demo_data.sh          # writes ./data, about 26 GB
+#   python -m src.main --config config/config.yaml \
+#          --manifest examples/sp1_nfya_K562/data_manifest_demo.yaml
+#
+# Two departures from the run in the paper, both to keep the download tractable:
+#   - the motif collection is not downloaded; it ships in motifs/ of this repository
+#   - the whole-cell-line TF pool ships as narrowPeak only. Its 526 peak files come to 0.37 GB
+#     against 700 GB for their signal tracks, and the pool is read for peak overlap rather than
+#     for signal, so co-occupancy tests behave as they did in the paper.
+finding: 'A systematic screen of 841 JASPAR PWMs identifies the NFYA motif score as the dominant non-homologous
+  feature for predicting the continuous signal intensity of SP1 binding in K562. The goal is to explain
+  the biomolecular mechanism behind this relationship.
+
+  '
+context: 'I want to understand the mechanism of how different transcription factors cooperate
+
+  with other transcription factors to regulate gene expression. I downloaded the ChIP-seq
+
+  data from ENCODE for various transcription factors in K562, along with RNA-seq,
+
+  Hi-C data, ChromHMM, H3K27ac, H3K4me3, H3K27me3, H3K4me1, H3K9me3 ChIP-seq, DNase-seq,
+
+  phyloP score, and WGBS when available.
+
+
+  STRING protein-protein interaction network is available and can be used to test
+
+  whether TFs interact directly or via shared cofactors.
+
+  '
+investigation_objective: 'Characterize the mechanism linking TF_B (motif) to TF_A binding; synthesize
+  a coherent causal narrative.
+
+  '
+data:
+  all_tf_chipseq:
+    data_root: data/TF_ENCODE4_K562
+    directory_pattern: '{TF_NAME}_human'
+    file_note: 'Peaks only in this demo: each directory holds one .bed (narrowPeak, hg38) and no .bigWig.
+      Signal tracks are available for SP1 and NFYA under chipseq. Use glob to find the .bed.'
+    available_tfs:
+    - ADNP, AFF1, AFF4, ARHGAP35, ARID1B, ARID3A, ARID3B, ARID4B, ARNT, ATF1
+    - ATF2, ATF3, ATF4, ATF6, BACH1, BCL6, BCLAF1, BHLHE40, BMI1, BRF2
+    - CBFB, CBX1, CBX2, CC2D1A, CDC5L, CEBPB, CEBPG, CEBPZ, CGGBP1, CHAMP1
+    - CHCHD3, CHD7, CLOCK, CREB1, CREB3L1, CREB3, CREB5, CREM, CTCFL, CTCF
+    - CUX1, DACH1, DDIT3, DEAF1, DLX4, DMBX1, DMTF1, E2F1, E2F3, E2F4
+    - E2F5, E2F6, E2F7, E2F8, E4F1, EGR1, ELF1, ELF2, ELF4, ELK1
+    - ELK3, EP300, ESRRA, ESRRB, ETS1, ETS2, ETV1, ETV5, ETV6, FOSL1
+    - FOS, FOXA1, FOXA3, FOXJ2, FOXJ3, FOXK1, FOXK2, FOXO4, FOXP4, GABPA
+    - GABPB1, GABPB2, GATA1, GATA2, GATAD2B, GMEB1, GTF2B, GTF2I, GTF3C2, HBP1
+    - HES1, HEY1, HINFP, HIVEP1, HMBOX1, HMG20A, HMG20B, HMGXB4, HNRNPK, HOMEZ
+    - ID3, IFI16, IKZF1, ILK, IRF1, IRF2, IRF9, JUND, JUN, KLF10
+    - KLF13, KLF16, KLF1, KLF6, LCOR, LEF1, MAFF, MAFG, MAFK, MAX
+    - MAZ, MBD1, MECOM, MEF2A, MEF2D, MEIS2, MGA, MITF, MLLT1, MLX
+    - MNT, MTF1, MXD1, MXI1, MYBL2, MYC, MYNN, NEUROD1, NFATC3, NFE2
+    - NFIC, NFIX, NFXL1, NFYA, NFYB, NKRF, NR0B1, NR1H2, NR2C1, NR2C2
+    - NR2F1, NR2F2, NR2F6, NR3C1, NR4A1, NRF1, OTX1, PATZ1, PBX2, PHB2
+    - PHTF2, PKNOX1, POU5F1, PPARD, PRDM10, PREB, PTTG1, RBPJ, RCOR1, RELA
+    - RERE, REST, RFX1, RFX5, RFX7, RHOXF2B, RLF, RNF219, RNF2, RREB1
+    - RUNX1, SFPQ, SIX5, SKIL, SMAD1, SMAD2, SMAD3, SMAD4, SMAD5, SNAPC5
+    - SOX6, SP1, SP2, SREBF1, SREBF2, SRF, STAT1, STAT2, STAT5A, STAT5B
+    - STAT6, TBPL1, TBX18, TCF12, TCF15, TCF3, TCF7L2, TCF7, TCFL5, TEAD1
+    - TEAD2, TEAD4, TFAM, TFAP4, TFCP2, TFDP1, TFE3, TGIF2, THAP12, THAP1
+    - THAP7, THRA, THRB, TRIM24, TRIM25, TRIM28, TSC22D4, TSHZ1, UBTF, USF1
+    - USF2, VEZF1, XRCC5, YBX1, YY1, ZBED1, ZBTB11, ZBTB12, ZBTB17, ZBTB26
+    - ZBTB2, ZBTB33, ZBTB34, ZBTB40, ZBTB43, ZBTB49, ZBTB5, ZBTB8A, ZBTB9, ZC3H8
+    - ZEB2, ZFP1, ZFP30, ZFP91, ZHX1, ZKSCAN1, ZKSCAN3, ZKSCAN8, ZMIZ1, ZMYM3
+    - ZNF121, ZNF124, ZNF12, ZNF133, ZNF134, ZNF140, ZNF143, ZNF146, ZNF148, ZNF165
+    - ZNF174, ZNF175, ZNF184, ZNF197, ZNF212, ZNF215, ZNF217, ZNF224, ZNF232, ZNF239
+    - ZNF23, ZNF24, ZNF253, ZNF257, ZNF263, ZNF274, ZNF277, ZNF280A, ZNF280B, ZNF281
+    - ZNF282, ZNF311, ZNF316, ZNF317, ZNF318, ZNF319, ZNF324, ZNF347, ZNF354B, ZNF354C
+    - ZNF384, ZNF395, ZNF397, ZNF398, ZNF3, ZNF407, ZNF408, ZNF41, ZNF431, ZNF436
+    - ZNF444, ZNF445, ZNF449, ZNF507, ZNF511, ZNF512, ZNF518B, ZNF551, ZNF561, ZNF57
+    - ZNF583, ZNF584, ZNF586, ZNF589, ZNF592, ZNF609, ZNF639, ZNF644, ZNF655, ZNF668
+    - ZNF695, ZNF696, ZNF699, ZNF700, ZNF707, ZNF717, ZNF740, ZNF75A, ZNF764, ZNF766
+    - ZNF76, ZNF778, ZNF77, ZNF780A, ZNF785, ZNF79, ZNF7, ZNF83, ZNF84, ZSCAN29
+    - ZSCAN32, ZZZ3
+  additional_chipseq:
+    data_root: data/TF_additional_K562
+    directory_pattern: '{TF_NAME}_human'
+    file_note: 'Peaks only in this demo: each directory holds one .bed (narrowPeak, hg38) and no .bigWig.
+      Signal tracks are available for SP1 and NFYA under chipseq. Use glob to find the .bed.'
+    available_tfs:
+    - AGO1, ARID2, ASH1L, ATF7, BCOR, BDP1, BRCA1, BRD4, BRD9, BRF1
+    - C11orf30, CAMTA2, CBFA2T2, CBFA2T3, CBX3, CBX5, CBX8, CCAR2, CCNT2, CHD1
+    - CHD2, CHD4, COPS2, CREBBP, CSDE1, CTBP1, CXXC5, DDX20, DIDO1, DNMT1
+    - DPF2, EHMT2, EP400, ERF, EWSR1, EZH2, FIP1L1, FOXM1, FOXP1, FUS
+    - GATAD2A, GTF2A2, GTF2E2, GTF2F1, HCFC1, HDAC1, HDAC2, HDAC3, HDAC6, HDAC8
+    - HDGF, HLTF, HMGN3, HNRNPH1, HNRNPLL, HNRNPL, HNRNPUL1, HOXB6, HSF4, ILF3
+    - JUNB, KAT2B, KAT7, KAT8, KDM1A, KDM2B, KDM4B, KDM5B, KHSRP, L3MBTL2
+    - LARP7, MBD2, MCM2, MCM3, MCM5, MCM7, MED1, MIER1, MTA1, MTA2
+    - MTA3, NBN, NCOA1, NCOA2, NCOA4, NCOA6, NCOR1, NELFE, NFE2L1, NFRKB
+    - NONO, NUFIP1, PCBP1, PCBP2, PHB, PHF20, PHF21A, PHF8, PML, POLR2A
+    - POLR2AphosphoS2, POLR2AphosphoS5, POLR2B, POLR2G, POLR2H, POLR3A, POLR3G, PRMT5, PRPF4, PTBP1
+    - PTRF, PURB, PYGO2, RAD21, RAD51, RB1, RBBP5, RBFOX2, RBM14, RBM15
+    - RBM17, RBM22, RBM25, RBM34, RBM39, SAFB2, SAFB, SAP30, SETDB1, SIN3A
+    - SIN3B, SIRT6, SLC30A9, SMARCA4, SMARCA5, SMARCB1, SMARCC2, SMARCE1, SMC3, SNIP1
+    - SNRNP70, SPI1, SRSF1, SRSF3, SRSF7, SRSF9, STAG1, SUPT5H, SUZ12, TAF15
+    - TAF1, TAF7, TAF9B, TAL1, TARDBP, TBL1XR1, TBP, THRAP3, TOE1, TRIP13
+    - U2AF1, U2AF2, WHSC1, XRCC3, XRCC4, YBX3, ZBTB1, ZBTB7A, ZC3H11A, ZC3H4
+    - ZFP36, ZFPM2, ZFX, ZNF830
+  rnaseq:
+    gene_quantification: data/ENCFF928NYA.tsv
+    gene_quantification_id_type: RSEM output; column 1 is gene_id (mostly ENSG with version suffix; some
+      numeric-only entries for small RNAs/mt). TPM in column 6.
+  epigenome:
+    dnase_bigwig_read_depth_normalized_signal: data/ENCFF655HFU.bigWig
+    dnase_signal_role: Chromatin accessibility; higher = more open
+    h3k27ac_bigwig_fold_change_over_control: data/ENCFF381NDD.bigWig
+    h3k27ac_signal_role: Active enhancer/promoter mark
+    h3k4me3_bigwig_fold_change_over_control: data/ENCFF253TOF.bigWig
+    h3k4me3_signal_role: Active promoter mark; enriched at TSS
+    h3k27me3_bigwig_fold_change_over_control: data/ENCFF139KZL.bigWig
+    h3k27me3_signal_role: Polycomb repression mark; enriched at silenced genes and bivalent promoters
+    h3k4me1_bigwig_fold_change_over_control: data/ENCFF607SUJ.bigWig
+    h3k4me1_signal_role: Enhancer mark (primed and active enhancers); distinguishes enhancers from promoters
+      (which have H3K4me3). H3K4me1-high + H3K27ac-high = active enhancer; H3K4me1-high + H3K27ac-low
+      = primed/poised enhancer.
+    h3k9me3_bigwig_fold_change_over_control: data/ENCFF812HRW.bigWig
+    h3k9me3_signal_role: Constitutive heterochromatin mark; enriched at pericentromeric regions, KRAB-ZNF-silenced
+      regions, and transposable elements. Distinguishes KRAB/TRIM28-mediated repression from Polycomb
+      (H3K27me3) repression.
+    chromhmm: data/E123_18_core_K27ac_hg38lift_mnemonics.bed
+    chromhmm_format: 'BED, 4 columns: chrom, start, end, state_mnemonic (e.g. 9_EnhA1)'
+    chromhmm_promoter_state:
+    - 1_TssA
+    - 2_TssFlnk
+    - 3_TssFlnkU
+    - 4_TssFlnkD
+    - 14_TssBiv
+    chromhmm_enhancer_state:
+    - 7_EnhG1
+    - 8_EnhG2
+    - 9_EnhA1
+    - 10_EnhA2
+    - 11_EnhWk
+    - 15_EnhBiv
+    chromhmm_transcription_state:
+    - 5_Tx
+    - 6_TxWk
+    chromhmm_polycomb_repressed_state:
+    - 16_ReprPC
+    - 17_ReprPCWk
+    chromhmm_quiescent_state:
+    - 18_Quies
+    WGBS_minus_strand_bigwig: data/ENCFF430PNX.bigWig
+    WGBS_minus_strand_signal_role: CpG methylation level (0-1)
+    WGBS_plus_strand_bigwig: data/ENCFF459XNY.bigWig
+    WGBS_plus_strand_signal_role: CpG methylation level (0-1)
+  hic:
+    hic_loops_bedpe: data/ENCFF134HIZ.bedpe
+    hic_loops_role: Chromatin loop calls; treat endpoints as loop anchors
+    hic_chromatin_strips_bedpe: data/ENCFF448GZL.bedpe
+  pwm:
+    motif_meme: ../../motifs/combined_TF_motifs_jaspar_hocomoco12_cisbp.meme
+    meme_motif_line_example: MOTIF NFYA|jaspar|MA0060.3
+  genome:
+    fasta: data/hg38.fa
+  annotations:
+    gencode: data/gencode.v38.annotation.gtf
+  phyloP:
+    phyloP_score: data/hg38.phyloP100way.bw
+    phyloP_score_role: Vertebrate conservation per base (100-way)
+  string:
+    species: 9606
+    id_type: symbol
+    min_score: 700
+    links_file: data/9606.protein.links.v12.0.txt.gz
+    aliases_file: data/9606.protein.aliases.v12.0.txt.gz
+  chipseq:
+    SP1_peaks: data/ENCFF171NEU.bed
+    SP1_peaks_format: narrowPeak (hg38); col 10 = summit offset from start
+    SP1_bigwig_fold_change_over_control: data/ENCFF524IWI.bigWig
+    NFYA_peaks: data/ENCFF908HSL.bed
+    NFYA_peaks_format: narrowPeak (hg38)
+    NFYA_bigwig_fold_change_over_control: data/ENCFF427FTJ.bigWig
+tools:
+- bedtools
+- samtools
+- meme
+- fimo
+- tomtom
+execution_requirements_path: ../../config/requirements_execution.txt
+causal_capable_data: false
