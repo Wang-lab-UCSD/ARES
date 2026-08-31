@@ -39,7 +39,7 @@ The base environment for running the pipeline — needed for the **Demo** and fo
 your own data**, not for **Reproduce the paper's figures**, which has its own short list.
 
 **Requirements:**
-- Python 3.10+
+- Python 3.11+  (numpy, pandas and scipy at the pinned versions require 3.11)
 - Conda (recommended for bioinformatics tools)
 - Bioinformatics tools: `bedtools`, `samtools`, `meme`/`fimo` (installed via conda)
 - At least one LLM API key (OpenAI, Anthropic, Google Gemini or DeepSeek) — point all four
