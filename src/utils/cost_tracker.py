@@ -22,7 +22,19 @@ class ModelPricing:
     cached_input_price: float = 0.0  # USD per 1M cached input tokens (0 = not supported)
 
 
-# Pricing table (February 2026 rates - update as needed)
+# Pricing table. Every rate below was checked against the provider's own pricing page on
+# 2026-08-31; entries that page no longer lists are marked UNVERIFIED where they appear.
+#   OpenAI     https://developers.openai.com/api/docs/pricing
+#   Anthropic  https://docs.anthropic.com/en/docs/about-claude/pricing
+#   Google     https://ai.google.dev/gemini-api/docs/pricing
+#   DeepSeek   https://api-docs.deepseek.com/quick_start/pricing
+#   MiniMax    https://platform.minimax.io/docs/guides/pricing-paygo
+#   Z.AI       https://docs.z.ai/guides/overview/pricing
+# A model missing from this table does not break anything: the pipeline runs it normally and
+# only the cost estimate degrades -- get_pricing returns None, estimate_cost logs a warning and
+# falls back to a deliberately high $10/$40 per 1M guess, which also feeds the per-call and
+# session budget checks, so a cheap unlisted model can trip a budget far earlier than its real
+# cost warrants. Add it here to get accurate numbers.
 # Context limits are the maximum input tokens the model can accept
 MODEL_PRICING: dict[str, ModelPricing] = {
     # OpenAI
@@ -34,26 +46,38 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     "gpt-5.1-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-chat-latest", context_limit=256000, cached_input_price=0.125),
     "gpt-5.1-codex-max": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex-max", context_limit=256000, cached_input_price=0.125),
     "gpt-5.1-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5.1-codex", context_limit=256000, cached_input_price=0.125),
-    "gpt-5": ModelPricing(1.25, 10.0, "openai", "gpt-5", context_limit=256000),
+    "gpt-5": ModelPricing(1.25, 10.0, "openai", "gpt-5", context_limit=256000, cached_input_price=0.125),
     "gpt-5-chat-latest": ModelPricing(1.25, 10.0, "openai", "gpt-5-chat-latest", context_limit=256000),
     "gpt-5-codex": ModelPricing(1.25, 10.0, "openai", "gpt-5-codex", context_limit=256000),
     "gpt-5-pro": ModelPricing(15.0, 120.0, "openai", "gpt-5-pro", context_limit=256000),
-    "gpt-5-mini": ModelPricing(0.25, 2.0, "openai", "gpt-5-mini", context_limit=400000, cached_input_price=0.03),
-    "gpt-5.4-mini": ModelPricing(0.75, 4.50, "openai", "gpt-5.4-mini", context_limit=400000, cached_input_price=0.08),
-    "gpt-5-nano": ModelPricing(0.05, 0.40, "openai", "gpt-5-nano", context_limit=128000),
-    # Anthropic
+    "gpt-5-mini": ModelPricing(0.25, 2.0, "openai", "gpt-5-mini", context_limit=400000, cached_input_price=0.025),
+    "gpt-5.4-mini": ModelPricing(0.75, 4.50, "openai", "gpt-5.4-mini", context_limit=400000, cached_input_price=0.075),
+    "gpt-5-nano": ModelPricing(0.05, 0.40, "openai", "gpt-5-nano", context_limit=128000, cached_input_price=0.005),
+    # Anthropic. Input/output rates are the published ones; cached_input_price is derived as
+    # 0.1x input, the cache-read multiplier, matching every pre-existing row in this block.
+    # The 4.6-and-later models take 1M context, unlike the 200K of the 4.0/4.5 generation.
+    "claude-fable-5": ModelPricing(10.0, 50.0, "anthropic", "claude-fable-5", context_limit=1000000, cached_input_price=1.00),
+    "claude-opus-5": ModelPricing(5.0, 25.0, "anthropic", "claude-opus-5", context_limit=1000000, cached_input_price=0.50),
+    "claude-opus-4-8": ModelPricing(5.0, 25.0, "anthropic", "claude-opus-4-8", context_limit=1000000, cached_input_price=0.50),
+    "claude-opus-4-7": ModelPricing(5.0, 25.0, "anthropic", "claude-opus-4-7", context_limit=1000000, cached_input_price=0.50),
+    "claude-opus-4-6": ModelPricing(5.0, 25.0, "anthropic", "claude-opus-4-6", context_limit=1000000, cached_input_price=0.50),
+    "claude-sonnet-5": ModelPricing(2.0, 10.0, "anthropic", "claude-sonnet-5", context_limit=1000000, cached_input_price=0.20),
+    "claude-sonnet-4-6": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4-6", context_limit=1000000, cached_input_price=0.30),
+    # Was 0.80/4.0 here, which under-billed by a fifth; the published rate is 1.00/5.00.
+    "claude-haiku-4-5": ModelPricing(1.00, 5.00, "anthropic", "claude-haiku-4-5", context_limit=200000, cached_input_price=0.10),
+    # UNVERIFIED: the 4.5 pair and the two dated 4.0 snapshots are absent from the current
+    # pricing page, so these rates are carried over unchecked. The 4.0 snapshots are marked
+    # deprecated upstream. Left in place for old runs whose logs name them.
+    "claude-opus-4-5": ModelPricing(5.0, 25.0, "anthropic", "claude-opus-4-5", context_limit=200000, cached_input_price=0.50),
+    "claude-sonnet-4-5": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4-5", context_limit=200000, cached_input_price=0.30),
     "claude-sonnet-4-20250514": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4", context_limit=200000, cached_input_price=0.30),
     "claude-opus-4-20250514": ModelPricing(15.0, 75.0, "anthropic", "claude-opus-4", context_limit=200000, cached_input_price=1.50),
-    "claude-opus-4-5": ModelPricing(5.0, 25.0, "anthropic", "claude-opus-4-5", context_limit=200000, cached_input_price=0.50),
-    # TODO: verify pricing for claude-sonnet-4-5 and claude-haiku-4-5
-    "claude-sonnet-4-5": ModelPricing(3.0, 15.0, "anthropic", "claude-sonnet-4-5", context_limit=200000, cached_input_price=0.30),
-    "claude-haiku-4-5": ModelPricing(0.80, 4.0, "anthropic", "claude-haiku-4-5", context_limit=200000, cached_input_price=0.08),
     # Google — Gemini 2.5 Pro output price is $10/1M for prompts <=200K, $15/1M for >200K;
     # using <=200K tier as default since most pipeline calls are well under that limit
     "gemini-2.5-pro": ModelPricing(1.25, 10.0, "gemini", "gemini-2.5-pro", context_limit=1000000, cached_input_price=0.125),
     "gemini-2.5-flash": ModelPricing(0.30, 2.50, "gemini", "gemini-2.5-flash", context_limit=1000000, cached_input_price=0.03),
-    # Google (Gemini API / AI Studio) — Gemini 3 Flash Preview
-    # NOTE: Update if your billing page shows different rates.
+    # UNVERIFIED: Gemini 3 Flash Preview is no longer listed on Google's pricing page; this
+    # rate is carried over unchecked. Gemini 3.5 Flash below is its listed successor.
     "gemini-3-flash-preview": ModelPricing(0.50, 3.00, "gemini", "gemini-3-flash-preview", context_limit=1000000),
     # Gemini 3.1 Pro Preview — pricing reflects the FLEX service tier (which the
     # provider uses by default; see gemini_provider.py `service_tier="flex"`).
@@ -67,11 +91,14 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # through 31 December 2026 and doubling on 1 January 2027, so they need revisiting then.
     "gemini-3.6-flash": ModelPricing(0.375, 1.875, "gemini", "gemini-3.6-flash", context_limit=1048576, cached_input_price=0.0375),
     "gemini-3.7-flash": ModelPricing(0.375, 1.875, "gemini", "gemini-3.7-flash", context_limit=1048576, cached_input_price=0.0375),
+    # Gemini 3.5 Flash — FLEX tier ($0.75/$4.50); standard is 2x, as with the other Flash models.
+    "gemini-3.5-flash": ModelPricing(0.75, 4.50, "gemini", "gemini-3.5-flash", context_limit=1048576, cached_input_price=0.075),
     # MiniMax
-    "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=204800),
-    # GLM-5 (Z.AI) — $1/1M input, $3.2/1M output; limited-time free tier available
-    "glm-5": ModelPricing(1.0, 3.2, "openai", "glm-5", context_limit=200000),
-    # DeepSeek V3.2 — $0.28/1M input (cache miss), $0.028/1M (cache hit), $0.42/1M output
+    "MiniMax-M2.7": ModelPricing(0.30, 1.2, "minimax", "MiniMax-M2.7", context_limit=204800, cached_input_price=0.06),
+    # GLM-5 (Z.AI) — $1/1M input, $0.20/1M cached input, $3.2/1M output.
+    "glm-5": ModelPricing(1.0, 3.2, "openai", "glm-5", context_limit=200000, cached_input_price=0.20),
+    # UNVERIFIED: DeepSeek's pricing page now lists only the V4 models, so this V3.2 rate is
+    # carried over unchecked.
     "deepseek-chat": ModelPricing(0.28, 0.42, "deepseek", "deepseek-chat", context_limit=128000, cached_input_price=0.028),
     # DeepSeek V4 (model versions DeepSeek-V4-Flash-0731 and DeepSeek-V4-Pro-0813). DeepSeek bills
     # by time of day: peak is 01:00-04:00 and 06:00-10:00 UTC on weekdays, and off-peak is exactly

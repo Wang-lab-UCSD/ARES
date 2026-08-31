@@ -246,10 +246,19 @@ Each run writes a timestamped directory under `outputs/` containing:
 | Provider | Models | Config `provider` value |
 |----------|--------|------------------------|
 | OpenAI | gpt-5.2, gpt-5, gpt-5-mini, gpt-5.4-mini, ... | `"openai"` |
-| Anthropic | claude-sonnet-4, claude-opus-4 | `"anthropic"` |
+| Anthropic | claude-opus-5, claude-sonnet-5, claude-opus-4-8, claude-haiku-4-5, ... | `"anthropic"` |
 | Google | gemini-3.6-flash, gemini-3.1-pro-preview, gemini-2.5-pro/flash | `"gemini"` |
 | Z.AI (GLM-5) | glm-5 | `"openai"` + `base_url` |
 | DeepSeek | deepseek-v4-flash, deepseek-chat | `"openai"` + `base_url` |
+| MiniMax | MiniMax-M2.7 | `"openai"` + `base_url` |
+
+Any model these providers offer can be configured, not only the ones named above. The table is
+the set whose prices are recorded in `src/utils/cost_tracker.py`, checked against each provider's
+own pricing page on **2026-08-31**. Running a model that is not in that table works normally --
+nothing crashes and no feature is lost. The only casualty is the cost estimate: with no price on
+file the tracker warns and falls back to a deliberately high $10/$40 per 1M guess. Since that
+same estimate feeds the per-call and per-session budget checks, an unlisted cheap model can trip a
+budget long before its real spend warrants it. Add the model to that table to get real numbers.
 
 Third-party OpenAI-compatible endpoints can be used with the `openai` provider by setting `base_url`:
 ```yaml
