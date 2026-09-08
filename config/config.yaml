@@ -17,15 +17,19 @@
 # better -- swap either back in, or point any agent at a different model or provider entirely;
 # nothing here is prescriptive.
 
+# The four agents below all run on DeepSeek, so a first run needs one key and not three. That is
+# a demo-reliability choice: the Gemini flex queue returned 503s often enough to stall runs (see
+# the commented-out blocks), and every extra provider is another way for someone else's first
+# attempt to fail. Point any agent somewhere else whenever you prefer.
 llm:
   # Model for generating and refining hypotheses
   hypothesis_model:
-    provider: "gemini"
-    model: "gemini-3.6-flash"
-    api_key_env: "GOOGLE_API_KEY"
-    # Gemini-only cost knobs. Defaults if omitted: service_tier="flex", thinking_level="MEDIUM".
-    # service_tier: "flex"       # flex | standard | priority  — flex is ~50% cheaper, lower priority
-    # thinking_level: "MEDIUM"   # MINIMAL | LOW | MEDIUM | HIGH  — thinking tokens bill at output rate
+    provider: "openai"
+    model: "deepseek-v4-pro"
+    api_key_env: "DEEPSEEK_API_KEY"
+    base_url: "https://api.deepseek.com"
+    # No max_tokens, for the reason spelled out under coding_model: V4 bills thinking against the
+    # same budget, so a cap sized for the answer alone starves the visible output.
 
   # This project's official hypothesis model, commented out here only because its flex queue
   # 503'd often enough during testing to add several minutes of retry delay per call (8 retries
@@ -78,17 +82,18 @@ llm:
   # Model for hypothesis review
   review_model:
     provider: "openai"
-    model: "gpt-5.4-mini"
-    api_key_env: "OPENAI_API_KEY"
-    reasoning_effort: "medium"
+    model: "deepseek-v4-flash"
+    api_key_env: "DEEPSEEK_API_KEY"
+    base_url: "https://api.deepseek.com"
+    # No reasoning_effort: OpenAIProvider forwards it verbatim to whatever base_url points at,
+    # and it is an OpenAI-only parameter.
 
   # Model for summarizing results
   summary_model:
-    provider: "gemini"
-    model: "gemini-3.6-flash"
-    api_key_env: "GOOGLE_API_KEY"
-    # service_tier: "flex"       # flex | standard | priority  (default: flex)
-    # thinking_level: "MEDIUM"   # MINIMAL | LOW | MEDIUM | HIGH  (default: MEDIUM)
+    provider: "openai"
+    model: "deepseek-v4-pro"
+    api_key_env: "DEEPSEEK_API_KEY"
+    base_url: "https://api.deepseek.com"
 
   # This project's official summary model, commented out for the same reason as
   # hypothesis_model above: the same flex-queue 503s showed up here too (this run's iteration-1

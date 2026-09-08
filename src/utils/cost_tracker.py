@@ -53,6 +53,14 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     "gpt-5-mini": ModelPricing(0.25, 2.0, "openai", "gpt-5-mini", context_limit=400000, cached_input_price=0.025),
     "gpt-5.4-mini": ModelPricing(0.75, 4.50, "openai", "gpt-5.4-mini", context_limit=400000, cached_input_price=0.075),
     "gpt-5-nano": ModelPricing(0.05, 0.40, "openai", "gpt-5-nano", context_limit=128000, cached_input_price=0.005),
+    # GPT-5.6 family and the GPT-6 flagship, all at a 1.05M context. gpt-5.6-luna undercuts
+    # deepseek-v4-flash on both input and output, which makes it the cheapest capable option in
+    # this table for the coding, review and summary roles. gpt-5.6-cyber is omitted: it is the
+    # security-specialised variant, priced far above the rest and irrelevant here.
+    "gpt-6-astra": ModelPricing(10.0, 50.0, "openai", "gpt-6-astra", context_limit=1050000, cached_input_price=1.00),
+    "gpt-5.6-sol": ModelPricing(4.0, 20.0, "openai", "gpt-5.6-sol", context_limit=1050000, cached_input_price=0.40),
+    "gpt-5.6-terra": ModelPricing(2.0, 12.0, "openai", "gpt-5.6-terra", context_limit=1050000, cached_input_price=0.20),
+    "gpt-5.6-luna": ModelPricing(0.20, 1.20, "openai", "gpt-5.6-luna", context_limit=1050000, cached_input_price=0.02),
     # Anthropic. Input/output rates are the published ones; cached_input_price is derived as
     # 0.1x input, the cache-read multiplier, matching every pre-existing row in this block.
     # The 4.6-and-later models take 1M context, unlike the 200K of the 4.0/4.5 generation.

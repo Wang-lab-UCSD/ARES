@@ -42,10 +42,9 @@ your own data**, not for **Reproduce the paper's figures**, which has its own sh
 - Python 3.11+  (numpy, pandas and scipy at the pinned versions require 3.11)
 - Conda (recommended for bioinformatics tools)
 - Bioinformatics tools: `bedtools`, `samtools`, `meme`/`fimo` (installed via conda)
-- At least one LLM API key (OpenAI, Anthropic, Google Gemini or DeepSeek) — point all four
-  agents at one provider and you're set. The shipped `config/config.yaml` instead splits them
-  across three providers, because the four agents don't need the same model; see **Pipeline
-  config** below for which needs what and why.
+- One LLM API key. The shipped `config/config.yaml` runs all four agents on DeepSeek, so a first
+  run needs `DEEPSEEK_API_KEY` and nothing else. The four agents do not have to share a model or a
+  provider — see **Pipeline config** below for what each one needs and why.
 
 **1. Create the conda environment and install the bioinformatics tools:**
 
@@ -101,8 +100,12 @@ reported in the paper — is Gemini 3.1 Pro for hypothesis and summary, MiniMax-
 and GPT-5.4-mini for review, and is preserved in `config/config.yaml`'s comments. But the pipeline
 is not tied to these: point any agent at any model from any provider under **Supported LLM
 providers** below by editing its block's `provider`, `model` and `api_key_env` — a single model
-for all four is a fine place to start if you'd rather not think about the four roles above at
-all.
+for all four is a fine place to start if you'd rather not think about the four roles above at all.
+
+What ships active is a different, single-provider set: DeepSeek-V4-Pro for hypothesis and
+DeepSeek-V4-Flash for the other three. That is a reliability choice rather than a quality
+judgement — every extra provider is one more way for someone's first run to fail, and the Gemini
+flex queue returned enough 503s to stall runs outright.
 
 ### Data manifest
 
@@ -131,9 +134,10 @@ tools:
 
 ## Demo
 
-`examples/sp1_nfya_K562/` is the SP1/NFYA investigation reported in the paper — why the NFYA motif
-is the strongest non-homologous predictor of SP1 binding intensity in K562 — and is the quickest way
-to watch the pipeline run end to end.
+`examples/sp1_nfya_K562/` is a worked example: why the NFYA motif
+is the top-ranked non-self, non-homologous predictor of SP1 binding intensity in K562. It runs the full 
+pipeline on a single dependency, so it is a good place to start if you want to see the data manifest, 
+the iteration log and the final report together.
 
 ```bash
 bash examples/sp1_nfya_K562/download_demo_data.sh
@@ -245,11 +249,11 @@ Each run writes a timestamped directory under `outputs/` containing:
 
 | Provider | Models | Config `provider` value |
 |----------|--------|------------------------|
-| OpenAI | gpt-5.2, gpt-5, gpt-5-mini, gpt-5.4-mini, ... | `"openai"` |
+| OpenAI | gpt-6-astra, gpt-5.6-sol/terra/luna, gpt-5.2, gpt-5.4-mini, ... | `"openai"` |
 | Anthropic | claude-opus-5, claude-sonnet-5, claude-opus-4-8, claude-haiku-4-5, ... | `"anthropic"` |
 | Google | gemini-3.6-flash, gemini-3.1-pro-preview, gemini-2.5-pro/flash | `"gemini"` |
 | Z.AI (GLM-5) | glm-5 | `"openai"` + `base_url` |
-| DeepSeek | deepseek-v4-flash, deepseek-chat | `"openai"` + `base_url` |
+| DeepSeek | deepseek-v4-pro, deepseek-v4-flash | `"openai"` + `base_url` |
 | MiniMax | MiniMax-M2.7 | `"openai"` + `base_url` |
 
 Any model these providers offer can be configured, not only the ones named above. The table is

@@ -70,6 +70,22 @@ _DSML_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The same delimiter fused into a tag rather than standing on its own. Two shapes turn up, and
+# they need opposite treatment. `<\uFF5C\uFF5CDSML\uFF5C\uFF5Cexecute>` stands where `<execute>`
+# belongs and the block behind it is ordinarily perfect Python, so the tag is repaired and only
+# the delimiter dropped -- deleting the match would throw the turn away, which is what made these
+# read as tagless responses and pushed the REPL loop toward giving up. Every other filling seen
+# (`e`, `execution`, `018`, a hex id) names no tag the parser wants, so those are removed whole
+# rather than guessed at.
+_DSML_FUSED_TAG_RE = re.compile(
+    r"<(/?)\uFF5C\uFF5CDSML\uFF5C\uFF5C\.?(execute|solution)>",
+    re.IGNORECASE,
+)
+_DSML_FUSED_JUNK_RE = re.compile(
+    r"</?\uFF5C\uFF5CDSML\uFF5C\uFF5C[^>]*>\s*",
+    re.IGNORECASE,
+)
+
 
 def _strip_invoke_tags(content: str) -> tuple[str, int]:
     """Remove `<invoke>...</invoke>` blocks from an LLM response.
@@ -177,7 +193,11 @@ def _strip_dsml_tokens(content: str) -> tuple[str, int]:
         n_removed += 1
         return ""
 
-    cleaned = _DSML_TOKEN_RE.sub(_sub, content)
+    # Repair first, so a salvageable tag is not swept up by the catch-all below.
+    cleaned, n_fused = _DSML_FUSED_TAG_RE.subn(r"<\1\2>", content)
+    n_removed += n_fused
+    cleaned = _DSML_TOKEN_RE.sub(_sub, cleaned)
+    cleaned = _DSML_FUSED_JUNK_RE.sub(_sub, cleaned)
     return cleaned, n_removed
 
 
@@ -308,7 +328,11 @@ class CodingAgent:
             # still inspect whatever the model actually emitted, including any
             # hallucinated junk.
             try:
-                (debug_dir / f"iter{self.state_iter}_repl{iteration}_llm.txt"
+                # turn, not iteration: `iteration` advances only on a turn that executed
+                # something, so naming by it lets a tagless response be overwritten by the next
+                # turn -- which is exactly the response worth keeping when diagnosing why the
+                # loop gave up.
+                (debug_dir / f"iter{self.state_iter}_repl{iteration}_turn{llm_turns}_llm.txt"
                  ).write_text(content, encoding="utf-8")
             except Exception:
                 pass

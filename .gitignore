@@ -40,6 +40,7 @@ logs_production_v1/
 logs_reproducibility/
 logs_reproducibility_2/
 logs_validation/
+slurm_logs/
 outputs/
 outputs_3/
 outputs_production/
@@ -102,6 +103,10 @@ analyze_pipeline_log.py
 examples/*
 !examples/sp1_nfya_K562/
 !examples/sp1_nfya_K562/**
+# ...except manifests pointing at a local data tree: data_manifest_demo.yaml is the one that
+# ships, and anything named *_local.yaml holds absolute paths that mean nothing elsewhere.
+examples/sp1_nfya_K562/*_local.yaml
+examples/sp1_nfya_K562/data/
 .string_cache/
 # Misc
 .mypy_cache/
