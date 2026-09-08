@@ -86,11 +86,10 @@ instead — the comments say which providers this affects).
 
 The four agents differ in what they need from a model:
 
-- **Hypothesis** and **summary** make judgment calls under uncertainty — inventing a causal
+- **Hypothesis** and **summary** make judgment calls under uncertainty — inventing a possible
   mechanism, and deciding whether the evidence actually supports it — and get the more
   reasoning-capable model of the four.
-- **Review** checks generated code against a fixed set of known failure modes. That's closer to
-  applying a rubric than to open-ended reasoning, so it doesn't need a frontier model.
+- **Review** checks generated hypothesis against a fixed set of criteria. It doesn't need a frontier model.
 - **Coding** writes and debugs the verification scripts inside the REPL retry loop. What matters
   there is reliably producing runnable, correct code, not reasoning depth, so cost matters more
   than capability ceiling here.
@@ -100,12 +99,8 @@ reported in the paper — is Gemini 3.1 Pro for hypothesis and summary, MiniMax-
 and GPT-5.4-mini for review, and is preserved in `config/config.yaml`'s comments. But the pipeline
 is not tied to these: point any agent at any model from any provider under **Supported LLM
 providers** below by editing its block's `provider`, `model` and `api_key_env` — a single model
-for all four is a fine place to start if you'd rather not think about the four roles above at all.
-
-What ships active is a different, single-provider set: DeepSeek-V4-Pro for hypothesis and
-DeepSeek-V4-Flash for the other three. That is a reliability choice rather than a quality
-judgement — every extra provider is one more way for someone's first run to fail, and the Gemini
-flex queue returned enough 503s to stall runs outright.
+for all four is a fine place to start if you'd rather not think about the four roles above at all but it 
+is highly recommended to try different model combination.
 
 ### Data manifest
 
@@ -166,15 +161,18 @@ python -m src.main \
   --manifest examples/sp1_nfya_K562/data_manifest_demo.yaml
 ```
 
-A verification run with this exact configuration converged in five iterations and 31 minutes,
-for $0.46 in API cost: it rejected a technical-artifact explanation, found evidence for a direct
-SP1-NFYA protein interaction and co-occupancy, and converged on that co-occupancy being associated
-with higher SP1 binding signal and stronger evolutionary conservation at the shared sites. Most of
-the time is spent executing generated code rather than waiting on the models. This is one run of a
-non-deterministic pipeline, not a guarantee — expect the exact iteration count, wall-clock time and
-conclusion to vary between runs, and budget more headroom than 31 minutes and $0.46 in case a given
-run needs more iterations to converge, or does not converge within `pipeline.max_iterations`. Lower
-that value in `config/config.yaml` if you only want to watch one hypothesis go round the loop.
+The shipped config file selects DeepSeek V4 Pro for the hypothesis and summary agents and DeepSeek
+V4 Flash for the review and coding agents. With that configuration and this manifest, a run that
+converges takes 40 to 63 minutes and $0.60 to $0.75 in API cost (around 4 to 6 iterations). Most of that is spent executing
+generated code rather than waiting on the models.
+
+Two things follow. This is a non-deterministic pipeline, so expect the iteration count, the wall-clock
+time and the wording of the conclusion to vary between runs, and expect some runs not to converge at
+all (reaching 15 iterations by default). And the runs that do not converge are the expensive ones,
+because they spend the entire iteration budget — so budget against the cap rather than the median.
+Lowering `pipeline.max_iterations` in `config/config.yaml` bounds that worst case directly; at 6 it
+costs roughly an hour and a dollar instead of three hours and three. Lower it further if you only
+want to watch one hypothesis go round the loop.
 
 ## Run ARES on your own data
 
@@ -193,9 +191,7 @@ Optional flags:
 - `-v, --verbose` — detailed console output
 - `-o, --output PATH` — override the output directory
 - `--dry-run` — validate the config and manifest without calling any model or spending money
-- `--session-limit USD` — stop the run once total API cost crosses this (default 50.0; the demo
-  run above cost $0.46, so this is a loose ceiling against a run that goes unexpectedly long
-  rather than a tight budget)
+- `--session-limit USD` — stop the run once total API cost crosses this (default 50.0 dollars)
 
 Run `python -m src.main --help` for the full list, including cost-tracking and production-ledger
 flags not needed for a single investigation.
