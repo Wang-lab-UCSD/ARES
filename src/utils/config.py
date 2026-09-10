@@ -246,9 +246,12 @@ def flatten_manifest_data(
 
     Returns:
         ``(flat, dropped)``. ``flat`` maps every key the kernel will see to its resolved path.
-        ``dropped`` holds ``(dotted_path, severity, reason)``, where severity is ``"lost"`` for
-        entries no part of the pipeline can use and ``"info"`` for values that reach the prompts
-        but not ``data_files``.
+        ``dropped`` holds ``(dotted_path, severity, reason)``:
+
+        - ``"lost"`` — no part of the pipeline can reach the entry.
+        - ``"shadowed"`` — the entry is reachable as ``category.name`` but a later category
+          claimed the same bare name, so ``data_files[name]`` points somewhere else.
+        - ``"info"`` — a non-path value, which travels in the prompts rather than ``data_files``.
     """
     def resolved(value: str) -> str:
         if manifest_dir is None or os.path.isabs(value):
@@ -258,12 +261,29 @@ def flatten_manifest_data(
 
     flat: dict[str, str] = {}
     dropped: list[tuple[str, str, str]] = []
+    # Which category last claimed each bare key, so a second claimant can be reported.
+    bare_owner: dict[str, str] = {}
 
     for category, items in (data or {}).items():
         if isinstance(items, dict):
             for name, value in items.items():
                 if isinstance(value, str):
                     p = resolved(value)
+                    if name in bare_owner:
+                        # Two categories use the same leaf name -- `data_root` under both
+                        # all_tf_chipseq and additional_chipseq, say. The qualified keys stay
+                        # distinct, but the bare alias can only hold one, and the last one
+                        # written wins. Code that reaches for data_files["data_root"] then gets
+                        # whichever category happened to come later in the YAML, with nothing to
+                        # signal that another tree was meant.
+                        dropped.append((
+                            f"{bare_owner[name]}.{name}",
+                            "shadowed",
+                            f'bare key "{name}" is also defined by {category}; '
+                            f'data_files["{name}"] resolves to that one, so reach this entry '
+                            f'as data_files["{bare_owner[name]}.{name}"]',
+                        ))
+                    bare_owner[name] = category
                     flat[name] = p
                     flat[f"{category}.{name}"] = p
                 elif isinstance(value, dict):

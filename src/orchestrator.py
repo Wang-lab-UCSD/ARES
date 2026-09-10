@@ -1007,12 +1007,18 @@ class Orchestrator:
         flat, dropped = flatten_manifest_data(data, self._manifest_dir)
 
         for dotted, severity, reason in dropped:
-            if severity != "lost":
-                continue  # lists and numbers are expected here; they travel in the prompts
-            self.logger.warning(
-                "Manifest entry is unreachable — no agent will see it",
-                {"entry": dotted, "reason": reason},
-            )
+            if severity == "lost":
+                self.logger.warning(
+                    "Manifest entry is unreachable — no agent will see it",
+                    {"entry": dotted, "reason": reason},
+                )
+            elif severity == "shadowed":
+                # Info, not a warning: the entry is reachable, just not under its bare alias.
+                self.logger.info(
+                    "Manifest entry is reachable only by its qualified name",
+                    {"entry": dotted, "reason": reason},
+                )
+            # "info" is lists and numbers, which are expected here: they travel in the prompts.
 
         # Serialize as a Python literal and execute in the kernel
         import json as _json

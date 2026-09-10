@@ -381,17 +381,22 @@ def main() -> int:
         def is_path_like(value: str) -> bool:
             return bool(value) and not any(c.isspace() for c in value) and "/" in value
 
-        bare = sorted(k for k in flat if "." not in k)
+        # Listed by qualified name. Every entry also gets a bare alias, but the bare alias is
+        # what collides when two categories share a leaf name, so listing bare names hides one
+        # of the pair and makes an entry that is present look absent. The qualified form is
+        # one-to-one with the manifest and is what generated code reaches for in practice.
+        qualified = sorted(k for k in flat if "." in k)
+        shadowed_entries = {d for d, sev, _ in dropped if sev == "shadowed"}
         missing = sorted(
             (k, v) for k, v in flat.items()
-            if "." not in k and is_path_like(v) and not Path(v).exists()
+            if "." in k and is_path_like(v) and not Path(v).exists()
         )
 
         logger.info("Configuration is valid", {
             "finding": manifest.finding,
             "data_keys": list(manifest.data.keys()),
             "causal_capable_data": manifest.causal_capable_data,
-            "visible_files": len(bare),
+            "visible_files": len(qualified),
             "missing_paths": len(missing),
             "ignored_entries": len(dropped),
         })
@@ -405,19 +410,33 @@ def main() -> int:
         print(f"tools                {', '.join(manifest.tools) or '(none)'}")
         print()
         missing_keys = {k for k, _ in missing}
-        print(f"{len(bare)} entr(ies) visible to generated code as data_files[...]:")
-        for k in bare:
+        alias_note = (
+            ', and, unless marked SHADOWED, also as data_files["<name>"]'
+            if shadowed_entries
+            else ', and also as data_files["<name>"]'
+        )
+        print(
+            f"{len(qualified)} entr(ies) visible to generated code as "
+            f'data_files["<category>.<name>"]{alias_note}:'
+        )
+        for k in qualified:
             value = flat[k]
-            mark = "  <-- MISSING" if k in missing_keys else ""
-            shown = value if len(value) <= 78 else value[:75] + "..."
-            print(f"    {k:<44} {shown}{mark}")
+            marks = []
+            if k in missing_keys:
+                marks.append("MISSING")
+            if k in shadowed_entries:
+                marks.append("SHADOWED")
+            mark = ("  <-- " + ", ".join(marks)) if marks else ""
+            shown = value if len(value) <= 66 else value[:63] + "..."
+            print(f"    {k:<46} {shown}{mark}")
 
         if missing:
             print()
             print(f"WARNING: {len(missing)} path(s) above do not exist. Generated code will fail on them.")
 
         lost = [(d, r) for d, sev, r in dropped if sev == "lost"]
-        info = [(d, r) for d, sev, r in dropped if sev != "lost"]
+        shadowed = [(d, r) for d, sev, r in dropped if sev == "shadowed"]
+        info = [(d, r) for d, sev, r in dropped if sev == "info"]
 
         if lost:
             print()
@@ -428,6 +447,18 @@ def main() -> int:
             print("    data_files reads data.<category>.<name> and data.<category>. Flatten the")
             print("    entries above to one of those shapes, or the pipeline ignores them.")
 
+        if shadowed:
+            print()
+            print(f"{len(shadowed)} bare key(s) claimed by more than one category:")
+            for dotted, reason in shadowed:
+                other = reason.split('also defined by ')[1].split(';')[0]
+                name = dotted.rsplit(".", 1)[1]
+                print(f'    data_files["{name}"] -> {other}.{name}, shadowing {dotted}')
+            print()
+            print("    Not an error: every entry above is still reachable by its qualified name,")
+            print("    which is what generated code uses. Rename the leaf if you want the bare")
+            print("    alias to be unambiguous.")
+
         if info:
             print()
             print(f"{len(info)} non-path value(s) — expected; they reach the agents via the manifest,")
@@ -436,6 +467,9 @@ def main() -> int:
                 print(f"    {dotted:<44} {reason.split(' — ')[0]}")
         print()
 
+        # Shadowing is deliberately not a failure: the entry is still reachable by its qualified
+        # name, and that is the form generated code uses in practice. Only a path that does not
+        # exist or an entry no agent can see will actually break a run.
         return 1 if (missing or lost) else 0
 
     # Run pipeline (with optional ledger completion hook)
