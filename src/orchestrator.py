@@ -24,6 +24,7 @@ from src.utils.config import (
     Config,
     DataManifest,
     DEFAULT_EXECUTION_PACKAGES,
+    flatten_manifest_data,
     parse_requirements_package_names,
 )
 from src.utils.cost_tracker import CostTracker, CostLimitExceeded, SessionBudgetExceeded, TokenLimitExceeded
@@ -999,30 +1000,19 @@ class Orchestrator:
         """
         data = (self.manifest.model_dump().get("data") or {})
 
-        def resolved(value: str) -> str:
-            """Absolute path for a manifest entry that names a file, else the value unchanged.
+        # Shared with `--dry-run`, so what the user is told before a run is exactly what the
+        # kernel gets. Relative manifest paths are resolved against the manifest's own directory
+        # — the kernel runs from wherever the pipeline was launched, so injecting them verbatim
+        # would make every file in a self-contained example appear missing.
+        flat, dropped = flatten_manifest_data(data, self._manifest_dir)
 
-            Manifest paths may be written relative to the manifest, which is what lets an example
-            ship with its data alongside it. The kernel runs from wherever the pipeline was
-            launched, so a relative path injected verbatim resolves against the wrong directory
-            and every file appears to be missing. Entries that are prose rather than paths -- the
-            format notes and role descriptions that sit beside each file -- are left alone.
-            """
-            if os.path.isabs(value):
-                return value
-            candidate = self._manifest_dir / value
-            return str(candidate.resolve()) if candidate.exists() else value
-
-        flat: dict[str, str] = {}
-        for category, items in data.items():
-            if isinstance(items, dict):
-                for name, path in items.items():
-                    if isinstance(path, str):
-                        path = resolved(path)
-                        flat[name] = path
-                        flat[f"{category}.{name}"] = path  # also expose category.name form
-            elif isinstance(items, str):
-                flat[category] = resolved(items)
+        for dotted, severity, reason in dropped:
+            if severity != "lost":
+                continue  # lists and numbers are expected here; they travel in the prompts
+            self.logger.warning(
+                "Manifest entry is unreachable — no agent will see it",
+                {"entry": dotted, "reason": reason},
+            )
 
         # Serialize as a Python literal and execute in the kernel
         import json as _json

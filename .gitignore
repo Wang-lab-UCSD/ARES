@@ -48,7 +48,11 @@ outputs_production_v1/
 outputs_reproducibility/
 outputs_reproducibility_2/
 outputs_validation/
-production/
+# Leading slash: this is the top-level production/ output tree, not src/production/, which is
+# source and must ship. Without the slash git matches the name at any depth, which silently
+# excluded src/production/ledger.py while tests/test_ledger.py stayed tracked — a fresh clone
+# then failed to collect the test suite.
+/production/
 *.log
 analysis/
 

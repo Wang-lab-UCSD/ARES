@@ -60,6 +60,8 @@ def test_verification_cycle_delegates_to_run_repl(tmp_path):
     orchestrator.coding_agent = StubCodingAgent()
     orchestrator._allowed_packages = []
     orchestrator.executor = StubExecutor()
+    # data_files re-injection resolves relative manifest paths against this directory.
+    orchestrator._manifest_dir = tmp_path
 
     result = asyncio.run(
         orchestrator._run_verification_cycle(

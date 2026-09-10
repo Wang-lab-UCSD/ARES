@@ -58,7 +58,13 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # this table for the coding, review and summary roles. gpt-5.6-cyber is omitted: it is the
     # security-specialised variant, priced far above the rest and irrelevant here.
     "gpt-6-astra": ModelPricing(10.0, 50.0, "openai", "gpt-6-astra", context_limit=1050000, cached_input_price=1.00),
-    "gpt-5.6-sol": ModelPricing(4.0, 20.0, "openai", "gpt-5.6-sol", context_limit=1050000, cached_input_price=0.40),
+    # gpt-5.6-sol at the FLEX service tier — half the standard rate, and what this row bills at.
+    # It is priced this way because the config blocks that use sol set `service_tier: "flex"`;
+    # every other GPT row here is standard-tier, because nothing else asks for flex. If you run
+    # sol on standard, swap the commented line back in or the tracker undercounts by 2x.
+    "gpt-5.6-sol": ModelPricing(2.0, 10.0, "openai", "gpt-5.6-sol", context_limit=1050000, cached_input_price=0.20),
+    # Standard tier, kept for the swap:
+    # "gpt-5.6-sol": ModelPricing(4.0, 20.0, "openai", "gpt-5.6-sol", context_limit=1050000, cached_input_price=0.40),
     "gpt-5.6-terra": ModelPricing(2.0, 12.0, "openai", "gpt-5.6-terra", context_limit=1050000, cached_input_price=0.20),
     "gpt-5.6-luna": ModelPricing(0.20, 1.20, "openai", "gpt-5.6-luna", context_limit=1050000, cached_input_price=0.02),
     # Anthropic. Input/output rates are the published ones; cached_input_price is derived as

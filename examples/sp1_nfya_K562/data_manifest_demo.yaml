@@ -1,18 +1,19 @@
 # SP1/NFYA demo manifest (K562)
 #
-# The investigation reported in the paper, with the two-file base/pair split flattened into one
-# document and every path made relative to this file, so the demo runs from a fresh clone. The
-# pipeline resolves manifest paths against the manifest's own directory, so nothing needs editing.
+# One of the 1,552 dependencies in the atlas, set up here as a worked example -- it is not singled
+# out as a case study in the paper. The two-file base/pair split is flattened into one document
+# and every path made relative to this file, so the demo runs from a fresh clone. The pipeline
+# resolves manifest paths against the manifest's own directory, so nothing needs editing.
 #
 #   bash download_demo_data.sh          # writes ./data, about 26 GB
 #   python -m src.main --config config/config.yaml \
 #          --manifest examples/sp1_nfya_K562/data_manifest_demo.yaml
 #
-# Two departures from the run in the paper, both to keep the download tractable:
+# Two departures from how the atlas runs were configured, both to keep the download tractable:
 #   - the motif collection is not downloaded; it ships in motifs/ of this repository
 #   - the whole-cell-line TF pool ships as narrowPeak only. Its 526 peak files come to 0.37 GB
 #     against 700 GB for their signal tracks, and the pool is read for peak overlap rather than
-#     for signal, so co-occupancy tests behave as they did in the paper.
+#     for signal, so co-occupancy tests behave as they did in the atlas runs.
 finding: 'A systematic screen of 841 JASPAR PWMs identifies the NFYA motif score as the dominant non-homologous
   feature for predicting the continuous signal intensity of SP1 binding in K562. The goal is to explain
   the biomolecular mechanism behind this relationship.

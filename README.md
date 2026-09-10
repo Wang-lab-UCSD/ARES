@@ -6,7 +6,7 @@ A multi-agent LLM pipeline for automated mechanistic hypothesis generation and v
 
 ![ARES workflow: a biological finding and a data manifest go through a Hypothesis agent, a Review
 agent that approves, revises or rejects the hypothesis, a Coding agent that executes the
-verification via an iterative REPL against a shared toolbox, and a Summary agent that scores the
+verification via an iterative REPL against a shared toolbox, and a Summary agent that evaluates the
 evidence and checks convergence, feeding back into the next iteration until an ARES output report
 is produced.](assets/ARES_workflow.png)
 
@@ -127,6 +127,56 @@ tools:
   - fimo
 ```
 
+#### Fields
+
+| Field | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `finding` | **yes** | — | The observation to explain, stated as "TF_B's motif predicts TF_A's binding". Every hypothesis is generated against this sentence. |
+| `data` | in practice | `{}` | The files. Structure below. |
+| `context` | no | `""` | Free-text background: assay, cell line, how the finding was derived. Goes into the hypothesis prompt. |
+| `tools` | no | `[]` | CLI tools the generated code may shell out to (`bedtools`, `fimo`, `samtools`, …). |
+| `investigation_objective` | no | `""` | When set, prompts lean towards discovering and naming a new mechanism rather than sorting the result into a known one. |
+| `execution_requirements_path` | no | `null` | Path to a requirements file. Generated code is restricted to importing what it lists. Relative to the manifest. |
+| `causal_capable_data` | no | `false` | **Changes when a run is allowed to converge** — see below. |
+| `base_manifest` | no | `null` | Path to a shared manifest (e.g. everything cell-line-wide) that this one deep-merges on top of. Relative to this file. |
+
+`causal_capable_data` is the one worth reading twice. Left at `false`, the data are treated as
+observational and convergence needs a mechanism that is the best-supported interpretation of
+correlational evidence. Set to `true`, convergence additionally requires the but-for test — *if the
+proposed cause were absent, would the data look different?* — which only perturbation, time-series,
+knockdown or CRISPRi data can answer. Set it to `true` when you have that kind of data, and the bar
+rises accordingly; leave it `false` for ChIP-seq, RNA-seq and epigenomic tracks alone.
+
+#### How `data` is read
+
+`data` is a free-form mapping, but only two shapes reach generated code:
+
+```yaml
+data:
+  chipseq:                                # category -> {name: path}
+    TF_A_peaks: "/path/to/TF_A.narrowPeak"
+  genome_fasta: "/path/to/hg38.fa"        # category -> path
+```
+
+Both become entries in a flat `data_files` dict the generated code reads as
+`data_files["TF_A_peaks"]`; the nested form is also available as
+`data_files["chipseq.TF_A_peaks"]`. **A path nested a third level deep reaches nothing** — no
+warning at runtime, the analysis simply proceeds without it.
+
+Non-path values are fine and common. A category can carry notes and parameters alongside its
+files — `TF_A_peaks_format: "narrowPeak (hg38); col 10 = summit offset"`, a list of ChromHMM state
+names, a numeric threshold — and the agents read those from the manifest itself. Only strings
+land in `data_files`.
+
+Check a manifest before spending a run on it:
+
+```bash
+python -m src.main --config config/config.yaml --manifest your_manifest.yaml --dry-run
+```
+
+This prints every key the generated code will see, and exits non-zero if a path does not exist or
+an entry is buried too deep to be read.
+
 ## Demo
 
 `examples/sp1_nfya_K562/` is a worked example: why the NFYA motif
@@ -144,11 +194,11 @@ Roadmap ChromHMM segmentation and STRING network, into `examples/sp1_nfya_K562/d
 an interrupted download is resumed by re-running, and anything that fails is listed by name at the
 end rather than left as a silent gap.
 
-Two things differ from the run in the paper, both to keep the download tractable. The motif
-collection is not downloaded — it ships in `motifs/`. And the whole-cell-line TF pool is fetched as
-narrowPeak only: its 526 peak files come to 0.37 GB against 700 GB for the matching signal tracks,
-and the pool is read for peak overlap rather than for signal, so co-occupancy tests behave as they
-did in the paper.
+Two things differ from how the atlas runs were configured, both to keep the download tractable. The
+motif collection is not downloaded — it ships in `motifs/`. And the whole-cell-line TF pool is
+fetched as narrowPeak only: its 526 peak files come to 0.37 GB against 700 GB for the matching
+signal tracks, and the pool is read for peak overlap rather than for signal, so co-occupancy tests
+behave as they did in the atlas runs.
 
 Then:
 
@@ -163,8 +213,8 @@ python -m src.main \
 
 The shipped config file selects DeepSeek V4 Pro for the hypothesis and summary agents and DeepSeek
 V4 Flash for the review and coding agents. With that configuration and this manifest, a run that
-converges takes 40 to 63 minutes and $0.60 to $0.75 in API cost (around 4 to 6 iterations). Most of that is spent executing
-generated code rather than waiting on the models.
+converges takes 40 to 63 minutes and $0.60 to $0.75 in API cost, over roughly 4 to 6 iterations.
+Most of that is spent executing generated code rather than waiting on the models.
 
 Two things follow. This is a non-deterministic pipeline, so expect the iteration count, the wall-clock
 time and the wording of the conclusion to vary between runs, and expect some runs not to converge at

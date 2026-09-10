@@ -29,7 +29,14 @@ class LLMModelConfig(BaseModel):
     )
     service_tier: str | None = Field(
         default=None,
-        description="Gemini only: service tier ('flex', 'standard', 'priority'). 'flex' cuts cost ~50% at the price of lower priority. Provider default is 'flex'.",
+        description=(
+            "Gemini and native OpenAI: service tier ('flex', 'standard', 'priority'). 'flex' runs on spare "
+            "capacity at roughly half price, in exchange for queueing and more 429s (the retry loop absorbs "
+            "those). Gemini defaults to 'flex'; OpenAI sends nothing unless you set this, because the same "
+            "provider class also talks to DeepSeek, GLM-5 and MiniMax, which reject the unknown parameter. "
+            "Tracker prices are standard-tier for the GPT rows, so halve the relevant cost_tracker.py entry "
+            "when you run a model on flex."
+        ),
     )
     thinking_level: str | None = Field(
         default=None,
@@ -204,6 +211,87 @@ def load_data_manifest(manifest_path: str | Path) -> DataManifest:
         data = _deep_merge(base_data, data)
 
     return DataManifest.model_validate(data)
+
+
+def flatten_manifest_data(
+    data: dict[str, Any],
+    manifest_dir: Path | None = None,
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """Flatten a manifest ``data`` section into the ``data_files`` dict the kernel receives.
+
+    The manifest's ``data`` field is typed ``dict[str, Any]`` so that a manifest can group
+    files however its author likes, but only two shapes actually reach generated code:
+
+        data:
+          chipseq:                      # category -> {name: path}
+            TF_A_peaks: "/path/a.bed"   #   visible as data_files["TF_A_peaks"]
+                                        #             and data_files["chipseq.TF_A_peaks"]
+          genome_fasta: "/path/hg38.fa" # category -> path, visible as data_files["genome_fasta"]
+
+    Anything nested a third level deep is silently invisible to the pipeline, which is why this
+    function reports it rather than dropping it quietly: a manifest that validates cleanly can
+    still hide half its files from every hypothesis.
+
+    Args:
+        data: The manifest's ``data`` section.
+        manifest_dir: Directory the manifest was loaded from. Relative paths are resolved
+            against it, matching what the kernel gets; ``None`` leaves values untouched.
+
+    Not every non-string is a mistake. A manifest legitimately carries lists and numbers next to
+    its paths -- ``chromhmm_promoter_state`` is a list of state names, ``string.min_score`` an int
+    -- and those reach the agents through the manifest itself, which is rendered into the prompts.
+    They are reported as ``"info"`` rather than ``"lost"`` so a dry run can tell the two apart:
+    a path buried a level too deep is invisible everywhere and needs fixing; a list of ChromHMM
+    states is doing exactly what it should.
+
+    Returns:
+        ``(flat, dropped)``. ``flat`` maps every key the kernel will see to its resolved path.
+        ``dropped`` holds ``(dotted_path, severity, reason)``, where severity is ``"lost"`` for
+        entries no part of the pipeline can use and ``"info"`` for values that reach the prompts
+        but not ``data_files``.
+    """
+    def resolved(value: str) -> str:
+        if manifest_dir is None or os.path.isabs(value):
+            return value
+        candidate = manifest_dir / value
+        return str(candidate.resolve()) if candidate.exists() else value
+
+    flat: dict[str, str] = {}
+    dropped: list[tuple[str, str, str]] = []
+
+    for category, items in (data or {}).items():
+        if isinstance(items, dict):
+            for name, value in items.items():
+                if isinstance(value, str):
+                    p = resolved(value)
+                    flat[name] = p
+                    flat[f"{category}.{name}"] = p
+                elif isinstance(value, dict):
+                    dropped.append((
+                        f"{category}.{name}",
+                        "lost",
+                        "nested one level too deep — data_files reads only data.<category>.<name>, "
+                        f"so the {len(value)} entr(ies) under it reach nothing",
+                    ))
+                else:
+                    dropped.append((
+                        f"{category}.{name}",
+                        "info",
+                        f"{type(value).__name__} — not a path, so not in data_files; still "
+                        "readable from the manifest in the prompts",
+                    ))
+        elif isinstance(items, str):
+            flat[category] = resolved(items)
+        elif isinstance(items, dict):  # unreachable, kept for symmetry with the branch above
+            continue
+        else:
+            dropped.append((
+                category,
+                "info",
+                f"{type(items).__name__} at the top level — not a path, so not in data_files",
+            ))
+
+    return flat, dropped
 
 
 def parse_requirements_package_names(requirements_path: str | Path) -> list[str]:

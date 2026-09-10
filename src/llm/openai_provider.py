@@ -65,6 +65,15 @@ class OpenAIProvider(LLMProvider):
         # "max_tokens" parameter name; native OpenAI uses "max_completion_tokens".
         self._max_tokens_param = "max_tokens" if base_url is not None else "max_completion_tokens"
         self.default_reasoning_effort: str | None = kwargs.get("reasoning_effort")
+        # Service tier. OpenAI's "flex" runs the request on spare capacity at roughly half
+        # price, in exchange for queueing and a higher chance of a 429; RateLimitError is
+        # already in RETRYABLE_ERRORS, so the backoff loop absorbs that. Unlike the Gemini
+        # provider this does NOT default to flex: `base_url` here also serves DeepSeek,
+        # GLM-5 and MiniMax, and an unknown parameter is a 400 on those APIs rather than a
+        # silently ignored field. Opt in per agent in config.yaml with `service_tier: "flex"`,
+        # and remember the tracker prices are standard-tier — halve the row in cost_tracker.py
+        # for any model you actually run on flex, or it will overcount by 2x.
+        self.service_tier: str | None = kwargs.get("service_tier")
 
     @staticmethod
     def _is_minimax_load_401(exc: BaseException) -> bool:
@@ -154,6 +163,9 @@ class OpenAIProvider(LLMProvider):
             request_params[self._max_tokens_param] = effective_max
         if self.default_reasoning_effort is not None:
             request_params["reasoning_effort"] = self.default_reasoning_effort
+        if self.service_tier is not None:
+            request_params["service_tier"] = self.service_tier
+        # kwargs last, so a per-call override beats the configured default.
         request_params.update(kwargs)
 
         async def _make_request():
@@ -244,6 +256,9 @@ class OpenAIProvider(LLMProvider):
             request_params[self._max_tokens_param] = effective_max
         if self.default_reasoning_effort is not None:
             request_params["reasoning_effort"] = self.default_reasoning_effort
+        if self.service_tier is not None:
+            request_params["service_tier"] = self.service_tier
+        # kwargs last, so a per-call override beats the configured default.
         request_params.update(kwargs)
 
         async def _make_request():

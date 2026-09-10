@@ -8,7 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
-from src.utils.config import load_config, load_data_manifest, Config
+from src.utils.config import load_config, load_data_manifest, flatten_manifest_data, Config
 from src.utils.logging import setup_logging, get_logger
 from src.utils.model_selector import interactive_model_selection, selections_to_config
 
@@ -360,14 +360,83 @@ def main() -> int:
         logger.info("Dry run mode - validating configuration only")
         try:
             manifest = load_data_manifest(args.manifest)
-            logger.info("Configuration is valid", {
-                "finding": manifest.finding,
-                "data_keys": list(manifest.data.keys()),
-            })
-            return 0
         except Exception as e:
             logger.error("Configuration validation failed", {"error": str(e)})
             return 1
+
+        # Schema validity is the weaker half of the question. `data` is typed dict[str, Any]
+        # so that manifests can group files freely, which means a manifest can validate
+        # cleanly while entire branches of it stay invisible to every hypothesis — nested one
+        # level too deep, or holding a list where a path string belongs. Report the flattened
+        # view the kernel will actually receive, and name anything that will not reach it.
+        manifest_dir = Path(args.manifest).resolve().parent
+        flat, dropped = flatten_manifest_data(manifest.data, manifest_dir)
+
+        # A manifest entry is a path or a note — `SP1_peaks` sits next to `SP1_peaks_format:
+        # "narrowPeak (hg38)"`, and both are injected as data_files strings. Only the former can
+        # be missing from disk, so existence is checked only for values that read as paths:
+        # no whitespace and a directory separator. Prose always has spaces, and the one
+        # space-free non-path in the demo manifest (`directory_pattern: "{TF_NAME}_human"`) has
+        # no slash either.
+        def is_path_like(value: str) -> bool:
+            return bool(value) and not any(c.isspace() for c in value) and "/" in value
+
+        bare = sorted(k for k in flat if "." not in k)
+        missing = sorted(
+            (k, v) for k, v in flat.items()
+            if "." not in k and is_path_like(v) and not Path(v).exists()
+        )
+
+        logger.info("Configuration is valid", {
+            "finding": manifest.finding,
+            "data_keys": list(manifest.data.keys()),
+            "causal_capable_data": manifest.causal_capable_data,
+            "visible_files": len(bare),
+            "missing_paths": len(missing),
+            "ignored_entries": len(dropped),
+        })
+
+        # Printed rather than logged: the console handler renders the message only, and the
+        # whole point of a dry run is to read the lists.
+        print()
+        print(f"finding              {manifest.finding[:96]}")
+        print(f"causal_capable_data  {manifest.causal_capable_data}"
+              f"   ({'but-for causal test REQUIRED' if manifest.causal_capable_data else 'observational; but-for test skipped'})")
+        print(f"tools                {', '.join(manifest.tools) or '(none)'}")
+        print()
+        missing_keys = {k for k, _ in missing}
+        print(f"{len(bare)} entr(ies) visible to generated code as data_files[...]:")
+        for k in bare:
+            value = flat[k]
+            mark = "  <-- MISSING" if k in missing_keys else ""
+            shown = value if len(value) <= 78 else value[:75] + "..."
+            print(f"    {k:<44} {shown}{mark}")
+
+        if missing:
+            print()
+            print(f"WARNING: {len(missing)} path(s) above do not exist. Generated code will fail on them.")
+
+        lost = [(d, r) for d, sev, r in dropped if sev == "lost"]
+        info = [(d, r) for d, sev, r in dropped if sev != "lost"]
+
+        if lost:
+            print()
+            print(f"WARNING: {len(lost)} manifest entr(ies) are unreachable — no agent will see them:")
+            for dotted, reason in lost:
+                print(f"    {dotted:<44} {reason}")
+            print()
+            print("    data_files reads data.<category>.<name> and data.<category>. Flatten the")
+            print("    entries above to one of those shapes, or the pipeline ignores them.")
+
+        if info:
+            print()
+            print(f"{len(info)} non-path value(s) — expected; they reach the agents via the manifest,")
+            print("not via data_files:")
+            for dotted, reason in info:
+                print(f"    {dotted:<44} {reason.split(' — ')[0]}")
+        print()
+
+        return 1 if (missing or lost) else 0
 
     # Run pipeline (with optional ledger completion hook)
     write_ledger = args.pair_key is not None and args.ledger is not None
